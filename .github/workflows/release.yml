@@ -1,0 +1,4 @@
+# 确保在文件顶部区域添加这部分
+permissions:
+  contents: write
+  pull-requests: read
