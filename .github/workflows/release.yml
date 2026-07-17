@@ -35,4 +35,3 @@ jobs:
           prerelease: ${{ contains(github.ref_name, '-') }}
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
->>>>>>> add162a56bf9096f82f57b20ae9b2098ed38a398
