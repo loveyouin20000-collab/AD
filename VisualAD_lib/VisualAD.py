@@ -1,10 +1,11 @@
 from collections import OrderedDict
-from typing import Tuple, Union
+from collections.abc import Sequence
 
 import numpy as np
 import torch
 from torch import nn
 
+from rad.types import CheckpointOutput, StageCache
 
 
 class LayerNorm(nn.LayerNorm):
@@ -115,7 +116,8 @@ class VisionTransformer(nn.Module):
 
         self.ln_post = LayerNorm(width)
 
-    def forward(self, x: torch.Tensor, features_list):
+    def _embed_image(self, x: torch.Tensor) -> torch.Tensor:
+        """Embed image tokens through ln_pre; returns [batch, tokens, width]."""
         x = self.conv1(x)
         x = x.reshape(x.shape[0], x.shape[1], -1)
         x = x.permute(0, 2, 1)
@@ -145,6 +147,67 @@ class VisionTransformer(nn.Module):
 
         x = x + pos
         x = self.ln_pre(x)
+        return x
+
+    def prepare_stage(self, image: torch.Tensor) -> StageCache:
+        x = self._embed_image(image)
+        sequence = x.permute(1, 0, 2)
+        return StageCache(sequence=sequence, next_block=1, patch_tokens={})
+
+    def _checkpoint_from_sequence(self, sequence: torch.Tensor, depth: int) -> CheckpointOutput:
+        tokens = self.ln_post(sequence.permute(1, 0, 2))
+        return CheckpointOutput(
+            depth=depth,
+            patch_tokens=tokens[:, 3:, :],
+            anomaly_token=tokens[:, 0, :],
+            normal_token=tokens[:, 1, :],
+            class_token=tokens[:, 2, :],
+        )
+
+    def run_to(
+        self,
+        cache: StageCache,
+        target_layer: int,
+    ) -> tuple[CheckpointOutput, StageCache]:
+        if target_layer < cache.next_block:
+            raise ValueError(
+                f"target_layer {target_layer} is before cache.next_block {cache.next_block}"
+            )
+        n_blocks = len(self.transformer.resblocks)
+        if target_layer > n_blocks:
+            raise ValueError(f"target_layer {target_layer} exceeds backbone depth {n_blocks}")
+
+        sequence = cache.sequence
+        # 1-based inclusive: execute blocks [next_block, target_layer]
+        for block_idx in range(cache.next_block, target_layer + 1):
+            sequence = self.transformer.resblocks[block_idx - 1](sequence)
+
+        output = self._checkpoint_from_sequence(sequence, target_layer)
+        patch_tokens = dict(cache.patch_tokens)
+        patch_tokens[target_layer] = output.patch_tokens
+        new_cache = StageCache(
+            sequence=sequence,
+            next_block=target_layer + 1,
+            patch_tokens=patch_tokens,
+            checkpoint_tokens=dict(cache.checkpoint_tokens),
+        )
+        return output, new_cache
+
+    def forward_staged(
+        self,
+        image: torch.Tensor,
+        candidate_layers: Sequence[int],
+    ) -> dict[int, CheckpointOutput]:
+        layers = sorted(candidate_layers)
+        cache = self.prepare_stage(image)
+        outputs: dict[int, CheckpointOutput] = {}
+        for depth in layers:
+            output, cache = self.run_to(cache, depth)
+            outputs[depth] = output
+        return outputs
+
+    def forward(self, x: torch.Tensor, features_list):
+        x = self._embed_image(x)
         x = x.permute(1, 0, 2)
 
         x, patch_tokens = self.transformer.forward_dispatch(x, features_list)
@@ -170,7 +233,7 @@ class VisualAD(nn.Module):
                  embed_dim: int,
                  # vision
                  image_resolution: int,
-                 vision_layers: Union[Tuple[int, int, int, int], int],
+                 vision_layers: tuple[int, int, int, int] | int,
                  vision_width: int,
                  vision_patch_size: int,
                  # text (kept for compatibility with pretrained weights loading)
