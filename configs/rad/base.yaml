@@ -1,0 +1,8 @@
+seed: 111
+backbone:
+  depth: 24
+  candidate_layers: [6, 12, 18, 24]
+zero_shot:
+  source_dataset: mvtec
+  target_datasets: [visa]
+  target_tuning: false
