@@ -1,0 +1,11 @@
+---
+description: RAD-VisualAD repository rules
+globs: ["**/*.py", "**/*.yaml", "**/*.sh"]
+alwaysApply: true
+---
+- Do not change official VisualAD behavior without an equivalence test.
+- Write a failing pytest before implementation.
+- Keep candidate layers configuration-driven; never hard-code four layers in reusable modules.
+- Log tensor shapes, config hash, Git SHA, seed, split manifest hash, and checkpoint hash.
+- Never tune on target-domain data.
+- Every CLI supports `--config`, `--seed`, `--output-dir`, and `--dry-run` where meaningful.
