@@ -1,0 +1,14 @@
+seed: 111
+device: cuda:0
+backbone: "ViT-L/14@336px"
+features_list: [6, 12, 18, 24]
+epoch: 1
+batch_size: 8
+image_size: 518
+train:
+  dataset: visa
+  data_path: /root/autodl-tmp/data/Visa
+test:
+  dataset: mvtec
+  data_path: /root/autodl-tmp/data/mvtec
+output_dir: artifacts/baseline/visa_to_mvtec
