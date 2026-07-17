@@ -9,6 +9,9 @@ target-version = "py310"
 [tool.ruff.lint]
 select = ["E", "F", "I", "B", "UP"]
 
+[tool.ruff.lint.per-file-ignores]
+"VisualAD_lib/**" = ["E501", "B006"]
+
 [tool.mypy]
 python_version = "3.10"
 warn_unused_ignores = true
