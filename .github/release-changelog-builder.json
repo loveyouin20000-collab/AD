@@ -1,0 +1,62 @@
+{
+  "categories": [
+    {
+      "title": "## 🚀 Features",
+      "labels": ["feature", "feat"]
+    },
+    {
+      "title": "## 🐛 Bug Fixes",
+      "labels": ["fix", "bug"]
+    },
+    {
+      "title": "## 🧪 Tests",
+      "labels": ["test"]
+    },
+    {
+      "title": "## 📚 Documentation",
+      "labels": ["docs"]
+    },
+    {
+      "title": "## 🔧 Maintenance",
+      "labels": ["chore", "refactor", "build", "ci", "style", "perf"]
+    }
+  ],
+  "ignore_labels": ["ignore"],
+  "sort": "ASC",
+  "template": "${{CHANGELOG}}",
+  "pr_template": "- ${TITLE} (#${{NUMBER}}) @${{AUTHOR}}",
+  "commit_template": "- ${MESSAGE} (${{SHA}})",
+  "empty_template": "- No changes",
+  "label_extractor": [
+    {
+      "pattern": "^(feat|feature)(\\([\\w.-]+\\))?!?:",
+      "on_property": "title",
+      "label": "feat"
+    },
+    {
+      "pattern": "^fix(\\([\\w.-]+\\))?!?:",
+      "on_property": "title",
+      "label": "fix"
+    },
+    {
+      "pattern": "^docs(\\([\\w.-]+\\))?!?:",
+      "on_property": "title",
+      "label": "docs"
+    },
+    {
+      "pattern": "^test(\\([\\w.-]+\\))?!?:",
+      "on_property": "title",
+      "label": "test"
+    },
+    {
+      "pattern": "^(chore|build|ci|refactor|style|perf)(\\([\\w.-]+\\))?!?:",
+      "on_property": "title",
+      "label": "chore"
+    }
+  ],
+  "transformers": [
+    {
+      "pattern": "\\[\\s*([\\w\\d-]+)\\s*\\]([\\s\\S]*?)\\s*\\(#\\d+\\)",
+      "target": "$1$2"
+    }
+  ]
