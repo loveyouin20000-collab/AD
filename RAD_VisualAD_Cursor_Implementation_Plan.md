@@ -914,9 +914,9 @@ Required ablations:
 - no KD / map KD / map+boundary KD;
 - staged vs optional joint training.
 
-- [ ] Make each matrix row a complete immutable config.
-- [ ] Add a dry-run mode printing commands and estimated GPU-hours.
-- [ ] Commit after schema tests pass.
+- [x] Make each matrix row a complete immutable config.
+- [x] Add a dry-run mode printing commands and estimated GPU-hours.
+- [x] Commit after schema tests pass.
 
 ---
 
@@ -927,11 +927,11 @@ Required ablations:
 - Create: `rad/evaluation/export.py`
 - Test: `tests/rad/test_no_target_tuning.py`
 
-- [ ] Load one source-calibrated policy unchanged on every target dataset.
-- [ ] Report per-dataset depth distribution, pixel AP drop, PRO drop, boundary F-score drop, and false-safe-exit rate.
-- [ ] Stratify by normal/anomalous, anomaly area, contrast proxy, and boundary complexity.
-- [ ] Add a test that monkeypatches calibration and fails if target samples are accessed.
-- [ ] Commit per-sample predictions and scripts, not raw datasets.
+- [x] Load one source-calibrated policy unchanged on every target dataset.
+- [x] Report per-dataset depth distribution, pixel AP drop, PRO drop, boundary F-score drop, and false-safe-exit rate.
+- [x] Stratify by normal/anomalous, anomaly area, contrast proxy, and boundary complexity.
+- [x] Add a test that monkeypatches calibration and fails if target samples are accessed.
+- [x] Commit per-sample predictions and scripts, not raw datasets.
 
 ---
 

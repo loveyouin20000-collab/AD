@@ -1,0 +1,473 @@
+schema_version: 1
+description: Immutable paper experiment matrix for Residual-Aware Adaptive-Depth VisualAD.
+hardware_note: Primary wall-clock estimates assume independent rows parallelized across
+  available GPUs (e.g. 2x RTX 4090D).
+defaults:
+  seed: 111
+  image_size: 518
+  backbone:
+    depth: 24
+    candidate_layers:
+    - 6
+    - 12
+    - 18
+    - 24
+  data:
+    dataset: mvtec
+    data_path: /root/autodl-tmp/data/mvtec
+    split_manifest: artifacts/splits/mvtec_seed111.jsonl
+  teacher:
+    checkpoint_path: weight/train_on_mvtec/CLIP.pth
+    backbone: ViT-L/14@336px
+  zero_shot:
+    source_dataset: mvtec
+    target_datasets:
+    - visa
+    target_tuning: false
+  checkpoints:
+    dlcm: artifacts/checkpoints/fusion/seed_222/dlcm.pt
+    lse: artifacts/checkpoints/lse/lse_best.pt
+    policy_profiles: artifacts/calibration/policy/policy_profiles.json
+matrix:
+- id: original_visualad
+  group: method
+  description: Official VisualAD full-depth equal path
+  immutable: true
+  seed: 111
+  device: '{device}'
+  command: python tools/reproduce_baseline.py --config configs/rad/baseline_mvtec_to_visa.yaml
+    --seed {seed} --device {device} --output-dir {output_dir}
+  config:
+    method:
+      name: original_visualad
+      exit: none
+      fusion: equal
+      force_full_depth: true
+  estimated_gpu_hours: 0.4
+  output_dir: artifacts/experiments/original_visualad
+  tags: []
+- id: fixed_exit_12
+  group: method
+  description: Fixed early exit at layer 12
+  immutable: true
+  seed: 111
+  device: '{device}'
+  command: python tools/benchmark_latency.py --config configs/rad/benchmark.yaml --methods
+    fixed_12 --warmup 5 --repetitions 20 --seed {seed} --device {device} --output-dir
+    {output_dir}
+  config:
+    method:
+      name: fixed_exit
+      exit_depth: 12
+      fusion: dynamic
+  estimated_gpu_hours: 0.25
+  output_dir: artifacts/experiments/fixed_exit_12
+  tags: []
+- id: fixed_exit_18
+  group: method
+  description: Fixed early exit at layer 18
+  immutable: true
+  seed: 111
+  device: '{device}'
+  command: python tools/benchmark_latency.py --config configs/rad/benchmark.yaml --methods
+    fixed_18 --warmup 5 --repetitions 20 --seed {seed} --device {device} --output-dir
+    {output_dir}
+  config:
+    method:
+      name: fixed_exit
+      exit_depth: 18
+      fusion: dynamic
+  estimated_gpu_hours: 0.3
+  output_dir: artifacts/experiments/fixed_exit_18
+  tags: []
+- id: static_learned_fusion
+  group: method
+  description: Static learned fusion at full depth
+  immutable: true
+  seed: 111
+  device: '{device}'
+  command: python tools/evaluate_adaptive.py --config configs/rad/adaptive.yaml --seed
+    {seed} --device {device} --output-dir {output_dir} --profile balanced --force-full-depth
+  config:
+    method:
+      name: static_learned_fusion
+      fusion: static_learned
+      force_full_depth: true
+  estimated_gpu_hours: 0.35
+  output_dir: artifacts/experiments/static_learned_fusion
+  tags: []
+- id: dynamic_fusion_only
+  group: method
+  description: Dynamic fusion full depth without early exit
+  immutable: true
+  seed: 111
+  device: '{device}'
+  command: python tools/evaluate_adaptive.py --config configs/rad/adaptive.yaml --force-full-depth
+    --seed {seed} --device {device} --output-dir {output_dir}
+  config:
+    method:
+      name: dynamic_fusion_only
+      fusion: dynamic
+      force_full_depth: true
+  estimated_gpu_hours: 0.35
+  output_dir: artifacts/experiments/dynamic_fusion_only
+  tags: []
+- id: confidence_only_exit
+  group: method
+  description: Exit using image confidence only
+  immutable: true
+  seed: 111
+  device: '{device}'
+  command: python tools/evaluate_adaptive.py --config configs/rad/adaptive.yaml --seed
+    {seed} --device {device} --output-dir {output_dir} --profile balanced
+  config:
+    method:
+      name: confidence_only_exit
+      policy: confidence_only
+    policy_override:
+      require_map_uncertainty: false
+      require_image_confidence: true
+      require_stability: false
+      use_gain_ucb: false
+  estimated_gpu_hours: 0.35
+  output_dir: artifacts/experiments/confidence_only_exit
+  tags: []
+- id: stability_only_exit
+  group: method
+  description: Exit using map stability only
+  immutable: true
+  seed: 111
+  device: '{device}'
+  command: python tools/evaluate_adaptive.py --config configs/rad/adaptive.yaml --seed
+    {seed} --device {device} --output-dir {output_dir} --profile balanced
+  config:
+    method:
+      name: stability_only_exit
+      policy: stability_only
+    policy_override:
+      require_map_uncertainty: false
+      require_image_confidence: false
+      require_stability: true
+      use_gain_ucb: false
+  estimated_gpu_hours: 0.35
+  output_dir: artifacts/experiments/stability_only_exit
+  tags: []
+- id: confidence_stability_exit
+  group: method
+  description: Exit using confidence + stability
+  immutable: true
+  seed: 111
+  device: '{device}'
+  command: python tools/evaluate_adaptive.py --config configs/rad/adaptive.yaml --seed
+    {seed} --device {device} --output-dir {output_dir} --profile balanced
+  config:
+    method:
+      name: confidence_stability_exit
+      policy: confidence_stability
+    policy_override:
+      require_map_uncertainty: false
+      require_image_confidence: true
+      require_stability: true
+      use_gain_ucb: false
+  estimated_gpu_hours: 0.35
+  output_dir: artifacts/experiments/confidence_stability_exit
+  tags: []
+- id: residual_gain_equal_fusion
+  group: method
+  description: Residual-gain exit with equal fusion
+  immutable: true
+  seed: 111
+  device: '{device}'
+  command: python tools/evaluate_adaptive.py --config configs/rad/adaptive.yaml --seed
+    {seed} --device {device} --output-dir {output_dir} --profile balanced
+  config:
+    method:
+      name: residual_gain_equal_fusion
+      fusion: equal
+      policy: gain_ucb
+  estimated_gpu_hours: 0.4
+  output_dir: artifacts/experiments/residual_gain_equal_fusion
+  tags: []
+- id: full_conservative
+  group: method
+  description: Full method conservative profile
+  immutable: true
+  seed: 111
+  device: '{device}'
+  command: python tools/evaluate_adaptive.py --config configs/rad/adaptive.yaml --profile
+    conservative --seed {seed} --device {device} --output-dir {output_dir}
+  config:
+    method:
+      name: full_method
+      profile: conservative
+      fusion: dynamic
+  estimated_gpu_hours: 0.4
+  output_dir: artifacts/experiments/full_conservative
+  tags: []
+- id: full_balanced
+  group: method
+  description: Full method balanced profile
+  immutable: true
+  seed: 111
+  device: '{device}'
+  command: python tools/evaluate_adaptive.py --config configs/rad/adaptive.yaml --profile
+    balanced --seed {seed} --device {device} --output-dir {output_dir}
+  config:
+    method:
+      name: full_method
+      profile: balanced
+      fusion: dynamic
+  estimated_gpu_hours: 0.4
+  output_dir: artifacts/experiments/full_balanced
+  tags: []
+- id: full_aggressive
+  group: method
+  description: Full method aggressive profile
+  immutable: true
+  seed: 111
+  device: '{device}'
+  command: python tools/evaluate_adaptive.py --config configs/rad/adaptive.yaml --profile
+    aggressive --seed {seed} --device {device} --output-dir {output_dir}
+  config:
+    method:
+      name: full_method
+      profile: aggressive
+      fusion: dynamic
+  estimated_gpu_hours: 0.4
+  output_dir: artifacts/experiments/full_aggressive
+  tags: []
+- id: random_exit_matched
+  group: method
+  description: Random exit matched to exit-depth distribution
+  immutable: true
+  seed: 111
+  device: '{device}'
+  command: python tools/evaluate_adaptive.py --config configs/rad/adaptive.yaml --seed
+    {seed} --device {device} --output-dir {output_dir} --profile balanced
+  config:
+    method:
+      name: random_exit_matched
+      policy: random_matched
+  estimated_gpu_hours: 0.35
+  output_dir: artifacts/experiments/random_exit_matched
+  tags: []
+- id: oracle_earliest_exit
+  group: method
+  description: Oracle earliest sufficient exit
+  immutable: true
+  seed: 111
+  device: '{device}'
+  command: python tools/evaluate_adaptive.py --config configs/rad/adaptive.yaml --seed
+    {seed} --device {device} --output-dir {output_dir} --profile balanced
+  config:
+    method:
+      name: oracle_earliest_exit
+      policy: oracle
+  estimated_gpu_hours: 0.45
+  output_dir: artifacts/experiments/oracle_earliest_exit
+  tags: []
+- id: ablation_dlcm_with_shapley
+  group: ablation
+  description: DLCM trained with Shapley supervision
+  immutable: true
+  seed: 111
+  device: '{device}'
+  command: python tools/train_fusion.py --config configs/rad/fusion.yaml --seed {seed}
+    --device {device} --output-dir {output_dir}
+  config:
+    method:
+      name: ablation
+      dlcm_supervision: shapley
+    fusion:
+      shapley_supervision: true
+  estimated_gpu_hours: 1.5
+  output_dir: artifacts/experiments/ablation_dlcm_with_shapley
+  tags:
+  - dlcm
+  - shapley
+- id: ablation_dlcm_without_shapley
+  group: ablation
+  description: DLCM without Shapley supervision
+  immutable: true
+  seed: 111
+  device: '{device}'
+  command: python tools/train_fusion.py --config configs/rad/fusion.yaml --seed {seed}
+    --device {device} --output-dir {output_dir}
+  config:
+    method:
+      name: ablation
+      dlcm_supervision: none
+    fusion:
+      shapley_supervision: false
+  estimated_gpu_hours: 1.5
+  output_dir: artifacts/experiments/ablation_dlcm_without_shapley
+  tags:
+  - dlcm
+  - shapley
+- id: ablation_shapley_exact
+  group: ablation
+  description: Exact checkpoint-specific Shapley targets
+  immutable: true
+  seed: 111
+  device: '{device}'
+  command: python tools/generate_shapley_targets.py --config configs/rad/fusion.yaml
+    --seed {seed} --device {device} --output-dir {output_dir}
+  config:
+    method:
+      name: ablation
+      shapley_mode: exact
+    targets:
+      shapley_mode: exact
+  estimated_gpu_hours: 0.8
+  output_dir: artifacts/experiments/ablation_shapley_exact
+  tags:
+  - shapley
+- id: ablation_shapley_loo
+  group: ablation
+  description: Leave-one-out Shapley surrogate targets
+  immutable: true
+  seed: 111
+  device: '{device}'
+  command: python tools/generate_shapley_targets.py --config configs/rad/fusion.yaml
+    --seed {seed} --device {device} --output-dir {output_dir}
+  config:
+    method:
+      name: ablation
+      shapley_mode: leave_one_out
+    targets:
+      shapley_mode: leave_one_out
+  estimated_gpu_hours: 0.5
+  output_dir: artifacts/experiments/ablation_shapley_loo
+  tags:
+  - shapley
+- id: ablation_selector_cumulative
+  group: ablation
+  description: Selector uses cumulative checkpoint features
+  immutable: true
+  seed: 111
+  device: '{device}'
+  command: python tools/evaluate_adaptive.py --config configs/rad/adaptive.yaml --seed
+    {seed} --device {device} --output-dir {output_dir} --profile balanced
+  config:
+    method:
+      name: ablation
+      selector_inputs: cumulative
+    selector:
+      input_mode: cumulative
+  estimated_gpu_hours: 0.4
+  output_dir: artifacts/experiments/ablation_selector_cumulative
+  tags:
+  - selector
+- id: ablation_selector_loo
+  group: ablation
+  description: Selector uses leave-one-out features
+  immutable: true
+  seed: 111
+  device: '{device}'
+  command: python tools/evaluate_adaptive.py --config configs/rad/adaptive.yaml --seed
+    {seed} --device {device} --output-dir {output_dir} --profile balanced
+  config:
+    method:
+      name: ablation
+      selector_inputs: leave_one_out
+    selector:
+      input_mode: leave_one_out
+  estimated_gpu_hours: 0.4
+  output_dir: artifacts/experiments/ablation_selector_loo
+  tags:
+  - selector
+- id: ablation_kd_none
+  group: ablation
+  description: No distillation loss
+  immutable: true
+  seed: 111
+  device: '{device}'
+  command: python tools/train_fusion.py --config configs/rad/fusion.yaml --seed {seed}
+    --device {device} --output-dir {output_dir}
+  config:
+    method:
+      name: ablation
+      kd: none
+    losses:
+      map_kd: false
+      boundary_kd: false
+  estimated_gpu_hours: 1.2
+  output_dir: artifacts/experiments/ablation_kd_none
+  tags:
+  - kd
+- id: ablation_kd_map
+  group: ablation
+  description: Map KD only
+  immutable: true
+  seed: 111
+  device: '{device}'
+  command: python tools/train_fusion.py --config configs/rad/fusion.yaml --seed {seed}
+    --device {device} --output-dir {output_dir}
+  config:
+    method:
+      name: ablation
+      kd: map
+    losses:
+      map_kd: true
+      boundary_kd: false
+  estimated_gpu_hours: 1.2
+  output_dir: artifacts/experiments/ablation_kd_map
+  tags:
+  - kd
+- id: ablation_kd_map_boundary
+  group: ablation
+  description: Map KD + boundary KD
+  immutable: true
+  seed: 111
+  device: '{device}'
+  command: python tools/train_fusion.py --config configs/rad/fusion.yaml --seed {seed}
+    --device {device} --output-dir {output_dir}
+  config:
+    method:
+      name: ablation
+      kd: map_boundary
+    losses:
+      map_kd: true
+      boundary_kd: true
+  estimated_gpu_hours: 1.2
+  output_dir: artifacts/experiments/ablation_kd_map_boundary
+  tags:
+  - kd
+- id: ablation_training_staged
+  group: ablation
+  description: Staged training (default)
+  immutable: true
+  seed: 111
+  device: '{device}'
+  command: python tools/train_fusion.py --config configs/rad/fusion.yaml --seed {seed}
+    --device {device} --output-dir {output_dir}
+  config:
+    method:
+      name: ablation
+      training: staged
+    training:
+      mode: staged
+      joint: false
+  estimated_gpu_hours: 2.0
+  output_dir: artifacts/experiments/ablation_training_staged
+  tags:
+  - training
+- id: ablation_training_joint
+  group: ablation
+  description: Optional joint fine-tuning (disabled until staged gates pass)
+  immutable: true
+  seed: 111
+  device: '{device}'
+  command: python tools/train_fusion.py --config configs/rad/fusion.yaml --seed {seed}
+    --device {device} --output-dir {output_dir}
+  config:
+    method:
+      name: ablation
+      training: joint
+    training:
+      mode: joint
+      joint: true
+  estimated_gpu_hours: 2.5
+  output_dir: artifacts/experiments/ablation_training_joint
+  tags:
+  - training
