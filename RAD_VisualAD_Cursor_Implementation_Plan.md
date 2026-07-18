@@ -795,11 +795,11 @@ Initial `λ_12=0.5`, `λ_18=0.75`, `λ_24=1.0`.
 - Create: `configs/rad/lse.yaml`
 - Test: `tests/rad/test_lse_training_step.py`
 
-- [ ] Split only the source training partition for model fitting; use the fixed source calibration partition for model selection and calibration reports.
-- [ ] Report gain MAE/RMSE, beneficial-depth AUROC, Brier score, ECE, and NLL independently at d=12 and d=18.
-- [ ] Add early stopping on calibration NLL with patience 10.
-- [ ] Save prediction tables, not only aggregate metrics.
-- [ ] Commit after a deterministic two-epoch smoke run passes.
+- [x] Split only the source training partition for model fitting; use the fixed source calibration partition for model selection and calibration reports.
+- [x] Report gain MAE/RMSE, beneficial-depth AUROC, Brier score, ECE, and NLL independently at d=12 and d=18.
+- [x] Add early stopping on calibration NLL with patience 10.
+- [x] Save prediction tables, not only aggregate metrics.
+- [x] Commit after a deterministic two-epoch smoke run passes.
 
 ---
 
