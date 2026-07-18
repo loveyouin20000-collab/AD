@@ -661,10 +661,10 @@ git commit -am "feat: add versioned teacher-output cache"
 - `DLCM.forward(layer_desc, checkpoint_context, layer_ids, valid_mask) -> Tensor[B, L]`
 - `sum_preserving_fusion(maps, weights, valid_mask) -> Tensor[B,1,H,W]`
 
-- [ ] Write tests: invalid layers receive exactly zero weight; valid weights sum to one; zero-initialized scorer reproduces equal fusion; gradients reach descriptors and scorer.
-- [ ] Implement shared MLP `18 -> 64 -> 32`, learned 16-dimensional layer embedding, 8-dimensional context projection, and final zero-initialized scalar scorer.
-- [ ] Apply masked softmax and an optional floor `w'=(1-alpha)w + alpha/n_valid` with linear decay of `alpha` from `0.1` to `0` during the first 20% of fusion training.
-- [ ] Define fusion as:
+- [x] Write tests: invalid layers receive exactly zero weight; valid weights sum to one; zero-initialized scorer reproduces equal fusion; gradients reach descriptors and scorer.
+- [x] Implement shared MLP `18 -> 64 -> 32`, learned 16-dimensional layer embedding, 8-dimensional context projection, and final zero-initialized scalar scorer.
+- [x] Apply masked softmax and an optional floor `w'=(1-alpha)w + alpha/n_valid` with linear decay of `alpha` from `0.1` to `0` during the first 20% of fusion training.
+- [x] Define fusion as:
 
 ```python
 def sum_preserving_fusion(maps, weights, valid_mask):
@@ -672,7 +672,7 @@ def sum_preserving_fusion(maps, weights, valid_mask):
     return (maps * weights[:, :, None, None, None]).sum(dim=1) * n_valid[:, None, None, None]
 ```
 
-- [ ] Verify equal-fusion compatibility and commit.
+- [x] Verify equal-fusion compatibility and commit.
 
 ---
 
