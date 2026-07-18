@@ -879,11 +879,11 @@ Implement:
 - Create: `configs/rad/benchmark.yaml`
 - Test: `tests/rad/test_benchmark_smoke.py`
 
-- [ ] Measure batch 1 as the primary adaptive result using CUDA events, 50 warmups, 200 repetitions, median, mean, p90, and p95.
-- [ ] Report backbone stage, checkpoint-map generation, descriptors, DLCM, LSE, post-processing, and total latency separately.
-- [ ] Record GPU model, driver, CUDA, clocks where available, image resolution, dtype, and memory.
-- [ ] Compare equal full depth, dynamic fusion full depth, fixed 12/18, and three adaptive profiles.
-- [ ] Treat batched dynamic regrouping as a separate experiment and do not mix it with the primary claim.
+- [x] Measure batch 1 as the primary adaptive result using CUDA events, 50 warmups, 200 repetitions, median, mean, p90, and p95.
+- [x] Report backbone stage, checkpoint-map generation, descriptors, DLCM, LSE, post-processing, and total latency separately.
+- [x] Record GPU model, driver, CUDA, clocks where available, image resolution, dtype, and memory.
+- [x] Compare equal full depth, dynamic fusion full depth, fixed 12/18, and three adaptive profiles.
+- [x] Treat batched dynamic regrouping as a separate experiment and do not mix it with the primary claim.
 
 ---
 
