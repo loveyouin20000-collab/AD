@@ -696,10 +696,10 @@ E = 1.0 * BCEWithLogits
   + 0.2 * BCE(TopKMeanProbability, image_label)
 ```
 
-- [ ] Test finite and differentiable error for normal masks, one-pixel anomalies, and full masks.
-- [ ] Use Sobel gradients for boundary loss; do not use non-differentiable AP or PRO as training utility.
-- [ ] Weight teacher pixels by `1 - normalized_binary_entropy(sigmoid(teacher_logit))`.
-- [ ] Commit after unit tests pass.
+- [x] Test finite and differentiable error for normal masks, one-pixel anomalies, and full masks.
+- [x] Use Sobel gradients for boundary loss; do not use non-differentiable AP or PRO as training utility.
+- [x] Weight teacher pixels by `1 - normalized_binary_entropy(sigmoid(teacher_logit))`.
+- [x] Commit after unit tests pass.
 
 ---
 
