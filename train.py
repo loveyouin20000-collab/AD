@@ -17,7 +17,8 @@ import os
 import random
 from utils.transforms import get_transform
 from utils.scoring import reduce_anomaly_map, DEFAULT_TOPK_RATIO
-torch.use_deterministic_algorithms(True,warn_only=False)
+# warn_only=True: PyTorch 2.0 + CUDA lacks deterministic upsample_bilinear2d_backward
+torch.use_deterministic_algorithms(True, warn_only=True)
 def setup_seed(seed):
     torch.manual_seed(seed)
     torch.cuda.manual_seed_all(seed)
@@ -26,7 +27,7 @@ def setup_seed(seed):
     torch.backends.cudnn.deterministic = True
     torch.backends.cudnn.benchmark = False
     # Additional deterministic settings
-    torch.use_deterministic_algorithms(True, warn_only=False)
+    torch.use_deterministic_algorithms(True, warn_only=True)
     import os
     os.environ['PYTHONHASHSEED'] = str(seed)
     os.environ['CUBLAS_WORKSPACE_CONFIG'] = ':16:8'
