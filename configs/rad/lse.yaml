@@ -15,16 +15,16 @@ cache:
   schema_version: 1
   shard_size: 16
 fusion:
-  train_cache: artifacts/cache/mvtec_teacher
-  calibration_cache: artifacts/cache/mvtec_calibration
+  train_cache: artifacts/cache/mvtec_teacher/train
+  calibration_cache: artifacts/cache/mvtec_teacher/calibration
   shapley_targets: artifacts/targets/shapley/mvtec_train.pt
   descriptor_stats: artifacts/stats/mvtec_seed111.json
   train_depths: [12, 18, 24]
   output_dir: artifacts/checkpoints/fusion
 lse:
   dlcm_checkpoint: artifacts/checkpoints/fusion/seed_222/dlcm.pt
-  train_cache: artifacts/cache/mvtec_teacher
-  calibration_cache: artifacts/cache/mvtec_calibration
+  train_cache: artifacts/cache/mvtec_teacher/train
+  calibration_cache: artifacts/cache/mvtec_teacher/calibration
   descriptor_stats: artifacts/stats/mvtec_seed111.json
   train_gain_targets: artifacts/targets/gain/mvtec_train.pt
   calibration_gain_targets: artifacts/targets/gain/mvtec_calibration.pt

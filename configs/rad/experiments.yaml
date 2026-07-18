@@ -458,8 +458,15 @@ matrix:
   immutable: true
   seed: 111
   device: '{device}'
-  command: python tools/train_fusion.py --config configs/rad/fusion.yaml --seed {seed}
-    --device {device} --output-dir {output_dir}
+  experiment_kind: training_ablation
+  primary_pipeline: false
+  requires_gates:
+  - fusion_stage_passed
+  - lse_stage_passed
+  command: python tools/train_joint.py --config configs/rad/joint.yaml --fusion-checkpoint
+    artifacts/fusion/mvtec_seed111/checkpoints/best_gate_passed.pt --lse-checkpoint
+    artifacts/lse/mvtec_seed111/checkpoints/best_gate_passed.pt --seed {seed} --device
+    {device} --output-dir {output_dir} --allow-joint
   config:
     method:
       name: ablation

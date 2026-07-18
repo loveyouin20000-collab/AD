@@ -1,0 +1,54 @@
+seed: 111
+device: cuda:0
+image_size: 518
+backbone:
+  depth: 24
+  candidate_layers: [6, 12, 18, 24]
+data:
+  dataset: mvtec
+  data_path: /root/autodl-tmp/data/mvtec
+  split_manifest: artifacts/splits/mvtec_seed111.jsonl
+  train_cache: artifacts/cache/mvtec_teacher/train
+  calibration_cache: artifacts/cache/mvtec_teacher/calibration
+  descriptor_stats: artifacts/stats/mvtec_seed111.json
+  shapley_targets: artifacts/targets/shapley/mvtec_seed111.pt
+teacher:
+  checkpoint_path: weight/train_on_mvtec/CLIP.pth
+  backbone: "ViT-L/14@336px"
+cache:
+  schema_version: 1
+  shard_size: 16
+zero_shot:
+  source_dataset: mvtec
+  target_datasets: [visa]
+  target_tuning: false
+training:
+  mode: joint
+  epochs: 20
+  batch_size: 16
+  learning_rate: 1.0e-5
+  weight_decay: 1.0e-4
+  num_workers: 4
+  amp: true
+  validation_interval_epochs: 1
+  early_stopping_patience: 5
+joint:
+  enabled: true
+  primary_pipeline: false
+  data_mode: cached
+  trainable_modules: [dlcm, lse]
+  fusion_loss_weight: 1.0
+  lse_loss_weight: 0.5
+  compute_final_weight: 0.05
+  compute_ramp_fraction: 0.20
+  compute_target_depth_ratio: 0.75
+  soft_exit_temperature: 1.0
+  early_depths: [12, 18]
+  full_depth: 24
+  epsilon_gain: 0.05
+  epsilon_absolute: 0.5
+  sufficiency_weight: 0.5
+  no_regression:
+    max_pixel_ap_drop: 0.002
+    max_pro_drop: 0.002
+    max_mean_error_relative_increase: 0.01

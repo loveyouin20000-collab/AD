@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from collections.abc import Mapping
 from dataclasses import dataclass
 from typing import Any
 
@@ -28,6 +29,110 @@ class FusionLossWeights:
         defaults = {12: 0.5, 18: 0.75, 24: 1.0}
         table = self.lambda_loc if self.lambda_loc is not None else defaults
         return float(table.get(depth, 1.0))
+
+
+@dataclass
+class FusionForwardResult:
+    total_loss: torch.Tensor
+    fused_logits: dict[int, torch.Tensor]
+    weights: dict[int, torch.Tensor]
+    sample_errors: dict[int, torch.Tensor]
+    loss_terms: dict[str, torch.Tensor]
+
+
+def compute_fusion_objective(
+    dlcm: nn.Module,
+    batch: Mapping[str, Any],
+    config: Mapping[str, Any],
+    *,
+    training_fraction: float = 0.0,
+) -> FusionForwardResult:
+    """Pure fusion objective shared by staged and joint trainers."""
+    train_depths: tuple[int, ...] = tuple(config["train_depths"])
+    loss_weights: FusionLossWeights = config.get("loss_weights") or FusionLossWeights()
+    layer_extractor: LayerDescriptorExtractor = config["layer_extractor"]
+    context_extractor: CheckpointContextExtractor = config["context_extractor"]
+    normalizer: DescriptorNormalizer | None = config.get("normalizer")
+
+    if hasattr(dlcm, "set_progress"):
+        dlcm.set_progress(training_fraction)
+
+    maps_by_depth: dict[int, torch.Tensor] = batch["maps_by_depth"]
+    layer_ids_by_depth: dict[int, torch.Tensor] = batch["layer_ids_by_depth"]
+    mask = batch["mask"]
+    image_label = batch["image_label"]
+    teacher_logits = batch["teacher_logits"]
+    shapley_by_depth: dict[int, dict[str, torch.Tensor]] = batch["shapley_by_depth"]
+
+    total = teacher_logits.new_tensor(0.0)
+    loss_terms: dict[str, torch.Tensor] = {}
+    fused_logits: dict[int, torch.Tensor] = {}
+    weights_by_depth: dict[int, torch.Tensor] = {}
+    sample_errors: dict[int, torch.Tensor] = {}
+    prev_fused: torch.Tensor | None = None
+
+    teacher_prob = torch.sigmoid(teacher_logits)
+
+    for depth in train_depths:
+        maps = maps_by_depth[depth]
+        layer_ids = layer_ids_by_depth[depth]
+        b, l = maps.shape[:2]
+        valid_mask = torch.ones(b, l, dtype=torch.bool, device=maps.device)
+
+        maps_4d = maps.squeeze(2) if maps.ndim == 5 else maps
+        layer_desc = layer_extractor(maps_4d, valid_mask=valid_mask)
+        if normalizer is not None:
+            flat = layer_desc.reshape(b * l, -1)
+            flat = normalizer.transform(flat)
+            layer_desc = flat.view(b, l, -1)
+        ctx = context_extractor(
+            maps_4d,
+            valid_mask=valid_mask,
+            layer_ids=layer_ids,
+            prev_fused=prev_fused,
+        )
+        weights = dlcm(layer_desc, ctx, layer_ids, valid_mask)
+        fused = sum_preserving_fusion(maps, weights, valid_mask)
+
+        per_sample_err = sample_localization_error(fused, mask, image_label)
+        loc = per_sample_err.mean()
+        map_kd = confidence_weighted_distillation(fused, teacher_logits)
+        boundary_kd = boundary_l1_loss(torch.sigmoid(fused), teacher_prob).mean()
+
+        target_dist = shapley_by_depth[depth]["distribution"].to(weights.device)
+        w = weights.clamp_min(1e-8)
+        t = target_dist.clamp_min(1e-8)
+        contrib_kl = (w * (w.log() - t.log())).sum(dim=-1).mean()
+
+        depth_loss = (
+            loss_weights.loc_weight(depth) * loc
+            + loss_weights.map_kd * map_kd
+            + loss_weights.boundary_kd * boundary_kd
+            + loss_weights.contribution * contrib_kl
+        )
+        total = total + depth_loss
+
+        entropy = -(w * w.log()).sum(dim=-1).mean()
+        loss_terms[f"loc_{depth}"] = loc.detach()
+        loss_terms[f"map_kd_{depth}"] = map_kd.detach()
+        loss_terms[f"boundary_kd_{depth}"] = boundary_kd.detach()
+        loss_terms[f"contrib_kl_{depth}"] = contrib_kl.detach()
+        loss_terms[f"weight_entropy_{depth}"] = entropy.detach()
+        loss_terms[f"avg_weight_{depth}"] = weights.detach().mean()
+
+        fused_logits[depth] = fused
+        weights_by_depth[depth] = weights
+        sample_errors[depth] = per_sample_err
+        prev_fused = fused.detach()
+
+    loss_terms["loss"] = total
+    return FusionForwardResult(
+        total_loss=total,
+        fused_logits=fused_logits,
+        weights=weights_by_depth,
+        sample_errors=sample_errors,
+        loss_terms=loss_terms,
+    )
 
 
 class FusionTrainer(nn.Module):
@@ -66,83 +171,23 @@ class FusionTrainer(nn.Module):
             return [n for n, _ in self.dlcm.named_parameters()]
         return [n for n, _ in self.named_parameters()]
 
-    def _describe(
-        self,
-        maps: torch.Tensor,
-        layer_ids: torch.Tensor,
-        valid_mask: torch.Tensor,
-        prev_fused: torch.Tensor | None,
-    ) -> tuple[torch.Tensor, torch.Tensor]:
-        # maps: [B, L, 1, H, W]
-        maps_4d = maps.squeeze(2) if maps.ndim == 5 else maps
-        layer_desc = self.layer_extractor(maps_4d, valid_mask=valid_mask)
-        if self.normalizer is not None:
-            b, l, d = layer_desc.shape
-            flat = layer_desc.reshape(b * l, d)
-            flat = self.normalizer.transform(flat)
-            layer_desc = flat.view(b, l, d)
-        ctx = self.context_extractor(
-            maps_4d,
-            valid_mask=valid_mask,
-            layer_ids=layer_ids,
-            prev_fused=prev_fused,
-        )
-        return layer_desc, ctx
+    def _fusion_config(self) -> dict[str, Any]:
+        return {
+            "train_depths": self.train_depths,
+            "loss_weights": self.loss_weights,
+            "layer_extractor": self.layer_extractor,
+            "context_extractor": self.context_extractor,
+            "normalizer": self.normalizer,
+        }
 
     def compute_losses(self, batch: dict[str, Any]) -> dict[str, torch.Tensor]:
-        maps_by_depth: dict[int, torch.Tensor] = batch["maps_by_depth"]
-        layer_ids_by_depth: dict[int, torch.Tensor] = batch["layer_ids_by_depth"]
-        mask = batch["mask"]
-        image_label = batch["image_label"]
-        teacher_logits = batch["teacher_logits"]
-        shapley_by_depth: dict[int, dict[str, torch.Tensor]] = batch["shapley_by_depth"]
-
-        total = teacher_logits.new_tensor(0.0)
-        metrics: dict[str, torch.Tensor] = {}
-        prev_fused: torch.Tensor | None = None
-
-        teacher_prob = torch.sigmoid(teacher_logits)
-
-        for depth in self.train_depths:
-            maps = maps_by_depth[depth]  # [B, L, 1, H, W]
-            layer_ids = layer_ids_by_depth[depth]
-            b, l = maps.shape[:2]
-            valid_mask = torch.ones(b, l, dtype=torch.bool, device=maps.device)
-
-            layer_desc, ctx = self._describe(maps, layer_ids, valid_mask, prev_fused)
-            weights = self.dlcm(layer_desc, ctx, layer_ids, valid_mask)
-            fused = sum_preserving_fusion(maps, weights, valid_mask)  # [B,1,H,W]
-
-            loc = sample_localization_error(fused, mask, image_label).mean()
-            map_kd = confidence_weighted_distillation(fused, teacher_logits)
-            boundary_kd = boundary_l1_loss(torch.sigmoid(fused), teacher_prob).mean()
-
-            target_dist = shapley_by_depth[depth]["distribution"].to(weights.device)
-            # KL(weights || target): weights * (log w - log t)
-            w = weights.clamp_min(1e-8)
-            t = target_dist.clamp_min(1e-8)
-            contrib_kl = (w * (w.log() - t.log())).sum(dim=-1).mean()
-
-            depth_loss = (
-                self.loss_weights.loc_weight(depth) * loc
-                + self.loss_weights.map_kd * map_kd
-                + self.loss_weights.boundary_kd * boundary_kd
-                + self.loss_weights.contribution * contrib_kl
-            )
-            total = total + depth_loss
-
-            entropy = -(w * w.log()).sum(dim=-1).mean()
-            metrics[f"loc_{depth}"] = loc.detach()
-            metrics[f"map_kd_{depth}"] = map_kd.detach()
-            metrics[f"boundary_kd_{depth}"] = boundary_kd.detach()
-            metrics[f"contrib_kl_{depth}"] = contrib_kl.detach()
-            metrics[f"weight_entropy_{depth}"] = entropy.detach()
-            metrics[f"avg_weight_{depth}"] = weights.detach().mean()
-
-            prev_fused = fused.detach()
-
-        metrics["loss"] = total
-        return metrics
+        result = compute_fusion_objective(
+            self.dlcm,
+            batch,
+            self._fusion_config(),
+            training_fraction=0.0,
+        )
+        return result.loss_terms
 
     def training_step(
         self,
@@ -167,6 +212,5 @@ def pixel_average_precision(
     probs = torch.sigmoid(logits).detach().cpu().reshape(-1).numpy()
     gt = mask.detach().cpu().reshape(-1).numpy()
     if gt.max() < 0.5:
-        # No positive pixels: define AP as 1 if preds are all low else 0
         return float((probs < 0.5).mean())
     return float(average_precision_score(gt, probs))

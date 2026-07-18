@@ -88,3 +88,15 @@ def test_dry_run_cli_prints_commands_and_gpu_hours(tmp_path: Path):
     # no target tuning
     raw = yaml.safe_load(EXPERIMENTS_YAML.read_text())
     assert raw["defaults"]["zero_shot"]["target_tuning"] is False
+
+
+def test_joint_ablation_row_uses_joint_entrypoint():
+    matrix = load_experiment_matrix(EXPERIMENTS_YAML)
+    row = matrix.row_by_id("ablation_training_joint")
+    command = row.command
+    assert "tools/train_joint.py" in command
+    assert "configs/rad/joint.yaml" in command
+    assert "--allow-joint" in command
+    assert row.estimated_gpu_hours == 2.5
+    assert row.raw.get("primary_pipeline") is False
+    assert row.raw.get("requires_gates") == ["fusion_stage_passed", "lse_stage_passed"]
