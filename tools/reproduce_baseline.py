@@ -179,6 +179,7 @@ def run_baseline(
     seed: int | None = None,
     output_dir: Path | None = None,
     dry_run: bool = False,
+    checkpoint: Path | None = None,
 ) -> int:
     cfg = BaselineConfig.from_yaml(config_path)
     if seed is not None:
@@ -210,22 +211,31 @@ def run_baseline(
 
     checkpoint_dir = cfg.output_dir / "checkpoints"
     result_dir = cfg.output_dir / "results" / f"epoch_{cfg.epoch}"
-    checkpoint_path = checkpoint_dir / f"epoch_{cfg.epoch}.pth"
-
-    train_cmd = build_train_command(cfg, checkpoint_dir)
+    if checkpoint is not None:
+        checkpoint_path = Path(checkpoint)
+        train_cmd: list[str] | None = None
+    else:
+        checkpoint_path = checkpoint_dir / f"epoch_{cfg.epoch}.pth"
+        train_cmd = build_train_command(cfg, checkpoint_dir)
     test_cmd = build_test_command(cfg, checkpoint_path, result_dir)
 
     print(f"config: {config_path}")
     print(f"output_dir: {cfg.output_dir}")
     print(f"train_data_path: {cfg.train.data_path}")
     print(f"test_data_path: {cfg.test.data_path}")
-    print(f"train_cmd: {format_command(train_cmd)}")
+    if train_cmd is None:
+        print("train_cmd: SKIPPED (using --checkpoint)")
+    else:
+        print(f"train_cmd: {format_command(train_cmd)}")
     print(f"test_cmd: {format_command(test_cmd)}")
+    print(f"checkpoint_path: {checkpoint_path}")
 
     if dry_run:
         return 0
 
     validate_dataset_paths(cfg)
+    if not checkpoint_path.exists():
+        raise FileNotFoundError(f"checkpoint not found: {checkpoint_path}")
     existing = load_completed_manifest(cfg.output_dir)
     if existing is not None:
         raise FileExistsError(
@@ -233,7 +243,7 @@ def run_baseline(
         )
 
     config_hashes = {str(config_path): sha256_file(config_path)}
-    provenance = {
+    provenance: dict[str, Any] = {
         "status": "running",
         "commands": {
             "train": train_cmd,
@@ -243,12 +253,15 @@ def run_baseline(
         "versions": package_versions(),
         "config_hashes": config_hashes,
         "checkpoint_path": str(checkpoint_path),
+        "checkpoint_sha256": sha256_file(checkpoint_path),
         "metrics_path": str(result_dir),
         "seed": cfg.seed,
+        "eval_only": train_cmd is None,
     }
     write_manifest(cfg.output_dir, provenance)
 
-    subprocess.run(train_cmd, cwd=REPO_ROOT, check=True)
+    if train_cmd is not None:
+        subprocess.run(train_cmd, cwd=REPO_ROOT, check=True)
     subprocess.run(test_cmd, cwd=REPO_ROOT, check=True)
 
     provenance["status"] = "completed"
@@ -268,6 +281,12 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         help="override config output_dir",
     )
     parser.add_argument(
+        "--checkpoint",
+        type=Path,
+        default=None,
+        help="skip training and evaluate this checkpoint (official teacher freeze)",
+    )
+    parser.add_argument(
         "--dry-run",
         action="store_true",
         help="print resolved commands without running train/test",
@@ -282,6 +301,7 @@ def main(argv: list[str] | None = None) -> int:
         seed=args.seed,
         output_dir=args.output_dir,
         dry_run=args.dry_run,
+        checkpoint=args.checkpoint,
     )
 
 

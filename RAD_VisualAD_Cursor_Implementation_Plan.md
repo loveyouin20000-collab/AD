@@ -103,7 +103,7 @@ VisualAD/
 **Interfaces:**
 - Produces: a reproducible environment validator callable as `python tools/validate_environment.py`.
 
-- [ ] **Step 1: Clone the official repository and create a working branch**
+- [x] **Step 1: Clone the official repository and create a working branch**
 
 ```bash
 git clone https://github.com/7HHHHH/VisualAD.git
@@ -112,7 +112,7 @@ git checkout -b feat/residual-aware-adaptive-depth
 mkdir -p scripts rad tests/rad configs/rad tools .cursor/rules
 ```
 
-- [ ] **Step 2: Write the environment test first**
+- [x] **Step 2: Write the environment test first**
 
 ```python
 # tests/rad/test_environment.py
@@ -127,7 +127,7 @@ def test_environment_has_cuda_and_expected_torch_major_minor():
     assert env["gpu_count"] >= 1
 ```
 
-- [ ] **Step 3: Run the test and confirm red state**
+- [x] **Step 3: Run the test and confirm red state**
 
 ```bash
 pytest tests/rad/test_environment.py -q
@@ -135,7 +135,7 @@ pytest tests/rad/test_environment.py -q
 
 Expected: collection error because `tools.validate_environment` does not exist.
 
-- [ ] **Step 4: Implement the validator**
+- [x] **Step 4: Implement the validator**
 
 ```python
 # tools/validate_environment.py
@@ -163,7 +163,7 @@ if __name__ == "__main__":
     print(json.dumps(collect_environment(), indent=2))
 ```
 
-- [ ] **Step 5: Add the setup script**
+- [x] **Step 5: Add the setup script**
 
 ```bash
 #!/usr/bin/env bash
@@ -193,7 +193,7 @@ pandas==2.2.2
 pyarrow==17.0.0
 ```
 
-- [ ] **Step 6: Add quality configuration**
+- [x] **Step 6: Add quality configuration**
 
 ```toml
 # pyproject.toml
@@ -215,7 +215,7 @@ disallow_untyped_defs = true
 ignore_missing_imports = true
 ```
 
-- [ ] **Step 7: Add Cursor project rules**
+- [x] **Step 7: Add Cursor project rules**
 
 ```markdown
 ---
@@ -231,7 +231,7 @@ alwaysApply: true
 - Every CLI supports `--config`, `--seed`, `--output-dir`, and `--dry-run` where meaningful.
 ```
 
-- [ ] **Step 8: Verify green state and commit**
+- [x] **Step 8: Verify green state and commit**
 
 ```bash
 bash scripts/setup_autodl_env.sh
@@ -256,7 +256,7 @@ Expected: one test passes; validator prints at least one CUDA GPU.
 **Interfaces:**
 - Produces: `ExperimentConfig.from_yaml(path: str) -> ExperimentConfig`.
 
-- [ ] **Step 1: Write failing validation tests**
+- [x] **Step 1: Write failing validation tests**
 
 ```python
 # tests/rad/test_config.py
@@ -277,7 +277,7 @@ def test_main_config_uses_visualad_checkpoints():
     assert cfg.zero_shot.target_tuning is False
 ```
 
-- [ ] **Step 2: Run and observe failure**
+- [x] **Step 2: Run and observe failure**
 
 ```bash
 pytest tests/rad/test_config.py -q
@@ -285,7 +285,7 @@ pytest tests/rad/test_config.py -q
 
 Expected: import error for `rad.config`.
 
-- [ ] **Step 3: Implement strict dataclasses**
+- [x] **Step 3: Implement strict dataclasses**
 
 ```python
 # rad/config.py
@@ -352,7 +352,7 @@ zero_shot:
   target_tuning: false
 ```
 
-- [ ] **Step 4: Verify and commit**
+- [x] **Step 4: Verify and commit**
 
 ```bash
 pytest tests/rad/test_config.py -q
@@ -375,7 +375,7 @@ git commit -m "feat: add validated experiment configuration"
 **Interfaces:**
 - Produces: immutable teacher checkpoint and baseline metric JSON.
 
-- [ ] **Step 1: Write a command smoke test**
+- [x] **Step 1: Write a command smoke test**
 
 ```python
 # tests/rad/test_baseline_smoke.py
@@ -393,22 +393,22 @@ def test_baseline_dry_run_resolves_paths_and_command():
     assert "features_list 6 12 18 24" in result.stdout
 ```
 
-- [ ] **Step 2: Implement a wrapper that never edits official scripts**
+- [x] **Step 2: Implement a wrapper that never edits official scripts**
 
 The wrapper must validate dataset paths, serialize the exact command, Git SHA, package versions, and a SHA-256 hash of every config file before launching `train.py` and `test.py`. It must fail if an output directory already contains a completed manifest.
 
-- [ ] **Step 3: Run the official cross-dataset directions**
+- [x] **Step 3: Run the official cross-dataset directions**
 
 ```bash
 python tools/reproduce_baseline.py --config configs/rad/baseline_mvtec_to_visa.yaml
 python tools/reproduce_baseline.py --config configs/rad/baseline_visa_to_mvtec.yaml
 ```
 
-- [ ] **Step 4: Acceptance gate**
+- [x] **Step 4: Acceptance gate**
 
 Record image AUROC, pixel AUROC, pixel AP, and PRO. Do not begin adaptive changes until repeated inference with the same checkpoint and seed is deterministic within `1e-6` for logits and the reproduced metrics are within a predeclared tolerance of the official result or the discrepancy is documented with evidence.
 
-- [ ] **Step 5: Tag the baseline commit**
+- [x] **Step 5: Tag the baseline commit**
 
 ```bash
 git add tools configs/rad tests/rad
@@ -429,7 +429,7 @@ git tag baseline-visualad-verified
   - `StageCache(sequence, next_block, patch_tokens, checkpoint_tokens)`
   - `CheckpointOutput(depth, patch_tokens, anomaly_token, normal_token, class_token)`
 
-- [ ] **Step 1: Write shape and invariant tests**
+- [x] **Step 1: Write shape and invariant tests**
 
 ```python
 # tests/rad/test_types.py
@@ -450,9 +450,9 @@ def test_stage_cache_detach_removes_graph():
     assert not detached.patch_tokens[6].requires_grad
 ```
 
-- [ ] **Step 2: Implement immutable dataclasses with explicit sequence convention `[tokens, batch, width]` and patch convention `[batch, patches, width]`**
+- [x] **Step 2: Implement immutable dataclasses with explicit sequence convention `[tokens, batch, width]` and patch convention `[batch, patches, width]`**
 
-- [ ] **Step 3: Run and commit**
+- [x] **Step 3: Run and commit**
 
 ```bash
 pytest tests/rad/test_types.py -q
@@ -475,7 +475,7 @@ git commit -m "feat: define staged backbone tensor contracts"
   - `VisionTransformer.forward_staged(image, candidate_layers) -> dict[int, CheckpointOutput]`
 - The legacy `forward` and `encode_image` outputs remain unchanged.
 
-- [ ] **Step 1: Write numerical equivalence tests before touching production code**
+- [x] **Step 1: Write numerical equivalence tests before touching production code**
 
 ```python
 # tests/rad/test_staged_backbone.py
@@ -498,7 +498,7 @@ def test_exit_at_12_executes_exactly_12_blocks(visualad_model, sample_image, blo
     assert block_call_counter.total == 12
 ```
 
-- [ ] **Step 2: Run the tests and confirm failure**
+- [x] **Step 2: Run the tests and confirm failure**
 
 ```bash
 pytest tests/rad/test_staged_backbone.py -q
@@ -506,7 +506,7 @@ pytest tests/rad/test_staged_backbone.py -q
 
 Expected: missing staged methods.
 
-- [ ] **Step 3: Add minimal staged methods without rewriting VisualAD internals**
+- [x] **Step 3: Add minimal staged methods without rewriting VisualAD internals**
 
 Implementation rules:
 1. Reuse the official convolution, class embedding, positional embedding, token insertion, pre-layer norm, residual blocks, and post-layer norm.
@@ -515,7 +515,7 @@ Implementation rules:
 4. Never run a block whose one-based index exceeds `target_layer`.
 5. Keep legacy `forward` as a compatibility wrapper; do not redirect it until equivalence tests pass.
 
-- [ ] **Step 4: Test continuation as well as direct execution**
+- [x] **Step 4: Test continuation as well as direct execution**
 
 ```python
 def test_continue_12_to_18_matches_direct_18(visualad_model, sample_image):
@@ -526,7 +526,7 @@ def test_continue_12_to_18_matches_direct_18(visualad_model, sample_image):
     assert torch.allclose(out18.patch_tokens, direct.patch_tokens, atol=1e-6, rtol=1e-5)
 ```
 
-- [ ] **Step 5: Verify legacy regression suite and commit**
+- [x] **Step 5: Verify legacy regression suite and commit**
 
 ```bash
 pytest tests/rad/test_staged_backbone.py tests/rad/test_baseline_smoke.py -q
@@ -546,7 +546,7 @@ git commit -m "feat: add numerically equivalent staged ViT execution"
 - Consumes: cached patch tokens `P_l` and current checkpoint tokens `t_a^d`, `t_n^d`.
 - Produces: `dict[int, Tensor]` of maps `A_{l|d}` with shape `[B, 1, H, W]` for all `l <= d`.
 
-- [ ] **Step 1: Write causal availability test**
+- [x] **Step 1: Write causal availability test**
 
 ```python
 # tests/rad/test_checkpoint_maps.py
@@ -556,7 +556,7 @@ def test_checkpoint_12_cannot_use_deeper_patch_tokens(generator, staged_outputs)
     assert set(maps) == {6, 12}
 ```
 
-- [ ] **Step 2: Write full-depth compatibility test**
+- [x] **Step 2: Write full-depth compatibility test**
 
 ```python
 def test_checkpoint_24_matches_official_map_list(generator, official_map_list, staged_outputs):
@@ -565,11 +565,11 @@ def test_checkpoint_24_matches_official_map_list(generator, official_map_list, s
         assert torch.allclose(maps[depth], expected, atol=1e-5, rtol=1e-4)
 ```
 
-- [ ] **Step 3: Implement causal token conditioning**
+- [x] **Step 3: Implement causal token conditioning**
 
 At checkpoint `d`, use `t_a^d` and `t_n^d` for every cached patch set `P_l, l <= d`. This creates `A_{6|12}` and `A_{12|12}` at layer 12, then recomputes `A_{6|18}`, `A_{12|18}`, and `A_{18|18}` when layer 18 becomes available. At layer 24 the result must match the official full-depth path.
 
-- [ ] **Step 4: Verify and commit**
+- [x] **Step 4: Verify and commit**
 
 ```bash
 pytest tests/rad/test_checkpoint_maps.py -q
@@ -589,10 +589,10 @@ git commit -m "feat: add causal checkpoint-conditioned anomaly maps"
 **Interfaces:**
 - Produces immutable JSONL manifests with `sample_id`, image path, mask path, category, label, and split.
 
-- [ ] Write tests proving no sample overlap, deterministic stratification by category and label, and identical output for the same seed.
-- [ ] Implement `build_source_split(samples, calibration_fraction=0.2, seed=111)`.
-- [ ] Refuse to regenerate an existing manifest unless `--force` is supplied.
-- [ ] Run:
+- [x] Write tests proving no sample overlap, deterministic stratification by category and label, and identical output for the same seed.
+- [x] Implement `build_source_split(samples, calibration_fraction=0.2, seed=111)`.
+- [x] Refuse to regenerate an existing manifest unless `--force` is supplied.
+- [x] Run:
 
 ```bash
 python tools/build_source_split.py --dataset mvtec --root /root/autodl-tmp/data/mvtec --seed 111 --output artifacts/splits/mvtec_seed111.jsonl
