@@ -19,6 +19,9 @@ checkpoints/
 # Regenerable teacher-output cache shards/indexes
 artifacts/cache/
 
+# Regenerable offline targets (Shapley, gain, etc.)
+artifacts/targets/
+
 # Model weights
 weight/
 

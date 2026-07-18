@@ -696,10 +696,10 @@ E = 1.0 * BCEWithLogits
   + 0.2 * BCE(TopKMeanProbability, image_label)
 ```
 
-- [ ] Test finite and differentiable error for normal masks, one-pixel anomalies, and full masks.
-- [ ] Use Sobel gradients for boundary loss; do not use non-differentiable AP or PRO as training utility.
-- [ ] Weight teacher pixels by `1 - normalized_binary_entropy(sigmoid(teacher_logit))`.
-- [ ] Commit after unit tests pass.
+- [x] Test finite and differentiable error for normal masks, one-pixel anomalies, and full masks.
+- [x] Use Sobel gradients for boundary loss; do not use non-differentiable AP or PRO as training utility.
+- [x] Weight teacher pixels by `1 - normalized_binary_entropy(sigmoid(teacher_logit))`.
+- [x] Commit after unit tests pass.
 
 ---
 
@@ -714,11 +714,11 @@ E = 1.0 * BCEWithLogits
 - `exact_shapley(layer_maps, utility_fn) -> Tensor[L]`
 - Generates targets separately at d=12, d=18, and d=24.
 
-- [ ] Test Shapley efficiency: contributions sum to `U(all)-U(empty)`.
-- [ ] Test a synthetic perfect layer receives the largest contribution.
-- [ ] Enumerate 4, 8, and 16 subsets for checkpoints 12, 18, and 24 respectively.
-- [ ] Transform signed contributions into a supervision distribution with `softmax(phi / tau_phi)`; persist raw signed values as well.
-- [ ] Generate targets offline from frozen causal maps and commit.
+- [x] Test Shapley efficiency: contributions sum to `U(all)-U(empty)`.
+- [x] Test a synthetic perfect layer receives the largest contribution.
+- [x] Enumerate 4, 8, and 16 subsets for checkpoints 12, 18, and 24 respectively.
+- [x] Transform signed contributions into a supervision distribution with `softmax(phi / tau_phi)`; persist raw signed values as well.
+- [x] Generate targets offline from frozen causal maps and commit.
 
 ---
 
