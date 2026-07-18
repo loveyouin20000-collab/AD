@@ -644,10 +644,10 @@ git commit -am "feat: add versioned teacher-output cache"
 
 **8 checkpoint context features:** current depth ratio, map entropy, boundary entropy, image normal confidence, image anomaly confidence, weight entropy, number of available layers, previous fused-map change.
 
-- [ ] Test finite outputs on all-zero normal maps and constant maps.
-- [ ] Test invariance to batch ordering.
-- [ ] Fit median/IQR statistics on source train only and clamp normalized values to `[-8, 8]`.
-- [ ] Commit after `pytest tests/rad/test_descriptors.py -q` passes.
+- [x] Test finite outputs on all-zero normal maps and constant maps.
+- [x] Test invariance to batch ordering.
+- [x] Fit median/IQR statistics on source train only and clamp normalized values to `[-8, 8]`.
+- [x] Commit after `pytest tests/rad/test_descriptors.py -q` passes.
 
 ---
 

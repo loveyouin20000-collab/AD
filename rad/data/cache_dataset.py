@@ -41,6 +41,8 @@ class TeacherCacheDataset(Dataset):
         shard_name = str(row["shard_name"])
         index_in_shard = int(row["index_in_shard"])
         if shard_name not in self._shard_cache:
+            # Keep only the active shard resident to bound RAM on large caches.
+            self._shard_cache.clear()
             self._shard_cache[shard_name] = load_shard(self.cache_dir / shard_name)
         record = self._shard_cache[shard_name][index_in_shard]
         if record["sample_id"] != row["sample_id"]:
