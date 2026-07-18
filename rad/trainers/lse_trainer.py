@@ -9,7 +9,7 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 
-from rad.models.lse import GainPrediction, LSE, heteroscedastic_gaussian_nll, lse_loss
+from rad.models.lse import LSE, GainPrediction, heteroscedastic_gaussian_nll
 
 
 @dataclass

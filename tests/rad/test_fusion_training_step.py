@@ -4,11 +4,10 @@ import torch
 
 from rad.models.descriptors import (
     CheckpointContextExtractor,
-    DescriptorNormalizer,
     LayerDescriptorExtractor,
 )
 from rad.models.dlcm import DLCM
-from rad.trainers.fusion_trainer import FusionTrainer, FusionLossWeights
+from rad.trainers.fusion_trainer import FusionLossWeights, FusionTrainer
 
 
 def _synthetic_batch(b: int = 2, h: int = 16, layers=(6, 12, 18, 24)):

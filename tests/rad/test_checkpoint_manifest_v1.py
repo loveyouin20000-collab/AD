@@ -8,10 +8,10 @@ import pytest
 from rad.checkpoints.manifest_v1 import (
     SCHEMA_VERSION,
     CheckpointManifestV1,
-    sha256_file,
-    write_checkpoint_with_manifest,
     load_manifest,
+    sha256_file,
     validate_manifest_against_file,
+    write_checkpoint_with_manifest,
 )
 
 

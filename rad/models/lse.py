@@ -1,8 +1,8 @@
 from __future__ import annotations
 
+import math
 from collections.abc import Sequence
 from dataclasses import dataclass
-import math
 
 import torch
 import torch.nn as nn

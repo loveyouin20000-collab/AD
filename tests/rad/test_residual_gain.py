@@ -3,9 +3,9 @@ from __future__ import annotations
 import torch
 
 from rad.targets.residual_gain import (
+    build_gain_target_record,
     residual_gains,
     sufficiency,
-    build_gain_target_record,
 )
 
 

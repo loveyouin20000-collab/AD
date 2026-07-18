@@ -211,7 +211,57 @@ def test_train_joint_cli_requires_allow_joint() -> None:
     assert "allow-joint" in (proc.stderr + proc.stdout).lower()
 
 
-def test_train_joint_dry_run_prints_provenance() -> None:
+def test_train_joint_dry_run_prints_provenance(tmp_path: Path) -> None:
+    from rad.checkpoints.manifest_v1 import (
+        SCHEMA_VERSION,
+        CheckpointManifestV1,
+        sha256_file,
+        write_checkpoint_with_manifest,
+    )
+
+    fusion_ckpt = tmp_path / "fusion_best.pt"
+    lse_ckpt = tmp_path / "lse_best.pt"
+    fusion_ckpt.write_bytes(b"fusion-ci")
+    lse_ckpt.write_bytes(b"lse-ci")
+    fusion_hash = sha256_file(fusion_ckpt)
+    lse_hash = sha256_file(lse_ckpt)
+    layers = (6, 12, 18, 24)
+    common = dict(
+        schema_version=SCHEMA_VERSION,
+        status="passed",
+        candidate_layers=layers,
+        source_dataset="mvtec",
+        split_manifest_hash="split-ci",
+        preprocessing_hash="pre-ci",
+        teacher_checkpoint_hash="teacher-ci",
+        descriptor_stats_hash="stats-ci",
+        gates={"staged_training": True, "source_only_selection": True},
+    )
+    write_checkpoint_with_manifest(
+        fusion_ckpt,
+        CheckpointManifestV1(
+            stage="fusion",
+            checkpoint_sha256=fusion_hash,
+            upstream_fusion_checkpoint_hash=None,
+            reference_full_depth_metrics={
+                "pixel_ap": 1.0,
+                "pro": 1.0,
+                "mean_sample_error": 1.0,
+            },
+            **common,
+        ),
+    )
+    write_checkpoint_with_manifest(
+        lse_ckpt,
+        CheckpointManifestV1(
+            stage="lse",
+            checkpoint_sha256=lse_hash,
+            upstream_fusion_checkpoint_hash=fusion_hash,
+            reference_full_depth_metrics=None,
+            **common,
+        ),
+    )
+    out = tmp_path / "joint_dry_run"
     proc = subprocess.run(
         [
             sys.executable,
@@ -219,13 +269,13 @@ def test_train_joint_dry_run_prints_provenance() -> None:
             "--config",
             str(REPO / "configs" / "rad" / "joint.yaml"),
             "--fusion-checkpoint",
-            str(REPO / "artifacts/fusion/mvtec_seed111/checkpoints/best_gate_passed.pt"),
+            str(fusion_ckpt),
             "--lse-checkpoint",
-            str(REPO / "artifacts/lse/mvtec_seed111/checkpoints/best_gate_passed.pt"),
+            str(lse_ckpt),
             "--allow-joint",
             "--dry-run",
             "--output-dir",
-            str(REPO / "artifacts/joint/mvtec_seed111_dry_run_test"),
+            str(out),
         ],
         cwd=str(REPO),
         capture_output=True,
@@ -238,5 +288,4 @@ def test_train_joint_dry_run_prints_provenance() -> None:
     assert "primary_pipeline=false" in blob or "primary_pipeline=False" in blob
     assert "dlcm" in blob and "lse" in blob
     assert "1e-5" in blob or "1.0e-5" in blob or "0.00001" in blob
-    out = REPO / "artifacts/joint/mvtec_seed111_dry_run_test"
     assert not (out / "checkpoints" / "best_gate_passed.pt").exists()

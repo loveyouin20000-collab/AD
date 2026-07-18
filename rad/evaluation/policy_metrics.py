@@ -1,9 +1,10 @@
 from __future__ import annotations
 
 import json
+from collections.abc import Sequence
 from dataclasses import asdict, dataclass, field
 from pathlib import Path
-from typing import Any, Sequence
+from typing import Any
 
 import numpy as np
 
@@ -203,7 +204,9 @@ def expected_depth_and_histogram(
     d = np.asarray(depths, dtype=np.int64).reshape(-1)
     if d.size == 0:
         return float("nan"), {}
-    hist = {int(k): int(v) for k, v in zip(*np.unique(d, return_counts=True))}
+    hist = {
+        int(k): int(v) for k, v in zip(*np.unique(d, return_counts=True), strict=True)
+    }
     return float(np.mean(d)), hist
 
 

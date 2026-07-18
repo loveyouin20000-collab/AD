@@ -1,9 +1,10 @@
 from __future__ import annotations
 
 import json
+from collections.abc import Sequence
 from dataclasses import asdict, dataclass
 from pathlib import Path
-from typing import Any, Sequence
+from typing import Any
 
 import numpy as np
 
@@ -59,7 +60,7 @@ def export_transfer_predictions(
             "n": len(rows),
             "depth_distribution": {
                 str(k): int(v)
-                for k, v in zip(*np.unique(depths, return_counts=True))
+                for k, v in zip(*np.unique(depths, return_counts=True), strict=True)
             },
             "expected_depth": float(np.mean(depths)) if len(depths) else float("nan"),
             "false_safe_exit_rate": float(
