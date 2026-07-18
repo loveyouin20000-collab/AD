@@ -839,11 +839,11 @@ Profiles:
 **Interfaces:**
 - Returns final map, image score, selected depth, checkpoint trace, weights, gain predictions, and timing breakdown.
 
-- [ ] Test an exit at 12 executes exactly 12 blocks and never computes layer-18/24 maps.
-- [ ] Test a continue decision reuses the cached sequence rather than restarting from block 1.
-- [ ] Test forced-full-depth output matches dynamic-fusion-only output.
-- [ ] Warm up 50 iterations before timing; synchronize CUDA before and after each measured segment.
-- [ ] Commit after behavioral and call-count tests pass.
+- [x] Test an exit at 12 executes exactly 12 blocks and never computes layer-18/24 maps.
+- [x] Test a continue decision reuses the cached sequence rather than restarting from block 1.
+- [x] Test forced-full-depth output matches dynamic-fusion-only output.
+- [x] Warm up 50 iterations before timing; synchronize CUDA before and after each measured segment.
+- [x] Commit after behavioral and call-count tests pass.
 
 ---
 

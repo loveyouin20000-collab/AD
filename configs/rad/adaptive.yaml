@@ -15,21 +15,15 @@ zero_shot:
   source_dataset: mvtec
   target_datasets: [visa]
   target_tuning: false
-policy:
-  calibration_cache: artifacts/cache/mvtec_calibration
-  calibration_gain_targets: artifacts/targets/gain/mvtec_calibration.pt
+adaptive:
   dlcm_checkpoint: artifacts/checkpoints/fusion/seed_222/dlcm.pt
   lse_checkpoint: artifacts/checkpoints/lse/lse_best.pt
   descriptor_stats: artifacts/stats/mvtec_seed111.json
-  output_dir: artifacts/calibration/policy
-  max_pixel_ap_drop: 0.03
-  max_false_safe_exit_rate: 0.1
-  epsilon_gain: 0.05
+  policy_profiles: artifacts/calibration/policy/policy_profiles.json
+  profile_name: balanced
   early_depths: [12, 18]
   full_depth: 24
-  # Grid seeds for offline search (metrics may be estimated from tables)
-  gain_thresholds: [0.02, 0.05, 0.1, 0.2]
-  kappas: [0.5, 1.0, 1.5]
-  map_uncertainty_thresholds: [0.3, 0.5, 0.8]
-  image_confidence_margins: [0.2, 0.3, 0.4]
-  stability_thresholds: [0.05, 0.1, 0.2]
+  temperature: 0.001
+  output_dir: artifacts/eval/adaptive
+  warmup: 50
+  limit: null
