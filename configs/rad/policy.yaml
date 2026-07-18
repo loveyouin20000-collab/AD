@@ -1,0 +1,35 @@
+seed: 111
+device: cuda:0
+image_size: 518
+backbone:
+  depth: 24
+  candidate_layers: [6, 12, 18, 24]
+data:
+  dataset: mvtec
+  data_path: /root/autodl-tmp/data/mvtec
+  split_manifest: artifacts/splits/mvtec_seed111.jsonl
+teacher:
+  checkpoint_path: weight/train_on_mvtec/CLIP.pth
+  backbone: "ViT-L/14@336px"
+zero_shot:
+  source_dataset: mvtec
+  target_datasets: [visa]
+  target_tuning: false
+policy:
+  calibration_cache: artifacts/cache/mvtec_calibration
+  calibration_gain_targets: artifacts/targets/gain/mvtec_calibration.pt
+  dlcm_checkpoint: artifacts/checkpoints/fusion/seed_222/dlcm.pt
+  lse_checkpoint: artifacts/checkpoints/lse_smoke/lse_best.pt
+  descriptor_stats: artifacts/stats/mvtec_seed111.json
+  output_dir: artifacts/calibration/policy
+  max_pixel_ap_drop: 0.03
+  max_false_safe_exit_rate: 0.1
+  epsilon_gain: 0.05
+  early_depths: [12, 18]
+  full_depth: 24
+  # Grid seeds for offline search (metrics may be estimated from tables)
+  gain_thresholds: [0.02, 0.05, 0.1, 0.2]
+  kappas: [0.5, 1.0, 1.5]
+  map_uncertainty_thresholds: [0.3, 0.5, 0.8]
+  image_confidence_margins: [0.2, 0.3, 0.4]
+  stability_thresholds: [0.05, 0.1, 0.2]

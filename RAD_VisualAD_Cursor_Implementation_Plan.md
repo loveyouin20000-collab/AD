@@ -821,11 +821,11 @@ Profiles:
 2. Balanced: gain UCB + map uncertainty + symmetric image confidence.
 3. Aggressive: gain UCB only.
 
-- [ ] Test ambiguous image predictions continue, while confidently normal and confidently anomalous samples may exit.
-- [ ] Search thresholds under explicit constraints on pixel-AP drop and false-safe-exit rate.
-- [ ] Save all feasible Pareto points and the selected three profiles.
-- [ ] Refuse any target-dataset path in calibration CLI.
-- [ ] Commit after policy tests pass.
+- [x] Test ambiguous image predictions continue, while confidently normal and confidently anomalous samples may exit.
+- [x] Search thresholds under explicit constraints on pixel-AP drop and false-safe-exit rate.
+- [x] Save all feasible Pareto points and the selected three profiles.
+- [x] Refuse any target-dataset path in calibration CLI.
+- [x] Commit after policy tests pass.
 
 ---
 
