@@ -22,6 +22,9 @@ artifacts/cache/
 # Regenerable offline targets (Shapley, gain, etc.)
 artifacts/targets/
 
+# Training checkpoints
+artifacts/checkpoints/
+
 # Model weights
 weight/
 

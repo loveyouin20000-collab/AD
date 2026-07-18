@@ -285,7 +285,9 @@ class DescriptorNormalizer:
     def transform(self, features: torch.Tensor) -> torch.Tensor:
         if self.median is None or self.iqr is None:
             raise RuntimeError("DescriptorNormalizer must be fit before transform")
-        out = (features.float() - self.median) / self.iqr
+        median = self.median.to(device=features.device, dtype=torch.float32)
+        iqr = self.iqr.to(device=features.device, dtype=torch.float32)
+        out = (features.float() - median) / iqr
         return out.clamp(self.clamp[0], self.clamp[1])
 
     def fit_from_cache(self, cache_dir: Path | str, max_samples: int | None = None) -> DescriptorNormalizer:

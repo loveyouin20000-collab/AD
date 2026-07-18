@@ -744,10 +744,10 @@ L_fusion = Σ_d λ_d L_loc(F_d,Y)
 
 Initial `λ_12=0.5`, `λ_18=0.75`, `λ_24=1.0`.
 
-- [ ] Test one optimizer step decreases loss on a fixed micro-batch.
-- [ ] Freeze the ViT, SCA, and feature transforms by default.
-- [ ] Log per-checkpoint localization error, contribution KL, weight entropy, and average weight.
-- [ ] Train three seeds and save the best source-calibration checkpoint by pixel AP subject to no regression at layer 24.
+- [x] Test one optimizer step decreases loss on a fixed micro-batch.
+- [x] Freeze the ViT, SCA, and feature transforms by default.
+- [x] Log per-checkpoint localization error, contribution KL, weight entropy, and average weight.
+- [x] Train three seeds and save the best source-calibration checkpoint by pixel AP subject to no regression at layer 24.
 
 ---
 
