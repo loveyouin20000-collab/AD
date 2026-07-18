@@ -914,9 +914,9 @@ Required ablations:
 - no KD / map KD / map+boundary KD;
 - staged vs optional joint training.
 
-- [ ] Make each matrix row a complete immutable config.
-- [ ] Add a dry-run mode printing commands and estimated GPU-hours.
-- [ ] Commit after schema tests pass.
+- [x] Make each matrix row a complete immutable config.
+- [x] Add a dry-run mode printing commands and estimated GPU-hours.
+- [x] Commit after schema tests pass.
 
 ---
 
