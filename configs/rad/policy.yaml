@@ -16,7 +16,7 @@ zero_shot:
   target_datasets: [visa]
   target_tuning: false
 policy:
-  calibration_cache: artifacts/cache/mvtec_calibration
+  calibration_cache: artifacts/cache/mvtec_teacher/calibration
   calibration_gain_targets: artifacts/targets/gain/mvtec_calibration.pt
   dlcm_checkpoint: artifacts/checkpoints/fusion/seed_222/dlcm.pt
   lse_checkpoint: artifacts/checkpoints/lse/lse_best.pt

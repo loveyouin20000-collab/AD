@@ -12,6 +12,8 @@ build/
 # Experiments and checkpoints
 experiments/
 checkpoints/
+!rad/checkpoints/
+!rad/checkpoints/**
 *.pth
 *.pt
 *.ckpt

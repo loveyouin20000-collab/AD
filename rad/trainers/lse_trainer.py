@@ -1,6 +1,7 @@
 from __future__ import annotations
 
-from collections.abc import Iterable, Sequence
+from collections.abc import Iterable, Mapping, Sequence
+from dataclasses import dataclass
 from typing import Any
 
 import numpy as np
@@ -9,6 +10,72 @@ import torch.nn as nn
 import torch.nn.functional as F
 
 from rad.models.lse import GainPrediction, LSE, heteroscedastic_gaussian_nll, lse_loss
+
+
+@dataclass
+class LSEForwardResult:
+    total_loss: torch.Tensor
+    sufficiency_logits: torch.Tensor
+    gain_means: torch.Tensor
+    gain_log_variances: torch.Tensor
+    loss_terms: dict[str, torch.Tensor]
+
+
+def compute_lse_objective(
+    lse: nn.Module,
+    state_by_depth: Mapping[int, torch.Tensor],
+    target_by_depth: Mapping[int, Mapping[str, torch.Tensor]],
+    config: Mapping[str, Any],
+) -> LSEForwardResult:
+    """Pure LSE objective shared by staged and joint trainers."""
+    early_depths: tuple[int, ...] = tuple(config["early_depths"])
+    sufficiency_weight = float(config.get("sufficiency_weight", 0.5))
+
+    total = None
+    nll_parts: list[torch.Tensor] = []
+    bce_parts: list[torch.Tensor] = []
+    suf_logits: list[torch.Tensor] = []
+    gain_means: list[torch.Tensor] = []
+    gain_logvars: list[torch.Tensor] = []
+
+    for depth in early_depths:
+        state = state_by_depth[depth]
+        targets = target_by_depth[depth]
+        depth_id = torch.full(
+            (state.shape[0],),
+            int(depth),
+            dtype=torch.long,
+            device=state.device,
+        )
+        pred = lse(state, depth_id)
+        nll = heteroscedastic_gaussian_nll(
+            pred.mean, pred.log_variance, targets["gain"]
+        ).mean()
+        bce = F.binary_cross_entropy_with_logits(
+            pred.sufficiency_logit,
+            targets["sufficient"].to(dtype=pred.sufficiency_logit.dtype),
+        )
+        depth_loss = nll + sufficiency_weight * bce
+        total = depth_loss if total is None else total + depth_loss
+        nll_parts.append(nll)
+        bce_parts.append(bce)
+        suf_logits.append(pred.sufficiency_logit)
+        gain_means.append(pred.mean)
+        gain_logvars.append(pred.log_variance)
+
+    assert total is not None
+    loss_terms = {
+        "loss": total,
+        "nll": torch.stack(nll_parts).mean().detach(),
+        "bce": torch.stack(bce_parts).mean().detach(),
+    }
+    return LSEForwardResult(
+        total_loss=total,
+        sufficiency_logits=torch.stack(suf_logits, dim=1),
+        gain_means=torch.stack(gain_means, dim=1),
+        gain_log_variances=torch.stack(gain_logvars, dim=1),
+        loss_terms=loss_terms,
+    )
 
 
 class LSETrainer(nn.Module):
@@ -27,17 +94,31 @@ class LSETrainer(nn.Module):
         self.epsilon_gain = float(epsilon_gain)
         self.sufficiency_weight = float(sufficiency_weight)
 
+    def _lse_config(self) -> dict[str, Any]:
+        return {
+            "early_depths": self.early_depths,
+            "sufficiency_weight": self.sufficiency_weight,
+        }
+
     def compute_loss(self, batch: dict[str, Any]) -> dict[str, torch.Tensor]:
-        pred = self.model(batch["state"], batch["depth_id"])
-        nll = heteroscedastic_gaussian_nll(
-            pred.mean, pred.log_variance, batch["target_gain"]
-        ).mean()
-        bce = F.binary_cross_entropy_with_logits(
-            pred.sufficiency_logit,
-            batch["target_sufficient"].to(dtype=pred.sufficiency_logit.dtype),
+        unique_depths = sorted(int(d.item()) for d in batch["depth_id"].unique())
+        state_by_depth: dict[int, torch.Tensor] = {}
+        target_by_depth: dict[int, dict[str, torch.Tensor]] = {}
+        for depth in unique_depths:
+            mask = batch["depth_id"] == depth
+            state_by_depth[depth] = batch["state"][mask]
+            target_by_depth[depth] = {
+                "gain": batch["target_gain"][mask],
+                "sufficient": batch["target_sufficient"][mask],
+            }
+        config = {**self._lse_config(), "early_depths": tuple(unique_depths)}
+        result = compute_lse_objective(
+            self.model,
+            state_by_depth,
+            target_by_depth,
+            config,
         )
-        loss = nll + self.sufficiency_weight * bce
-        return {"loss": loss, "nll": nll.detach(), "bce": bce.detach()}
+        return result.loss_terms
 
     def training_step(
         self,
@@ -58,11 +139,7 @@ class LSETrainer(nn.Module):
 
     @torch.no_grad()
     def evaluate(self, batches: Iterable[dict[str, Any]]) -> dict[str, Any]:
-        """Per-depth metrics + flat prediction table.
-
-        Metrics at each early depth: mae, rmse, auroc, brier, ece, nll.
-        AUROC uses beneficial-depth labels ``gain > epsilon_gain`` scored by predicted mean.
-        """
+        """Per-depth metrics + flat prediction table."""
         rows: list[dict[str, Any]] = []
         for batch in batches:
             pred = self.predict_batch(batch)
@@ -86,7 +163,6 @@ class LSETrainer(nn.Module):
         for depth in self.early_depths:
             subset = [r for r in rows if r["depth"] == depth]
             report[depth] = _metrics_for_rows(subset, epsilon_gain=self.epsilon_gain)
-        # Overall mean NLL for early stopping convenience
         if rows:
             nlls = [
                 float(
