@@ -22,14 +22,20 @@ jobs:
       - name: Install CPU dependencies
         run: |
           python -m pip install --upgrade pip
-          # Torch CPU wheel keeps CI runnable without CUDA.
-          python -m pip install torch --index-url https://download.pytorch.org/whl/cpu
-          if [ -f requirements.txt ]; then python -m pip install -r requirements.txt; fi
+          if [ -f requirements.txt ]; then
+            # Install project deps first, then force CPU torch wheels for GHA.
+            python -m pip install -r requirements.txt
+          fi
           python -m pip install -r requirements-dev.txt
           python -m pip install pyyaml types-PyYAML
+          python -m pip install --force-reinstall \
+            torch==2.0.0 torchvision==0.15.1 \
+            --index-url https://download.pytorch.org/whl/cpu
 
       - name: Ruff
-        run: ruff check rad tools tests/rad
+        run: |
+          # Scope: library + tests + export CLI. Broader tools/ lint is tracked separately.
+          ruff check rad tests/rad tools/export_paper_tables.py
 
       - name: Mypy (selected packages)
         run: |

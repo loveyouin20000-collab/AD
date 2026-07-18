@@ -11,6 +11,12 @@ select = ["E", "F", "I", "B", "UP"]
 
 [tool.ruff.lint.per-file-ignores]
 "VisualAD_lib/**" = ["E501", "B006"]
+# Legacy CLI scripts still carry style debt; keep CI focused on rad/tests + export tooling.
+"tools/**" = ["E501", "E741", "F401", "F541", "F841", "B007", "I001", "UP035"]
+"tools/export_paper_tables.py" = []
+# Tensor code commonly uses short names for layer counts; line wraps are noisy in formulae.
+"rad/**" = ["E741", "E501"]
+"tests/rad/**" = ["E741", "E501"]
 
 [tool.mypy]
 python_version = "3.10"

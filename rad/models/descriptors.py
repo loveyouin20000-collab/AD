@@ -71,7 +71,6 @@ def _topk_overlap(a: torch.Tensor, b: torch.Tensor, k: int, eps: float = 1e-8) -
     _, a_idx = torch.topk(a, k=k, dim=-1)
     _, b_idx = torch.topk(b, k=k, dim=-1)
     # Build masks
-    n = a.shape[-1]
     a_mask = torch.zeros_like(a, dtype=torch.bool)
     b_mask = torch.zeros_like(b, dtype=torch.bool)
     a_mask.scatter_(-1, a_idx, True)

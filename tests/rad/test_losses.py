@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import pytest
 import torch
 
 from rad.losses.distillation import (
@@ -66,8 +67,5 @@ def test_distillation_weights_by_one_minus_normalized_entropy():
 def test_distillation_rejects_shape_mismatch():
     student = torch.randn(2, 1, 4, 4)
     teacher = torch.randn(2, 1, 8, 8)
-    try:
+    with pytest.raises(ValueError):
         confidence_weighted_distillation(student, teacher)
-        assert False, "expected ValueError"
-    except ValueError:
-        pass
