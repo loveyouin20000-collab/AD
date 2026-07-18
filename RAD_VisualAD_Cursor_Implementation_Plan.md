@@ -714,11 +714,11 @@ E = 1.0 * BCEWithLogits
 - `exact_shapley(layer_maps, utility_fn) -> Tensor[L]`
 - Generates targets separately at d=12, d=18, and d=24.
 
-- [ ] Test Shapley efficiency: contributions sum to `U(all)-U(empty)`.
-- [ ] Test a synthetic perfect layer receives the largest contribution.
-- [ ] Enumerate 4, 8, and 16 subsets for checkpoints 12, 18, and 24 respectively.
-- [ ] Transform signed contributions into a supervision distribution with `softmax(phi / tau_phi)`; persist raw signed values as well.
-- [ ] Generate targets offline from frozen causal maps and commit.
+- [x] Test Shapley efficiency: contributions sum to `U(all)-U(empty)`.
+- [x] Test a synthetic perfect layer receives the largest contribution.
+- [x] Enumerate 4, 8, and 16 subsets for checkpoints 12, 18, and 24 respectively.
+- [x] Transform signed contributions into a supervision distribution with `softmax(phi / tau_phi)`; persist raw signed values as well.
+- [x] Generate targets offline from frozen causal maps and commit.
 
 ---
 
