@@ -1,0 +1,40 @@
+seed: 111
+device: cuda:0
+image_size: 518
+backbone:
+  depth: 24
+  candidate_layers: [6, 12, 18, 24]
+data:
+  dataset: mvtec
+  data_path: /root/autodl-tmp/data/mvtec
+  split_manifest: artifacts/splits/mvtec_seed111.jsonl
+teacher:
+  checkpoint_path: weight/train_on_mvtec/CLIP.pth
+  backbone: "ViT-L/14@336px"
+cache:
+  schema_version: 1
+  shard_size: 16
+fusion:
+  train_cache: artifacts/cache/mvtec_teacher
+  calibration_cache: artifacts/cache/mvtec_calibration
+  shapley_targets: artifacts/targets/shapley/mvtec_train.pt
+  descriptor_stats: artifacts/stats/mvtec_seed111.json
+  train_depths: [12, 18, 24]
+  lambda_loc:
+    12: 0.5
+    18: 0.75
+    24: 1.0
+  map_kd: 0.5
+  boundary_kd: 0.2
+  contribution: 0.5
+  lr: 0.0003
+  epochs: 1
+  batch_size: 1
+  seeds: [111, 222, 333]
+  alpha_init: 0.1
+  alpha_warmup_fraction: 0.2
+  output_dir: artifacts/checkpoints/fusion
+zero_shot:
+  source_dataset: mvtec
+  target_datasets: [visa]
+  target_tuning: false
