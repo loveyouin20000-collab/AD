@@ -25,6 +25,9 @@ artifacts/targets/
 # Training checkpoints
 artifacts/checkpoints/
 
+# Calibration outputs (temperatures, policy profiles, Pareto)
+artifacts/calibration/
+
 # Model weights
 weight/
 

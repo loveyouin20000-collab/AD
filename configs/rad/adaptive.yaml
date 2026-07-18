@@ -1,0 +1,29 @@
+seed: 111
+device: cuda:0
+image_size: 518
+backbone:
+  depth: 24
+  candidate_layers: [6, 12, 18, 24]
+data:
+  dataset: mvtec
+  data_path: /root/autodl-tmp/data/mvtec
+  split_manifest: artifacts/splits/mvtec_seed111.jsonl
+teacher:
+  checkpoint_path: weight/train_on_mvtec/CLIP.pth
+  backbone: "ViT-L/14@336px"
+zero_shot:
+  source_dataset: mvtec
+  target_datasets: [visa]
+  target_tuning: false
+adaptive:
+  dlcm_checkpoint: artifacts/checkpoints/fusion/seed_222/dlcm.pt
+  lse_checkpoint: artifacts/checkpoints/lse/lse_best.pt
+  descriptor_stats: artifacts/stats/mvtec_seed111.json
+  policy_profiles: artifacts/calibration/policy/policy_profiles.json
+  profile_name: balanced
+  early_depths: [12, 18]
+  full_depth: 24
+  temperature: 0.001
+  output_dir: artifacts/eval/adaptive
+  warmup: 50
+  limit: null

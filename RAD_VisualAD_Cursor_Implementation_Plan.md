@@ -821,11 +821,11 @@ Profiles:
 2. Balanced: gain UCB + map uncertainty + symmetric image confidence.
 3. Aggressive: gain UCB only.
 
-- [ ] Test ambiguous image predictions continue, while confidently normal and confidently anomalous samples may exit.
-- [ ] Search thresholds under explicit constraints on pixel-AP drop and false-safe-exit rate.
-- [ ] Save all feasible Pareto points and the selected three profiles.
-- [ ] Refuse any target-dataset path in calibration CLI.
-- [ ] Commit after policy tests pass.
+- [x] Test ambiguous image predictions continue, while confidently normal and confidently anomalous samples may exit.
+- [x] Search thresholds under explicit constraints on pixel-AP drop and false-safe-exit rate.
+- [x] Save all feasible Pareto points and the selected three profiles.
+- [x] Refuse any target-dataset path in calibration CLI.
+- [x] Commit after policy tests pass.
 
 ---
 
@@ -839,11 +839,11 @@ Profiles:
 **Interfaces:**
 - Returns final map, image score, selected depth, checkpoint trace, weights, gain predictions, and timing breakdown.
 
-- [ ] Test an exit at 12 executes exactly 12 blocks and never computes layer-18/24 maps.
-- [ ] Test a continue decision reuses the cached sequence rather than restarting from block 1.
-- [ ] Test forced-full-depth output matches dynamic-fusion-only output.
-- [ ] Warm up 50 iterations before timing; synchronize CUDA before and after each measured segment.
-- [ ] Commit after behavioral and call-count tests pass.
+- [x] Test an exit at 12 executes exactly 12 blocks and never computes layer-18/24 maps.
+- [x] Test a continue decision reuses the cached sequence rather than restarting from block 1.
+- [x] Test forced-full-depth output matches dynamic-fusion-only output.
+- [x] Warm up 50 iterations before timing; synchronize CUDA before and after each measured segment.
+- [x] Commit after behavioral and call-count tests pass.
 
 ---
 
