@@ -1,5 +1,10 @@
-"""Shapley contribution targets for layer fusion supervision."""
+"""Offline supervision targets (Shapley contributions, residual gains)."""
 
+from rad.targets.residual_gain import (
+    build_gain_target_record,
+    residual_gains,
+    sufficiency,
+)
 from rad.targets.shapley import (
     contributions_to_distribution,
     exact_shapley,
@@ -12,4 +17,7 @@ __all__ = [
     "contributions_to_distribution",
     "expected_subset_count",
     "localization_utility_factory",
+    "residual_gains",
+    "sufficiency",
+    "build_gain_target_record",
 ]

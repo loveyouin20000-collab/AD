@@ -763,9 +763,9 @@ Initial `λ_12=0.5`, `λ_18=0.75`, `λ_24=1.0`.
 - `g12 = relu(E12-min(E18,E24))`
 - `sufficient = (gain <= epsilon_gain) AND (E_d <= epsilon_absolute)`
 
-- [ ] Test that a poor but equally poor full-depth map is not marked sufficient.
-- [ ] Store raw errors and gains so thresholds can be recalibrated without regeneration.
-- [ ] Use frozen DLCM and stop gradients through all target computations.
+- [x] Test that a poor but equally poor full-depth map is not marked sufficient.
+- [x] Store raw errors and gains so thresholds can be recalibrated without regeneration.
+- [x] Use frozen DLCM and stop gradients through all target computations.
 - [ ] Commit after tests pass.
 
 ---
