@@ -6,7 +6,6 @@ from typing import Any
 
 import torch
 import torch.nn as nn
-import torch.nn.functional as F
 
 from rad.losses.distillation import confidence_weighted_distillation
 from rad.losses.localization import boundary_l1_loss, sample_localization_error

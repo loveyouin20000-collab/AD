@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import torch
-import torch.nn.functional as F
 
 
 def normalized_binary_entropy(probs: torch.Tensor, eps: float = 1e-8) -> torch.Tensor:

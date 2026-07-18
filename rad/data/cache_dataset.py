@@ -5,7 +5,6 @@ from pathlib import Path
 from typing import Any
 
 import pyarrow.parquet as pq
-import torch
 from torch.utils.data import Dataset
 
 from rad.data.cache_schema import SCHEMA_VERSION, CacheManifestError, load_shard

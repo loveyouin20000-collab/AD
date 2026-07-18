@@ -5,6 +5,8 @@ from pathlib import Path
 import pytest
 import torch
 
+from rad.calibration.policy_search import search_policy_profiles
+from rad.calibration.temperature import apply_temperature, fit_temperature
 from rad.models.lse import GainPrediction
 from rad.models.policy import (
     ExitSignals,
@@ -12,8 +14,6 @@ from rad.models.policy import (
     gain_ucb,
     should_exit,
 )
-from rad.calibration.temperature import fit_temperature, apply_temperature
-from rad.calibration.policy_search import search_policy_profiles
 
 
 def _pred(mean: float, log_var: float = 0.0) -> GainPrediction:

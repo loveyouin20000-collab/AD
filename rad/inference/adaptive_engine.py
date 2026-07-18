@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, field
+
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
@@ -13,7 +14,7 @@ from rad.models.descriptors import (
     LayerDescriptorExtractor,
 )
 from rad.models.dlcm import DLCM, sum_preserving_fusion
-from rad.models.lse import GainPrediction, LSE
+from rad.models.lse import LSE, GainPrediction
 from rad.models.policy import ExitSignals, PolicyProfile, should_exit
 from rad.types import CheckpointOutput, StageCache
 
