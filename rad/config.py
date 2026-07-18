@@ -27,10 +27,34 @@ class ZeroShotConfig:
 
 
 @dataclass(frozen=True)
+class DataConfig:
+    dataset: str
+    data_path: Path
+    split_manifest: Path
+
+
+@dataclass(frozen=True)
+class TeacherConfig:
+    checkpoint_path: Path
+    backbone: str = "ViT-L/14@336px"
+
+
+@dataclass(frozen=True)
+class CacheConfig:
+    schema_version: int = 1
+    shard_size: int = 16
+
+
+@dataclass(frozen=True)
 class ExperimentConfig:
     seed: int
     backbone: BackboneConfig
     zero_shot: ZeroShotConfig
+    device: str = "cuda:0"
+    image_size: int = 518
+    data: DataConfig | None = None
+    teacher: TeacherConfig | None = None
+    cache: CacheConfig = CacheConfig()
 
     @classmethod
     def from_yaml(cls, path: str | Path) -> ExperimentConfig:
@@ -46,4 +70,37 @@ class ExperimentConfig:
         )
         if zero_shot.target_tuning:
             raise ValueError("target-domain tuning is forbidden")
-        return cls(seed=int(raw["seed"]), backbone=backbone, zero_shot=zero_shot)
+
+        data = None
+        if "data" in raw:
+            data_raw = raw["data"]
+            data = DataConfig(
+                dataset=str(data_raw["dataset"]),
+                data_path=Path(data_raw["data_path"]),
+                split_manifest=Path(data_raw["split_manifest"]),
+            )
+
+        teacher = None
+        if "teacher" in raw:
+            teacher_raw = raw["teacher"]
+            teacher = TeacherConfig(
+                checkpoint_path=Path(teacher_raw["checkpoint_path"]),
+                backbone=str(teacher_raw.get("backbone", "ViT-L/14@336px")),
+            )
+
+        cache_raw = raw.get("cache", {}) or {}
+        cache = CacheConfig(
+            schema_version=int(cache_raw.get("schema_version", 1)),
+            shard_size=int(cache_raw.get("shard_size", 16)),
+        )
+
+        return cls(
+            seed=int(raw["seed"]),
+            backbone=backbone,
+            zero_shot=zero_shot,
+            device=str(raw.get("device", "cuda:0")),
+            image_size=int(raw.get("image_size", 518)),
+            data=data,
+            teacher=teacher,
+            cache=cache,
+        )

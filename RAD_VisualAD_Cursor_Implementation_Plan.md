@@ -615,10 +615,10 @@ Acceptance: all selector normalization and policy calibration loaders consume on
 **Interfaces:**
 - A shard record stores sample ID, image label, mask reference, maps at every checkpoint, raw descriptor ingredients, teacher logits, preprocessing hash, split hash, checkpoint hash, and schema version.
 
-- [ ] Test rejection of stale hashes and incomplete checkpoint lists.
-- [ ] Store sharded `.pt` files plus a Parquet index; do not create one file per small tensor.
-- [ ] Add `--resume` that verifies every existing shard before skipping it.
-- [ ] Run a 16-sample smoke cache before full caching.
+- [x] Test rejection of stale hashes and incomplete checkpoint lists.
+- [x] Store sharded `.pt` files plus a Parquet index; do not create one file per small tensor.
+- [x] Add `--resume` that verifies every existing shard before skipping it.
+- [x] Run a 16-sample smoke cache before full caching.
 
 ```bash
 python tools/cache_teacher_outputs.py --config configs/rad/base.yaml --split train --limit 16 --output artifacts/cache/smoke
@@ -644,10 +644,10 @@ git commit -am "feat: add versioned teacher-output cache"
 
 **8 checkpoint context features:** current depth ratio, map entropy, boundary entropy, image normal confidence, image anomaly confidence, weight entropy, number of available layers, previous fused-map change.
 
-- [ ] Test finite outputs on all-zero normal maps and constant maps.
-- [ ] Test invariance to batch ordering.
-- [ ] Fit median/IQR statistics on source train only and clamp normalized values to `[-8, 8]`.
-- [ ] Commit after `pytest tests/rad/test_descriptors.py -q` passes.
+- [x] Test finite outputs on all-zero normal maps and constant maps.
+- [x] Test invariance to batch ordering.
+- [x] Fit median/IQR statistics on source train only and clamp normalized values to `[-8, 8]`.
+- [x] Commit after `pytest tests/rad/test_descriptors.py -q` passes.
 
 ---
 

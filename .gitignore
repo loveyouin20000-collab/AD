@@ -16,6 +16,9 @@ checkpoints/
 *.pt
 *.ckpt
 
+# Regenerable teacher-output cache shards/indexes
+artifacts/cache/
+
 # Model weights
 weight/
 
