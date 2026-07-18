@@ -866,9 +866,9 @@ Implement:
 - expected depth and exit histogram;
 - measured latency, throughput, peak memory, and selector overhead.
 
-- [ ] Test every metric on a hand-calculated fixture.
-- [ ] Export per-sample traces before aggregate summaries.
-- [ ] Commit after tests pass.
+- [x] Test every metric on a hand-calculated fixture.
+- [x] Export per-sample traces before aggregate summaries.
+- [x] Commit after tests pass.
 
 ---
 
