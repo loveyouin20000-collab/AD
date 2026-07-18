@@ -766,7 +766,7 @@ Initial `λ_12=0.5`, `λ_18=0.75`, `λ_24=1.0`.
 - [x] Test that a poor but equally poor full-depth map is not marked sufficient.
 - [x] Store raw errors and gains so thresholds can be recalibrated without regeneration.
 - [x] Use frozen DLCM and stop gradients through all target computations.
-- [ ] Commit after tests pass.
+- [x] Commit after tests pass.
 
 ---
 
@@ -779,11 +779,11 @@ Initial `λ_12=0.5`, `λ_18=0.75`, `λ_24=1.0`.
 **Interfaces:**
 - `LSE.forward(state, depth_id) -> GainPrediction(mean, log_variance, sufficiency_logit)`.
 
-- [ ] Test mean is nonnegative, log variance is in `[-8,4]`, and batch shape is stable.
-- [ ] Implement a shared `input -> 64 -> 32` MLP plus learned depth embedding for checkpoints 12 and 18.
-- [ ] Use `softplus` for mean and clamp log variance.
-- [ ] Implement heteroscedastic NLL plus `0.5 * BCEWithLogits` sufficiency loss.
-- [ ] Commit after tests pass.
+- [x] Test mean is nonnegative, log variance is in `[-8,4]`, and batch shape is stable.
+- [x] Implement a shared `input -> 64 -> 32` MLP plus learned depth embedding for checkpoints 12 and 18.
+- [x] Use `softplus` for mean and clamp log variance.
+- [x] Implement heteroscedastic NLL plus `0.5 * BCEWithLogits` sufficiency loss.
+- [x] Commit after tests pass.
 
 ---
 
