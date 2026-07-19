@@ -111,8 +111,11 @@ def test_transfer_metrics_and_stratification_hand_fixture():
         full_depth=24,
     )
     assert "pixel_ap_drop" in metrics
-    assert "pro_drop" in metrics
+    assert "pixel_aupro_drop" in metrics
     assert "boundary_f_score_drop" in metrics
+    assert "adaptive" in metrics and "full" in metrics
+    assert "pixel_aupro" in metrics["adaptive"]
+    assert "pro_drop" not in metrics
     assert "false_safe_exit_rate" in metrics
     assert "expected_depth" in metrics
     assert metrics["exit_histogram"] == {12: 1, 24: 1}
