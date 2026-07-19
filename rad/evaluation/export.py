@@ -8,6 +8,7 @@ from typing import Any
 
 import numpy as np
 
+from rad.evaluation.paper_metrics import PaperMetrics
 from rad.evaluation.zero_shot import compute_stratified_metrics, compute_transfer_metrics
 
 
@@ -20,12 +21,6 @@ class TransferSamplePrediction:
     selected_depth: int
     image_label: int
     residual_gain: float
-    pixel_ap_adaptive: float
-    pixel_ap_full: float
-    pro_adaptive: float
-    pro_full: float
-    boundary_f_adaptive: float
-    boundary_f_full: float
     anomaly_area: float
     contrast_proxy: float
     boundary_complexity: float
@@ -41,6 +36,7 @@ def export_transfer_predictions(
     full_depth_maps: np.ndarray | None = None,
     masks: np.ndarray | None = None,
     images: np.ndarray | None = None,
+    paper_metrics: PaperMetrics | None = None,
 ) -> dict[str, Any]:
     """Write per-sample predictions first, then aggregate summary.json."""
     out = Path(output_dir)
@@ -54,37 +50,7 @@ def export_transfer_predictions(
     gains = np.array([r.residual_gain for r in rows], dtype=np.float64)
     labels = np.array([r.image_label for r in rows], dtype=np.int64)
 
-    if adaptive_maps is None:
-        # Aggregate from per-sample scalar metrics only
-        summary: dict[str, Any] = {
-            "n": len(rows),
-            "depth_distribution": {
-                str(k): int(v)
-                for k, v in zip(*np.unique(depths, return_counts=True), strict=True)
-            },
-            "expected_depth": float(np.mean(depths)) if len(depths) else float("nan"),
-            "false_safe_exit_rate": float(
-                np.mean(gains[depths < full_depth] > epsilon)
-                if np.any(depths < full_depth)
-                else float("nan")
-            ),
-            "pixel_ap_drop": float(
-                np.mean([r.pixel_ap_full - r.pixel_ap_adaptive for r in rows])
-            )
-            if rows
-            else float("nan"),
-            "pro_drop": float(np.mean([r.pro_full - r.pro_adaptive for r in rows]))
-            if rows
-            else float("nan"),
-            "boundary_f_score_drop": float(
-                np.mean([r.boundary_f_full - r.boundary_f_adaptive for r in rows])
-            )
-            if rows
-            else float("nan"),
-            "datasets": sorted({r.dataset for r in rows}),
-        }
-    else:
-        assert full_depth_maps is not None and masks is not None
+    if adaptive_maps is not None and full_depth_maps is not None and masks is not None:
         summary = compute_transfer_metrics(
             adaptive_maps=adaptive_maps,
             full_depth_maps=full_depth_maps,
@@ -110,6 +76,25 @@ def export_transfer_predictions(
                 epsilon=epsilon,
                 full_depth=full_depth,
             )
+    else:
+        summary = {
+            "n": len(rows),
+            "depth_distribution": {
+                str(k): int(v)
+                for k, v in zip(*np.unique(depths, return_counts=True), strict=True)
+            }
+            if len(depths)
+            else {},
+            "expected_depth": float(np.mean(depths)) if len(depths) else float("nan"),
+            "false_safe_exit_rate": float(
+                np.mean(gains[depths < full_depth] > epsilon)
+                if np.any(depths < full_depth)
+                else float("nan")
+            ),
+            "datasets": sorted({r.dataset for r in rows}),
+        }
+        if paper_metrics is not None:
+            summary["paper_metrics"] = paper_metrics.as_dict()
 
     (out / "summary.json").write_text(json.dumps(summary, indent=2) + "\n", encoding="utf-8")
     return summary
