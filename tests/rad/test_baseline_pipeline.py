@@ -12,6 +12,7 @@ from rad.errors import (
     ArtifactIntegrityError,
     MetricComputationError,
     OutputProtectionError,
+    RADContractError,
 )
 from tests.rad.contracts.baseline import (
     assert_completed_baseline_manifest,
@@ -316,6 +317,17 @@ def test_existing_metrics_json_preferred_over_log_txt(
     assert load_json(result_dir / "metrics.json") == metrics_from_json
 
 
+def test_malformed_metrics_json_raises_metric_computation_error(
+    tmp_path: Path,
+) -> None:
+    result_dir = tmp_path / "results"
+    result_dir.mkdir()
+    (result_dir / "metrics.json").write_text("{not valid json", encoding="utf-8")
+
+    with pytest.raises(MetricComputationError, match="metrics.json"):
+        load_or_materialize_metrics(result_dir)
+
+
 @pytest.mark.parametrize(
     "invalid_value",
     ["not-a-number", None, ["list"]],
@@ -339,6 +351,53 @@ def test_invalid_metrics_json_raises_metric_computation_error(
 
     with pytest.raises(MetricComputationError, match="pixel_auroc"):
         load_or_materialize_metrics(result_dir)
+
+
+def test_train_subprocess_failure_raises_rad_contract_error(
+    baseline_config_path: tuple[Path, Path],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    config_path, _output_dir = baseline_config_path
+    cfg = _cfg_from_path(config_path)
+    checkpoint_dir = cfg.output_dir / "checkpoints"
+    train_cmd = build_train_command(cfg, checkpoint_dir)
+
+    def fake_run(cmd: list[str], **kwargs: object) -> subprocess.CompletedProcess[str]:
+        if cmd == train_cmd:
+            raise subprocess.CalledProcessError(1, cmd, output="", stderr="train failed")
+        raise AssertionError(f"unexpected command: {cmd}")
+
+    monkeypatch.setattr("tools.reproduce_baseline.subprocess.run", fake_run)
+
+    with pytest.raises(RADContractError, match="train"):
+        run_baseline(config_path)
+
+
+def test_test_subprocess_failure_raises_rad_contract_error(
+    baseline_config_path: tuple[Path, Path],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    config_path, output_dir = baseline_config_path
+    cfg = _cfg_from_path(config_path)
+    checkpoint_dir = output_dir / "checkpoints"
+    checkpoint_path = checkpoint_dir / f"epoch_{cfg.epoch}.pth"
+    result_dir = output_dir / "results" / f"epoch_{cfg.epoch}"
+    train_cmd = build_train_command(cfg, checkpoint_dir)
+    test_cmd = build_test_command(cfg, checkpoint_path, result_dir)
+
+    def fake_run(cmd: list[str], **kwargs: object) -> subprocess.CompletedProcess[str]:
+        if cmd == train_cmd:
+            checkpoint_dir.mkdir(parents=True, exist_ok=True)
+            checkpoint_path.write_bytes(b"trained-checkpoint")
+        elif cmd == test_cmd:
+            raise subprocess.CalledProcessError(1, cmd, output="", stderr="test failed")
+        else:
+            raise AssertionError(f"unexpected command: {cmd}")
+
+    monkeypatch.setattr("tools.reproduce_baseline.subprocess.run", fake_run)
+
+    with pytest.raises(RADContractError, match="test"):
+        run_baseline(config_path)
 
 
 def test_full_pipeline_integration(

@@ -173,6 +173,15 @@ def format_command(cmd: list[str]) -> str:
     return " ".join(cmd)
 
 
+def run_baseline_subprocess(cmd: list[str], *, stage: str) -> None:
+    try:
+        subprocess.run(cmd, cwd=REPO_ROOT, check=True)
+    except subprocess.CalledProcessError as exc:
+        raise ArtifactIntegrityError(
+            f"{stage} failed with exit code {exc.returncode}: {format_command(cmd)}"
+        ) from exc
+
+
 def manifest_path(output_dir: Path) -> Path:
     return output_dir / "manifest.json"
 
@@ -235,7 +244,12 @@ def validate_baseline_metrics(metrics: dict[str, Any]) -> None:
 def load_or_materialize_metrics(result_dir: Path) -> dict[str, float]:
     metrics_path = result_dir / "metrics.json"
     if metrics_path.is_file():
-        loaded = json.loads(metrics_path.read_text(encoding="utf-8"))
+        try:
+            loaded = json.loads(metrics_path.read_text(encoding="utf-8"))
+        except json.JSONDecodeError as exc:
+            raise MetricComputationError(
+                f"invalid metrics.json: {metrics_path}"
+            ) from exc
         if not isinstance(loaded, dict):
             raise MetricComputationError("metrics.json must contain an object")
         metrics: dict[str, float] = {}
@@ -326,14 +340,14 @@ def run_baseline(
         if not checkpoint_path.is_file():
             raise ArtifactIntegrityError(f"checkpoint not found: {checkpoint_path}")
     elif train_cmd is not None:
-        subprocess.run(train_cmd, cwd=REPO_ROOT, check=True)
+        run_baseline_subprocess(train_cmd, stage="train.py")
         if not checkpoint_path.is_file():
             raise ArtifactIntegrityError(
                 f"training completed but checkpoint not found: {checkpoint_path}"
             )
 
     checkpoint_sha256 = sha256_file(checkpoint_path)
-    subprocess.run(test_cmd, cwd=REPO_ROOT, check=True)
+    run_baseline_subprocess(test_cmd, stage="test.py")
     metrics = load_or_materialize_metrics(result_dir)
 
     config_hashes = {str(config_path.resolve()): sha256_file(config_path)}
