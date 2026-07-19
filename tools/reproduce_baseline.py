@@ -22,7 +22,6 @@ from rad.errors import (  # noqa: E402
     ArtifactIntegrityError,
     DatasetIntegrityError,
     MetricComputationError,
-    OutputProtectionError,
     RADContractError,
 )
 
@@ -239,7 +238,14 @@ def load_or_materialize_metrics(result_dir: Path) -> dict[str, float]:
         loaded = json.loads(metrics_path.read_text(encoding="utf-8"))
         if not isinstance(loaded, dict):
             raise MetricComputationError("metrics.json must contain an object")
-        metrics = {key: float(loaded[key]) for key in REQUIRED_METRIC_KEYS if key in loaded}
+        metrics: dict[str, float] = {}
+        for key in REQUIRED_METRIC_KEYS:
+            if key not in loaded:
+                continue
+            try:
+                metrics[key] = float(loaded[key])
+            except (TypeError, ValueError) as exc:
+                raise MetricComputationError(f"metric {key} is not numeric") from exc
         validate_baseline_metrics(metrics)
         return metrics
 
@@ -313,10 +319,7 @@ def run_baseline(
         return 0
 
     validate_dataset_paths(cfg)
-    try:
-        refuse_existing_run(cfg.output_dir)
-    except OutputProtectionError:
-        raise
+    refuse_existing_run(cfg.output_dir)
 
     eval_only = train_cmd is None
     if eval_only:

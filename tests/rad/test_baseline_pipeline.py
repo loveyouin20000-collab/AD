@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import io
+import json
 import subprocess
 import sys
 from pathlib import Path
@@ -29,6 +30,7 @@ if str(REPO_ROOT) not in sys.path:
 from tools.reproduce_baseline import (  # noqa: E402
     build_test_command,
     build_train_command,
+    load_or_materialize_metrics,
     run_baseline,
     BaselineConfig,
 )
@@ -261,6 +263,82 @@ def test_dry_run_writes_nothing(
     assert "train.py" in captured
     assert "test.py" in captured
     assert_no_baseline_artifacts(output_dir)
+
+
+def test_existing_metrics_json_preferred_over_log_txt(
+    baseline_config_path: tuple[Path, Path],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    config_path, output_dir = baseline_config_path
+    cfg = _cfg_from_path(config_path)
+    checkpoint_dir = output_dir / "checkpoints"
+    checkpoint_path = checkpoint_dir / f"epoch_{cfg.epoch}.pth"
+    result_dir = output_dir / "results" / f"epoch_{cfg.epoch}"
+    train_cmd = build_train_command(cfg, checkpoint_dir)
+    test_cmd = build_test_command(cfg, checkpoint_path, result_dir)
+    metrics_from_json = {
+        "image_auroc": 0.11,
+        "image_ap": 0.22,
+        "image_f1_max": 0.33,
+        "pixel_auroc": 0.44,
+        "pixel_ap": 0.55,
+        "pixel_f1_max": 0.66,
+        "pixel_aupro": 0.77,
+    }
+    log_metrics = normalized_metrics_from_log_percentages()
+
+    def fake_run(cmd: list[str], **kwargs: object) -> subprocess.CompletedProcess[str]:
+        if cmd == train_cmd:
+            checkpoint_dir.mkdir(parents=True, exist_ok=True)
+            checkpoint_path.write_bytes(b"trained-checkpoint")
+        elif cmd == test_cmd:
+            result_dir.mkdir(parents=True, exist_ok=True)
+            (result_dir / "metrics.json").write_text(
+                json.dumps(metrics_from_json),
+                encoding="utf-8",
+            )
+            write_sample_log_txt(result_dir)
+        else:
+            raise AssertionError(f"unexpected command: {cmd}")
+        return subprocess.CompletedProcess(cmd, 0, stdout="", stderr="")
+
+    monkeypatch.setattr("tools.reproduce_baseline.subprocess.run", fake_run)
+    monkeypatch.setattr("tools.reproduce_baseline.git_sha", lambda: "deadbeef")
+    monkeypatch.setattr(
+        "tools.reproduce_baseline.package_versions",
+        lambda: {"python": "3.11.0", "torch": "2.0.0"},
+    )
+
+    assert run_baseline(config_path) == 0
+    manifest = load_json(output_dir / "manifest.json")
+    assert manifest["metrics"] == metrics_from_json
+    assert manifest["metrics"] != log_metrics
+    assert load_json(result_dir / "metrics.json") == metrics_from_json
+
+
+@pytest.mark.parametrize(
+    "invalid_value",
+    ["not-a-number", None, ["list"]],
+)
+def test_invalid_metrics_json_raises_metric_computation_error(
+    tmp_path: Path,
+    invalid_value: object,
+) -> None:
+    result_dir = tmp_path / "results"
+    result_dir.mkdir()
+    metrics = {
+        "image_auroc": 0.5,
+        "image_ap": 0.5,
+        "image_f1_max": 0.5,
+        "pixel_auroc": invalid_value,
+        "pixel_ap": 0.5,
+        "pixel_f1_max": 0.5,
+        "pixel_aupro": 0.5,
+    }
+    (result_dir / "metrics.json").write_text(json.dumps(metrics), encoding="utf-8")
+
+    with pytest.raises(MetricComputationError, match="pixel_auroc"):
+        load_or_materialize_metrics(result_dir)
 
 
 def test_full_pipeline_integration(
