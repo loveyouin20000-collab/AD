@@ -96,7 +96,11 @@ def assert_policy_unchanged(path: Path | str, name: str, expected_digest: str) -
 
 
 def pixel_average_precision(pred: np.ndarray, mask: np.ndarray) -> float:
-    """Pixel AP for one map/mask pair."""
+    """Deprecated per-map helper retained for legacy tooling.
+
+    Paper tables must use ``rad.evaluation.paper_metrics.compute_paper_metrics``
+    (dataset-level flattening). Do not invent AP=1.0 for empty masks in new code.
+    """
     from sklearn.metrics import average_precision_score
 
     y_true = np.asarray(mask, dtype=np.float64).reshape(-1)
@@ -104,8 +108,7 @@ def pixel_average_precision(pred: np.ndarray, mask: np.ndarray) -> float:
     if y_true.size == 0:
         return float("nan")
     if float(y_true.max()) < 0.5:
-        # No positive pixels: define AP as 1.0 (vacuously perfect localization)
-        return 1.0
+        return 0.0
     return float(average_precision_score(y_true, y_score))
 
 
@@ -114,39 +117,35 @@ def _binarize(pred: np.ndarray, thr: float = 0.5) -> np.ndarray:
 
 
 def boundary_f_score(pred: np.ndarray, mask: np.ndarray, thr: float = 0.5) -> float:
-    """Boundary F-score via Sobel edges on binarized maps."""
-    from scipy import ndimage
+    """Legacy exact-edge boundary F-score.
 
-    p = _binarize(pred, thr)
-    m = np.asarray(mask, dtype=np.float64)
-    sx = np.array([[-1, 0, 1], [-2, 0, 2], [-1, 0, 1]], dtype=np.float64)
-    sy = sx.T
-    pe = np.hypot(ndimage.convolve(p, sx, mode="nearest"), ndimage.convolve(p, sy, mode="nearest"))
-    me = np.hypot(ndimage.convolve(m, sx, mode="nearest"), ndimage.convolve(m, sy, mode="nearest"))
-    pb = (pe > 1e-6).astype(np.float64).reshape(-1)
-    mb = (me > 1e-6).astype(np.float64).reshape(-1)
-    tp = float((pb * mb).sum())
-    fp = float((pb * (1.0 - mb)).sum())
-    fn = float(((1.0 - pb) * mb).sum())
-    prec = tp / (tp + fp + 1e-8)
-    rec = tp / (tp + fn + 1e-8)
-    return float(2 * prec * rec / (prec + rec + 1e-8))
+    Prefer ``tolerance_boundary_f_score`` / ``PaperMetrics`` for paper reporting.
+    """
+    from rad.evaluation.paper_metrics import tolerance_boundary_f_score
+
+    return tolerance_boundary_f_score(
+        np.asarray(pred, dtype=np.float64),
+        np.asarray(mask, dtype=np.float64),
+        threshold=thr,
+        tolerance_ratio=0.0,
+        min_radius=0,
+    )
 
 
 def pro_score_proxy(pred: np.ndarray, mask: np.ndarray) -> float:
-    """Region-overlap proxy: mean IoU over connected components of the GT mask.
+    """Deprecated single-threshold PRO proxy for legacy tooling only.
 
-    Full PRO-AUC is deferred; this reports a single-threshold PRO-like overlap.
+    Paper reporting must use ``PaperMetrics.pixel_aupro`` via ``safe_aupro``.
     """
     from scipy import ndimage
 
     m = (np.asarray(mask, dtype=np.float64) > 0.5).astype(np.uint8)
     p = np.asarray(pred, dtype=np.float64)
     if m.sum() == 0:
-        return 1.0
+        return 0.0
     labeled, n = ndimage.label(m)
     if n == 0:
-        return 1.0
+        return 0.0
     thr = float(np.quantile(p, 0.9))
     pb = (p >= thr).astype(np.float64)
     ious: list[float] = []
@@ -156,15 +155,6 @@ def pro_score_proxy(pred: np.ndarray, mask: np.ndarray) -> float:
         union = float(region.sum())
         ious.append(inter / max(union, 1.0))
     return float(np.mean(ious))
-
-
-def _mean_metric(
-    maps: np.ndarray,
-    masks: np.ndarray,
-    fn,
-) -> float:
-    vals = [fn(maps[i], masks[i]) for i in range(len(maps))]
-    return float(np.mean(vals)) if vals else float("nan")
 
 
 def compute_transfer_metrics(
@@ -177,18 +167,39 @@ def compute_transfer_metrics(
     image_labels: np.ndarray,
     epsilon: float,
     full_depth: int,
+    image_scores_adaptive: np.ndarray | None = None,
+    image_scores_full: np.ndarray | None = None,
 ) -> dict[str, Any]:
+    from rad.evaluation.paper_metrics import compute_paper_metrics
     from rad.evaluation.policy_metrics import (
         expected_depth_and_histogram,
         false_safe_exit_rate,
     )
 
-    ap_a = _mean_metric(adaptive_maps, masks, pixel_average_precision)
-    ap_f = _mean_metric(full_depth_maps, masks, pixel_average_precision)
-    pro_a = _mean_metric(adaptive_maps, masks, pro_score_proxy)
-    pro_f = _mean_metric(full_depth_maps, masks, pro_score_proxy)
-    bf_a = _mean_metric(adaptive_maps, masks, boundary_f_score)
-    bf_f = _mean_metric(full_depth_maps, masks, boundary_f_score)
+    labels = np.asarray(image_labels, dtype=np.float64).reshape(-1)
+    if image_scores_adaptive is None:
+        image_scores_adaptive = np.max(
+            np.asarray(adaptive_maps, dtype=np.float64).reshape(len(adaptive_maps), -1),
+            axis=1,
+        )
+    if image_scores_full is None:
+        image_scores_full = np.max(
+            np.asarray(full_depth_maps, dtype=np.float64).reshape(len(full_depth_maps), -1),
+            axis=1,
+        )
+
+    adaptive = compute_paper_metrics(
+        image_labels=labels,
+        image_scores=image_scores_adaptive,
+        masks=masks,
+        anomaly_maps=adaptive_maps,
+    )
+    full = compute_paper_metrics(
+        image_labels=labels,
+        image_scores=image_scores_full,
+        masks=masks,
+        anomaly_maps=full_depth_maps,
+    )
     expected, hist = expected_depth_and_histogram(selected_depths)
     fse = false_safe_exit_rate(
         selected_depths=selected_depths,
@@ -198,19 +209,23 @@ def compute_transfer_metrics(
     )
     return {
         "n": int(len(selected_depths)),
-        "pixel_ap_adaptive": ap_a,
-        "pixel_ap_full": ap_f,
-        "pixel_ap_drop": float(ap_f - ap_a),
-        "pro_adaptive": pro_a,
-        "pro_full": pro_f,
-        "pro_drop": float(pro_f - pro_a),
-        "boundary_f_score_adaptive": bf_a,
-        "boundary_f_score_full": bf_f,
-        "boundary_f_score_drop": float(bf_f - bf_a),
+        "adaptive": adaptive.as_dict(),
+        "full": full.as_dict(),
+        "pixel_ap_adaptive": adaptive.pixel_ap,
+        "pixel_ap_full": full.pixel_ap,
+        "pixel_ap_drop": float(full.pixel_ap - adaptive.pixel_ap),
+        "pixel_aupro_adaptive": adaptive.pixel_aupro,
+        "pixel_aupro_full": full.pixel_aupro,
+        "pixel_aupro_drop": float(full.pixel_aupro - adaptive.pixel_aupro),
+        "boundary_f_score_adaptive": adaptive.boundary_f_score,
+        "boundary_f_score_full": full.boundary_f_score,
+        "boundary_f_score_drop": float(
+            (full.boundary_f_score or 0.0) - (adaptive.boundary_f_score or 0.0)
+        ),
         "false_safe_exit_rate": fse,
         "expected_depth": expected,
         "exit_histogram": hist,
-        "anomalous_fraction": float(np.mean(np.asarray(image_labels) > 0.5)),
+        "anomalous_fraction": float(np.mean(labels > 0.5)),
     }
 
 
