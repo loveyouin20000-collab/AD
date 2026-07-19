@@ -1,38 +1,46 @@
 import subprocess
+import sys
+from pathlib import Path
+
+from tests.rad.contracts.baseline import (
+    assert_checkpoint_dry_run_skips_train,
+    assert_dry_run_resolves_train_and_test,
+)
+
+REPO_ROOT = Path(__file__).resolve().parents[2]
+PYTHON = sys.executable
+
+
+def _run_baseline_cli(args: list[str]) -> subprocess.CompletedProcess[str]:
+    return subprocess.run(
+        [PYTHON, "tools/reproduce_baseline.py", *args],
+        cwd=str(REPO_ROOT),
+        check=True,
+        capture_output=True,
+        text=True,
+    )
 
 
 def test_baseline_dry_run_resolves_paths_and_command():
-    result = subprocess.run(
+    result = _run_baseline_cli(
         [
-            "python",
-            "tools/reproduce_baseline.py",
             "--config",
             "configs/rad/baseline_mvtec_to_visa.yaml",
             "--dry-run",
-        ],
-        check=True,
-        capture_output=True,
-        text=True,
+        ]
     )
-    assert "train.py" in result.stdout
-    assert "features_list 6 12 18 24" in result.stdout
+    assert_dry_run_resolves_train_and_test(result.stdout)
 
 
 def test_baseline_checkpoint_dry_run_skips_train():
-    result = subprocess.run(
+    checkpoint = "weight/train_on_mvtec/CLIP.pth"
+    result = _run_baseline_cli(
         [
-            "python",
-            "tools/reproduce_baseline.py",
             "--config",
             "configs/rad/baseline_mvtec_to_visa.yaml",
             "--checkpoint",
-            "weight/train_on_mvtec/CLIP.pth",
+            checkpoint,
             "--dry-run",
-        ],
-        check=True,
-        capture_output=True,
-        text=True,
+        ]
     )
-    assert "SKIPPED (using --checkpoint)" in result.stdout
-    assert "weight/train_on_mvtec/CLIP.pth" in result.stdout
-    assert "test.py" in result.stdout
+    assert_checkpoint_dry_run_skips_train(result.stdout, checkpoint)
