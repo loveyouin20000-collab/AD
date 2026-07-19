@@ -25,6 +25,7 @@ adaptive:
   full_depth: 24
   temperature: 0.001
 transfer:
+  target_dataset: visa
   target_data_path: /root/autodl-tmp/data/Visa
   policy_profile: balanced
   epsilon_gain: 0.05

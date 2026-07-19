@@ -25,5 +25,8 @@ adaptive:
   full_depth: 24
   temperature: 0.001
   output_dir: artifacts/eval/adaptive
+  dataset_output_dir: artifacts/eval/adaptive_dataset
+  smoke_output_dir: artifacts/eval/smoke_adaptive
   warmup: 50
   limit: null
+  compute_full_depth_reference: false
