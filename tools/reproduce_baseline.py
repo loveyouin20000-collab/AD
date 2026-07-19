@@ -235,13 +235,20 @@ def validate_baseline_metrics(metrics: dict[str, Any]) -> None:
         if key not in metrics:
             raise MetricComputationError(f"missing required metric: {key}")
         value = metrics[key]
-        if not isinstance(value, (int, float)):
+        if not isinstance(value, int | float):
             raise MetricComputationError(f"metric {key} is not numeric")
         if not math.isfinite(float(value)):
             raise MetricComputationError(f"nonfinite metric: {key}")
 
 
-def load_or_materialize_metrics(result_dir: Path) -> dict[str, float]:
+AUPRO_PROVENANCE_KEYS = (
+    "pixel_aupro_aggregation",
+    "pixel_aupro_max_fpr",
+    "pixel_aupro_steps",
+)
+
+
+def load_or_materialize_metrics(result_dir: Path) -> dict[str, Any]:
     metrics_path = result_dir / "metrics.json"
     if metrics_path.is_file():
         try:
@@ -252,7 +259,7 @@ def load_or_materialize_metrics(result_dir: Path) -> dict[str, float]:
             ) from exc
         if not isinstance(loaded, dict):
             raise MetricComputationError("metrics.json must contain an object")
-        metrics: dict[str, float] = {}
+        metrics: dict[str, Any] = {}
         for key in REQUIRED_METRIC_KEYS:
             if key not in loaded:
                 continue
@@ -260,6 +267,11 @@ def load_or_materialize_metrics(result_dir: Path) -> dict[str, float]:
                 metrics[key] = float(loaded[key])
             except (TypeError, ValueError) as exc:
                 raise MetricComputationError(f"metric {key} is not numeric") from exc
+        for key in AUPRO_PROVENANCE_KEYS:
+            if key in loaded:
+                metrics[key] = loaded[key]
+        if "per_category" in loaded:
+            metrics["per_category"] = loaded["per_category"]
         validate_baseline_metrics(metrics)
         return metrics
 
