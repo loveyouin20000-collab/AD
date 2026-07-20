@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import io
 import json
 import subprocess
 import sys
@@ -29,11 +28,11 @@ if str(REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(REPO_ROOT))
 
 from tools.reproduce_baseline import (  # noqa: E402
+    BaselineConfig,
     build_test_command,
     build_train_command,
     load_or_materialize_metrics,
     run_baseline,
-    BaselineConfig,
 )
 
 

@@ -143,7 +143,7 @@ def assert_required_metrics_finite(metrics: dict[str, Any]) -> None:
     for key in REQUIRED_BASELINE_METRIC_KEYS:
         assert key in metrics, f"missing metric key: {key}"
         value = metrics[key]
-        assert isinstance(value, (int, float)), f"{key} is not numeric"
+        assert isinstance(value, int | float), f"{key} is not numeric"
         assert math.isfinite(float(value)), f"{key} is not finite"
 
 
