@@ -1053,3 +1053,27 @@ python tools/export_paper_tables.py --results artifacts/results --output artifac
 6. **Latency gate:** measured batch-1 latency must improve; FLOPs or expected depth alone are insufficient.
 7. **Zero-shot gate:** all thresholds remain source-calibrated and target-domain exit distributions are reported.
 8. **Novelty gate:** if Shapley supervision and residual-gain prediction provide no measurable benefit, simplify the paper rather than retaining decorative modules.
+
+---
+
+## P0 Increment Status (Cursor execution track)
+
+| Increment | Description | Status |
+|---:|---|---|
+| 1 | Environment and repository guardrails | complete |
+| 2 | Official VisualAD baseline reproduction | complete |
+| 3 | Dataset adapters (MVTec, VisA) and preprocess contract | complete |
+| 4 | Authoritative paper metrics and dataset evaluator | complete |
+| 5 | AUPRO reporting fix and baseline acceptance records | complete |
+| 6 | Fail-closed fusion training gates | complete |
+| 7 | Selector-signal masking (post-normalization, pre-LSE) | complete |
+| 8 | Experiment matrix fair baselines and selector ablations | complete |
+| 9 | Fusion fail-closed CI compatibility | complete |
+| 10 | CI compatibility and artifact hygiene | complete |
+| 11 | Legacy test contract synchronization | complete (PR #31, `bfe8409`) |
+| 12 | P0 verification, traceability, research-validity audit | complete (pending PR merge) |
+
+Increment 12 deliverables: `docs/traceability.md` (P0 matrix),
+`docs/p0-research-validity-audit.md`, `docs/p0_manifest.json`.
+Status: `p0_verified_cpu` — not `paper_ready` or `experiment_complete`.
+**Phase B not started.**
