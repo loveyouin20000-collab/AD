@@ -1,0 +1,76 @@
+{
+  "schema_version": 1,
+  "transfer": "visa_to_mvtec",
+  "seed": 111,
+  "protocol": "scripts/CLIP.sh VisA\u2192MVTec (epoch=1, batch_size=8, seed=111, ViT-L/14@336px, image_size=518, features_list=[6,12,18,24])",
+  "git_sha": "af0621741cf18af33ceac7fa106196710d190100",
+  "config_path": "/root/autodl-tmp/VisualAD/configs/rad/baseline_visa_to_mvtec_official.yaml",
+  "output_dir": "runs/baseline/visa_to_mvtec/seed_111_official_bs8",
+  "checkpoint": {
+    "path": "/root/autodl-tmp/VisualAD/runs/baseline/visa_to_mvtec/seed_111_official_bs8/checkpoints/epoch_1.pth",
+    "sha256": "a4dd80dd99b0a47514ce8e4f85653de952cceb0cc2938e63069f30bd7f8b77d1"
+  },
+  "metrics": {
+    "image_auroc": 0.921440945906127,
+    "image_ap": 0.9669740828653676,
+    "image_f1_max": 0.9291920395293031,
+    "pixel_auroc": 0.9081069329399813,
+    "pixel_ap": 0.4129084588762945,
+    "pixel_f1_max": 0.436058803336774,
+    "pixel_aupro": 0.8764823107188563
+  },
+  "metrics_percent": {
+    "image_auroc": 92.1441,
+    "image_ap": 96.6974,
+    "image_f1_max": 92.9192,
+    "pixel_auroc": 90.8107,
+    "pixel_ap": 41.2908,
+    "pixel_f1_max": 43.6059,
+    "pixel_aupro": 87.6482
+  },
+  "aupro": {
+    "value": 0.8764823107188563,
+    "aggregation": "category_macro",
+    "max_fpr": 0.3,
+    "steps": 200
+  },
+  "reference_metrics_percent": {
+    "image_auroc": 92.2,
+    "image_f1_max": 93.2,
+    "image_ap": 96.7,
+    "pixel_auroc": 90.8,
+    "pixel_f1_max": 43.9,
+    "pixel_ap": 41.2,
+    "pixel_aupro": 87.5
+  },
+  "absolute_diff_pp": {
+    "image_auroc": -0.0559,
+    "image_ap": -0.0026,
+    "image_f1_max": -0.2808,
+    "pixel_auroc": 0.0107,
+    "pixel_ap": 0.0908,
+    "pixel_f1_max": -0.2941,
+    "pixel_aupro": 0.1482
+  },
+  "tolerance_checks": {
+    "image_auroc": true,
+    "pixel_auroc": true,
+    "pixel_ap": true,
+    "pixel_aupro": true
+  },
+  "completion_checks": {
+    "exitcode_0": true,
+    "manifest_completed": true,
+    "epoch_1_exists": true,
+    "checkpoint_hash_matches": true,
+    "train_log_exists": true,
+    "eval_log_exists": true,
+    "metrics_json_exists": true,
+    "all_metrics_finite": true,
+    "pixel_aupro_nonzero": true,
+    "aupro_provenance": true,
+    "no_target_tuning": true,
+    "train_visa_test_mvtec": true
+  },
+  "status": "accepted"
+}
