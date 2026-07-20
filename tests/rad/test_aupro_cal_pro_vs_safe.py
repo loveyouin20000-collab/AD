@@ -5,7 +5,10 @@ from __future__ import annotations
 import numpy as np
 
 from rad.evaluation.paper_metrics import safe_aupro
-from utils.metrics import cal_pro_score
+from tests.rad.contracts.utils_metrics import load_metrics_module
+
+_metrics = load_metrics_module()
+cal_pro_score = _metrics.cal_pro_score
 
 
 def _nondegenerate_fixture() -> tuple[np.ndarray, np.ndarray]:
