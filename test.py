@@ -3,6 +3,7 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 import argparse
+import json
 from dataset import Dataset
 from utils.logger import get_logger
 from tqdm import tqdm
@@ -160,7 +161,13 @@ def test(args):
 
     # Compute metrics
     fused_scores, normalized_anomaly_maps = get_classification_from_segmentation(all_anomaly_maps, all_cls_names, results)
-    compute_metrics(results, obj_list, logger)
+    metrics_export = compute_metrics(results, obj_list, logger)
+    if metrics_export is not None:
+        metrics_path = os.path.join(args.save_path, "metrics.json")
+        with open(metrics_path, "w", encoding="utf-8") as handle:
+            json.dump(metrics_export, handle, indent=2, sort_keys=True)
+            handle.write("\n")
+        logger.info("Wrote machine-readable metrics to %s", metrics_path)
 
     # Analysis (optional)
     if args.enable_analysis:

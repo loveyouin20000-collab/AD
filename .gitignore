@@ -11,12 +11,20 @@ build/
 
 # Experiments and checkpoints
 experiments/
+runs/
 checkpoints/
 !rad/checkpoints/
 !rad/checkpoints/**
+rad/checkpoints/**/__pycache__/
 *.pth
 *.pt
 *.ckpt
+
+# Generated diagnostic / experiment arrays (keep fixtures trackable elsewhere)
+runs/**/*.npz
+artifacts/**/*.npz
+**/maps_masks*.npz
+**/aupro_*.npz
 
 # Regenerable teacher-output cache shards/indexes
 artifacts/cache/
@@ -57,3 +65,7 @@ logs/
 .env
 venv/
 env/
+
+# Local git worktrees
+.worktrees/
+

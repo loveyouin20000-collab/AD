@@ -3,6 +3,7 @@ from __future__ import annotations
 import argparse
 import hashlib
 import json
+import math
 import platform
 import subprocess
 import sys
@@ -13,6 +14,36 @@ from typing import Any
 import yaml  # type: ignore[import-untyped]
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
+if str(REPO_ROOT) not in sys.path:
+    sys.path.insert(0, str(REPO_ROOT))
+
+from rad.artifacts import atomic_write_json, refuse_existing_run  # noqa: E402
+from rad.errors import (  # noqa: E402
+    ArtifactIntegrityError,
+    DatasetIntegrityError,
+    MetricComputationError,
+    RADContractError,
+)
+
+REQUIRED_METRIC_KEYS = (
+    "image_auroc",
+    "image_ap",
+    "image_f1_max",
+    "pixel_auroc",
+    "pixel_ap",
+    "pixel_f1_max",
+    "pixel_aupro",
+)
+
+LOG_COLUMN_TO_METRIC_KEY = {
+    "Pixel-AUROC": "pixel_auroc",
+    "Pixel-F1": "pixel_f1_max",
+    "Pixel-AP": "pixel_ap",
+    "Pixel-AUPRO": "pixel_aupro",
+    "Sample-AUROC": "image_auroc",
+    "Sample-F1": "image_f1_max",
+    "Sample-AP": "image_ap",
+}
 
 
 @dataclass(frozen=True)
@@ -142,18 +173,17 @@ def format_command(cmd: list[str]) -> str:
     return " ".join(cmd)
 
 
+def run_baseline_subprocess(cmd: list[str], *, stage: str) -> None:
+    try:
+        subprocess.run(cmd, cwd=REPO_ROOT, check=True)
+    except subprocess.CalledProcessError as exc:
+        raise ArtifactIntegrityError(
+            f"{stage} failed with exit code {exc.returncode}: {format_command(cmd)}"
+        ) from exc
+
+
 def manifest_path(output_dir: Path) -> Path:
     return output_dir / "manifest.json"
-
-
-def load_completed_manifest(output_dir: Path) -> dict[str, Any] | None:
-    path = manifest_path(output_dir)
-    if not path.exists():
-        return None
-    data = json.loads(path.read_text())
-    if data.get("status") == "completed":
-        return data
-    return None
 
 
 def validate_dataset_paths(cfg: BaselineConfig) -> None:
@@ -164,13 +194,94 @@ def validate_dataset_paths(cfg: BaselineConfig) -> None:
     ]
     if missing:
         joined = ", ".join(str(p) for p in missing)
-        raise FileNotFoundError(f"dataset path(s) not found: {joined}")
+        raise DatasetIntegrityError(f"dataset path(s) not found: {joined}")
 
 
-def write_manifest(output_dir: Path, payload: dict[str, Any]) -> None:
-    output_dir.mkdir(parents=True, exist_ok=True)
-    path = manifest_path(output_dir)
-    path.write_text(json.dumps(payload, indent=2, sort_keys=True) + "\n")
+def _split_pipe_row(line: str) -> list[str]:
+    return [cell.strip() for cell in line.strip().strip("|").split("|")]
+
+
+def parse_visualad_log_metrics(log_path: Path) -> dict[str, float]:
+    header_cells: list[str] | None = None
+    mean_cells: list[str] | None = None
+    for line in log_path.read_text(encoding="utf-8").splitlines():
+        stripped = line.strip()
+        if "Pixel-AUROC" in stripped and "Sample-AUROC" in stripped:
+            header_cells = _split_pipe_row(stripped)
+        elif stripped.startswith("| Mean") or "| Mean" in stripped:
+            mean_cells = _split_pipe_row(stripped)
+    if header_cells is None or mean_cells is None:
+        raise MetricComputationError("Mean metrics row not found in log.txt")
+    if len(header_cells) != len(mean_cells):
+        raise MetricComputationError("log.txt header/mean column mismatch")
+
+    metrics: dict[str, float] = {}
+    for header, value_text in zip(header_cells[1:], mean_cells[1:], strict=True):
+        metric_key = LOG_COLUMN_TO_METRIC_KEY.get(header)
+        if metric_key is None:
+            continue
+        try:
+            value = float(value_text)
+        except ValueError as exc:
+            raise MetricComputationError(
+                f"invalid metric value for {header}: {value_text!r}"
+            ) from exc
+        metrics[metric_key] = value / 100.0
+    return metrics
+
+
+def validate_baseline_metrics(metrics: dict[str, Any]) -> None:
+    for key in REQUIRED_METRIC_KEYS:
+        if key not in metrics:
+            raise MetricComputationError(f"missing required metric: {key}")
+        value = metrics[key]
+        if not isinstance(value, int | float):
+            raise MetricComputationError(f"metric {key} is not numeric")
+        if not math.isfinite(float(value)):
+            raise MetricComputationError(f"nonfinite metric: {key}")
+
+
+AUPRO_PROVENANCE_KEYS = (
+    "pixel_aupro_aggregation",
+    "pixel_aupro_max_fpr",
+    "pixel_aupro_steps",
+)
+
+
+def load_or_materialize_metrics(result_dir: Path) -> dict[str, Any]:
+    metrics_path = result_dir / "metrics.json"
+    if metrics_path.is_file():
+        try:
+            loaded = json.loads(metrics_path.read_text(encoding="utf-8"))
+        except json.JSONDecodeError as exc:
+            raise MetricComputationError(
+                f"invalid metrics.json: {metrics_path}"
+            ) from exc
+        if not isinstance(loaded, dict):
+            raise MetricComputationError("metrics.json must contain an object")
+        metrics: dict[str, Any] = {}
+        for key in REQUIRED_METRIC_KEYS:
+            if key not in loaded:
+                continue
+            try:
+                metrics[key] = float(loaded[key])
+            except (TypeError, ValueError) as exc:
+                raise MetricComputationError(f"metric {key} is not numeric") from exc
+        for key in AUPRO_PROVENANCE_KEYS:
+            if key in loaded:
+                metrics[key] = loaded[key]
+        if "per_category" in loaded:
+            metrics["per_category"] = loaded["per_category"]
+        validate_baseline_metrics(metrics)
+        return metrics
+
+    log_path = result_dir / "log.txt"
+    if not log_path.is_file():
+        raise MetricComputationError("metrics.json and log.txt are both missing")
+    metrics = parse_visualad_log_metrics(log_path)
+    validate_baseline_metrics(metrics)
+    atomic_write_json(metrics_path, metrics)
+    return metrics
 
 
 def run_baseline(
@@ -234,38 +345,47 @@ def run_baseline(
         return 0
 
     validate_dataset_paths(cfg)
-    if not checkpoint_path.exists():
-        raise FileNotFoundError(f"checkpoint not found: {checkpoint_path}")
-    existing = load_completed_manifest(cfg.output_dir)
-    if existing is not None:
-        raise FileExistsError(
-            f"completed manifest already exists: {manifest_path(cfg.output_dir)}"
-        )
+    refuse_existing_run(cfg.output_dir)
 
-    config_hashes = {str(config_path): sha256_file(config_path)}
+    eval_only = train_cmd is None
+    if eval_only:
+        if not checkpoint_path.is_file():
+            raise ArtifactIntegrityError(f"checkpoint not found: {checkpoint_path}")
+    elif train_cmd is not None:
+        run_baseline_subprocess(train_cmd, stage="train.py")
+        if not checkpoint_path.is_file():
+            raise ArtifactIntegrityError(
+                f"training completed but checkpoint not found: {checkpoint_path}"
+            )
+
+    checkpoint_sha256 = sha256_file(checkpoint_path)
+    run_baseline_subprocess(test_cmd, stage="test.py")
+    metrics = load_or_materialize_metrics(result_dir)
+
+    config_hashes = {str(config_path.resolve()): sha256_file(config_path)}
     provenance: dict[str, Any] = {
-        "status": "running",
+        "schema_version": 1,
+        "status": "completed",
         "commands": {
             "train": train_cmd,
             "test": test_cmd,
         },
         "git_sha": git_sha(),
         "versions": package_versions(),
+        "config_path": str(config_path.resolve()),
         "config_hashes": config_hashes,
-        "checkpoint_path": str(checkpoint_path),
-        "checkpoint_sha256": sha256_file(checkpoint_path),
-        "metrics_path": str(result_dir),
+        "checkpoint_path": str(checkpoint_path.resolve()),
+        "checkpoint_sha256": checkpoint_sha256,
+        "metrics_path": str((result_dir / "metrics.json").resolve()),
         "seed": cfg.seed,
-        "eval_only": train_cmd is None,
+        "eval_only": eval_only,
+        "dataset": cfg.test.dataset,
+        "backbone": cfg.backbone,
+        "candidate_layers": list(cfg.features_list),
+        "metrics": metrics,
     }
-    write_manifest(cfg.output_dir, provenance)
-
-    if train_cmd is not None:
-        subprocess.run(train_cmd, cwd=REPO_ROOT, check=True)
-    subprocess.run(test_cmd, cwd=REPO_ROOT, check=True)
-
-    provenance["status"] = "completed"
-    write_manifest(cfg.output_dir, provenance)
+    cfg.output_dir.mkdir(parents=True, exist_ok=True)
+    atomic_write_json(manifest_path(cfg.output_dir), provenance)
     print(f"manifest written: {manifest_path(cfg.output_dir)}")
     return 0
 
@@ -296,13 +416,16 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
 
 def main(argv: list[str] | None = None) -> int:
     args = parse_args(argv)
-    return run_baseline(
-        Path(args.config),
-        seed=args.seed,
-        output_dir=args.output_dir,
-        dry_run=args.dry_run,
-        checkpoint=args.checkpoint,
-    )
+    try:
+        return run_baseline(
+            Path(args.config),
+            seed=args.seed,
+            output_dir=args.output_dir,
+            dry_run=args.dry_run,
+            checkpoint=args.checkpoint,
+        )
+    except RADContractError as exc:
+        raise SystemExit(f"RAD contract error: {exc}") from exc
 
 
 if __name__ == "__main__":

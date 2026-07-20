@@ -1,0 +1,38 @@
+{
+  "schema_version": 1,
+  "transfer": "mvtec_to_visa",
+  "seed": 111,
+  "protocol": "scripts/CLIP.sh MVTec\u2192VisA (epoch=2, batch_size=8)",
+  "checkpoint": {
+    "path": "runs/baseline/mvtec_to_visa/seed_111_official_bs8/checkpoints/epoch_2.pth",
+    "sha256": "97bd461163efb96e36cddb1c3adf677e4c4fc2daabb2521021689f30e799b4f4"
+  },
+  "frozen_original_run": {
+    "output_dir": "runs/baseline/mvtec_to_visa/seed_111_official_bs8",
+    "manifest": "runs/baseline/mvtec_to_visa/seed_111_official_bs8/manifest.json",
+    "metrics_json": "runs/baseline/mvtec_to_visa/seed_111_official_bs8/results/epoch_2/metrics.json",
+    "invalid_placeholder_pixel_aupro": 0.0,
+    "note": "AUPRO was hardcoded to 0 in utils/metrics.compute_metrics; other metrics remain the official eval reference."
+  },
+  "corrected_evaluation": {
+    "output_dir": "runs/baseline/mvtec_to_visa/seed_111_official_bs8_metric_fixed_v1",
+    "manifest": "runs/baseline/mvtec_to_visa/seed_111_official_bs8_metric_fixed_v1/manifest.json",
+    "metrics_json": "runs/baseline/mvtec_to_visa/seed_111_official_bs8_metric_fixed_v1/results/epoch_2/metrics.json",
+    "eval_only": true,
+    "train_invoked": false
+  },
+  "accepted_pixel_aupro": {
+    "value": 0.9087127714084767,
+    "aggregation": "category_macro",
+    "max_fpr": 0.3,
+    "steps": 200,
+    "reference": 0.91,
+    "abs_diff_vs_reference": 0.001287228591523304
+  },
+  "diagnostic_recompute_crosscheck": {
+    "path": "runs/baseline/mvtec_to_visa/seed_111_official_bs8_aupro_recompute_v1/aupro_diagnostics.json",
+    "macro_mean_cal_pro_score": 0.9087125007425049,
+    "note": "Diagnostic script no longer required for normal reporting after the production metrics fix."
+  },
+  "status": "accepted_with_corrected_aupro_export"
+}

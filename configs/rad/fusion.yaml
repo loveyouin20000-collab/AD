@@ -19,6 +19,11 @@ fusion:
   calibration_cache: artifacts/cache/mvtec_teacher/calibration
   shapley_targets: artifacts/targets/shapley/mvtec_train.pt
   descriptor_stats: artifacts/stats/mvtec_seed111.json
+  allow_missing_shapley: false
+  require_descriptor_stats: true
+  fail_if_no_gate_passes: true
+  # Unit-interval metric drop (0.2 pp == 0.002). Zero means no regression allowed.
+  max_pixel_ap_drop: 0.0
   train_depths: [12, 18, 24]
   lambda_loc:
     12: 0.5
