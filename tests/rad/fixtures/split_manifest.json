@@ -1,0 +1,23 @@
+{
+  "artifact_kind": "test_fixture",
+  "eligible_for_evaluation": false,
+  "schema_version": 1,
+  "rows": [
+    {
+      "sample_id": "bottle/train/good/000.png",
+      "image_path": "bottle/train/good/000.png",
+      "mask_path": "",
+      "category": "bottle",
+      "label": 0,
+      "split": "train"
+    },
+    {
+      "sample_id": "bottle/train/good/001.png",
+      "image_path": "bottle/train/good/001.png",
+      "mask_path": "",
+      "category": "bottle",
+      "label": 0,
+      "split": "calibration"
+    }
+  ]
+}

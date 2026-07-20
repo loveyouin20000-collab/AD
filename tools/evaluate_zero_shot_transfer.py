@@ -18,7 +18,12 @@ if str(REPO_ROOT) not in sys.path:
 from rad.artifacts import atomic_write_json, refuse_existing_run  # noqa: E402
 from rad.config import ExperimentConfig  # noqa: E402
 from rad.data.adapters import build_preprocess, get_adapter  # noqa: E402
-from rad.errors import OutputProtectionError, RADContractError  # noqa: E402
+from rad.errors import (  # noqa: E402
+    ARTIFACT_INTEGRITY_EXIT_CODE,
+    ArtifactIntegrityError,
+    OutputProtectionError,
+    RADContractError,
+)
 from rad.evaluation.dataset_evaluator import evaluate_dataset  # noqa: E402
 from rad.evaluation.export import (  # noqa: E402
     TransferSamplePrediction,
@@ -27,6 +32,7 @@ from rad.evaluation.export import (  # noqa: E402
 from rad.evaluation.paper_metrics import compute_paper_metrics  # noqa: E402
 from rad.evaluation.zero_shot import (  # noqa: E402
     TargetAccessError,
+    assert_policy_eligible_for_evaluation,
     assert_policy_unchanged,
     boundary_complexity,
     forbid_target_access_during_calibration,
@@ -47,6 +53,12 @@ def parse_args() -> argparse.Namespace:
     p.add_argument("--device", type=str, default=None)
     p.add_argument("--target-dataset", type=str, default=None)
     p.add_argument("--target-data-path", type=Path, default=None)
+    p.add_argument(
+        "--calibration-policy",
+        type=Path,
+        default=None,
+        help="Override frozen source-calibrated policy profiles JSON",
+    )
     p.add_argument("--dry-run", action="store_true")
     return p.parse_args()
 
@@ -77,6 +89,20 @@ def _resolve(path: Path | str) -> Path:
     return p if p.is_absolute() else REPO_ROOT / p
 
 
+def _resolve_calibration_policy_path(
+    args: argparse.Namespace,
+    transfer: dict[str, Any],
+    adaptive: dict[str, Any],
+) -> Path:
+    """Precedence: --calibration-policy → configured policy path → hard failure."""
+    if args.calibration_policy is not None:
+        return _resolve(args.calibration_policy)
+    configured = transfer.get("calibration_policy") or adaptive.get("policy_profiles")
+    if not configured:
+        raise ArtifactIntegrityError("calibration policy path not configured")
+    return _resolve(configured)
+
+
 def main() -> int:
     args = parse_args()
     raw = yaml.safe_load(Path(args.config).read_text())
@@ -100,9 +126,7 @@ def main() -> int:
     epsilon = float(transfer.get("epsilon_gain", 0.05))
     full_depth = int(adaptive.get("full_depth", cfg.backbone.depth))
 
-    policy_path = _resolve(
-        transfer.get("calibration_policy", adaptive.get("policy_profiles"))
-    )
+    policy_path = _resolve_calibration_policy_path(args, transfer, adaptive)
     target_dataset = str(
         args.target_dataset
         or transfer.get("target_dataset")
@@ -145,6 +169,8 @@ def main() -> int:
         print(f"policy_digest: {policy_digest}")
         print("dry-run ok")
         return 0
+
+    assert_policy_eligible_for_evaluation(policy_path)
 
     try:
         refuse_existing_run(output_dir)
@@ -240,5 +266,8 @@ if __name__ == "__main__":
         raise SystemExit(main())
     except TargetAccessError as exc:
         raise SystemExit(f"target access violation: {exc}") from exc
+    except ArtifactIntegrityError as exc:
+        print(f"artifact integrity error: {exc}", file=sys.stderr)
+        raise SystemExit(ARTIFACT_INTEGRITY_EXIT_CODE) from exc
     except RADContractError as exc:
         raise SystemExit(f"RAD contract error: {exc}") from exc

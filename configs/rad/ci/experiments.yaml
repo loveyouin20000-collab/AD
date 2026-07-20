@@ -1,0 +1,50 @@
+schema_version: 1
+description: CPU CI experiment-matrix dry-run config (fixture-backed, no artifacts/).
+defaults:
+  seed: 111
+  image_size: 518
+  backbone:
+    depth: 24
+    candidate_layers: [6, 12, 18, 24]
+  data:
+    dataset: mvtec
+    data_path: /tmp/rad-ci-mvtec-placeholder
+    split_manifest: tests/rad/fixtures/split_manifest.json
+  teacher:
+    checkpoint_path: weight/train_on_mvtec/CLIP.pth
+    backbone: "ViT-L/14@336px"
+  zero_shot:
+    source_dataset: mvtec
+    target_datasets: [visa]
+    target_tuning: false
+  checkpoints:
+    dlcm: /tmp/rad-ci-dlcm-placeholder.pt
+    lse: /tmp/rad-ci-lse-placeholder.pt
+    policy_profiles: tests/rad/fixtures/policy_profiles.json
+  adaptive:
+    descriptor_stats: tests/rad/fixtures/descriptor_stats.json
+matrix:
+- id: ci_matrix_smoke
+  group: method
+  description: CPU CI matrix dry-run smoke row
+  immutable: true
+  seed: 111
+  device: '{device}'
+  command: python tools/evaluate_adaptive_dataset.py --config configs/rad/adaptive.yaml --seed {seed} --device {device} --output-dir {output_dir} --dry-run
+  config:
+    seed: 111
+    backbone:
+      depth: 24
+      candidate_layers: [6, 12, 18, 24]
+    zero_shot:
+      source_dataset: mvtec
+      target_datasets: [visa]
+      target_tuning: false
+    method:
+      name: full_balanced
+      exit: adaptive
+      fusion: dynamic
+    output_dir: /tmp/rad-ci-matrix-row
+  estimated_gpu_hours: 0.01
+  output_dir: /tmp/rad-ci-matrix-row
+  tags: [ci]

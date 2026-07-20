@@ -39,7 +39,7 @@ def test_compute_metrics_calls_cal_pro_score_not_placeholder() -> None:
     import inspect
     import re
 
-    from utils import metrics as metrics_mod
+    metrics_mod = load_metrics_module()
 
     source = inspect.getsource(metrics_mod.compute_metrics)
     assert "cal_pro_score(" in source

@@ -145,7 +145,7 @@ def test_compute_metrics_does_not_replace_aupro_with_default_zero() -> None:
     import inspect
     import re
 
-    from utils import metrics as metrics_mod
+    metrics_mod = load_metrics_module()
 
     source = inspect.getsource(metrics_mod.compute_metrics)
     assert "cal_pro_score(" in source

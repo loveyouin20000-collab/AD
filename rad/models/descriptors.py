@@ -364,6 +364,9 @@ class DescriptorNormalizer:
 
     @classmethod
     def load(cls, path: Path | str) -> DescriptorNormalizer:
+        from rad.artifacts import assert_json_artifact_eligible_for_evaluation
+
+        assert_json_artifact_eligible_for_evaluation(path, kind="descriptor statistics")
         payload: dict[str, Any] = json.loads(Path(path).read_text())
         obj = cls(clamp=tuple(payload["clamp"]), eps=float(payload.get("eps", 1e-6)))
         obj.median = torch.tensor(payload["median"], dtype=torch.float32)

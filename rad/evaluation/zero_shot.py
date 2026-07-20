@@ -10,6 +10,8 @@ from typing import Any
 
 import numpy as np
 
+from rad.artifacts import assert_json_artifact_eligible_for_evaluation
+from rad.errors import ArtifactIntegrityError
 from rad.models.policy import PolicyProfile
 
 
@@ -68,7 +70,10 @@ def load_frozen_policy_profile(
     path: Path | str,
     name: str,
 ) -> tuple[PolicyProfile, str]:
-    raw = json.loads(Path(path).read_text(encoding="utf-8"))
+    policy_path = Path(path)
+    if not policy_path.is_file():
+        raise ArtifactIntegrityError(f"missing calibration policy: {policy_path}")
+    raw = json.loads(policy_path.read_text(encoding="utf-8"))
     payload = json.dumps(raw["profiles"][name], sort_keys=True)
     digest = hashlib.sha256(payload.encode()).hexdigest()
     p = raw["profiles"][name]
@@ -93,6 +98,11 @@ def assert_policy_unchanged(path: Path | str, name: str, expected_digest: str) -
             f"source-calibrated policy {name!r} changed on disk "
             f"(expected {expected_digest[:12]}..., got {digest[:12]}...)"
         )
+
+
+def assert_policy_eligible_for_evaluation(path: Path | str) -> None:
+    """Reject test fixtures and diagnostics from real zero-shot evaluation."""
+    assert_json_artifact_eligible_for_evaluation(path, kind="calibration policy")
 
 
 def pixel_average_precision(pred: np.ndarray, mask: np.ndarray) -> float:

@@ -51,15 +51,16 @@ jobs:
       - name: Config / CLI dry-runs
         run: |
           python tools/export_paper_tables.py \
-            --results artifacts/results \
-            --output-dir artifacts/paper_ci_dry_run \
+            --results /tmp/rad-ci-paper-results \
+            --output-dir /tmp/rad-ci-paper-export \
+            --config configs/rad/ci/experiments.yaml \
             --seed 111 \
             --dry-run
           python tools/run_experiment_matrix.py \
-            --config configs/rad/experiments.yaml \
+            --config configs/rad/ci/experiments.yaml \
             --dry-run \
             --num-gpus 1 \
-            --output-dir artifacts/matrix_ci_dry_run
+            --output-dir /tmp/rad-ci-matrix-dry-run
 
   autodl-gpu-gate:
     name: Document AutoDL GPU numerical-equivalence gate

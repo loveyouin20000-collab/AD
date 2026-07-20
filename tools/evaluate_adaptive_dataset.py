@@ -15,7 +15,11 @@ REPO_ROOT = Path(__file__).resolve().parents[1]
 if str(REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(REPO_ROOT))
 
-from rad.artifacts import atomic_write_json, refuse_existing_run  # noqa: E402
+from rad.artifacts import (  # noqa: E402
+    assert_json_artifact_eligible_for_evaluation,
+    atomic_write_json,
+    refuse_existing_run,
+)
 from rad.config import ExperimentConfig  # noqa: E402
 from rad.data.adapters import build_preprocess, get_adapter  # noqa: E402
 from rad.errors import OutputProtectionError, RADContractError  # noqa: E402
@@ -162,8 +166,13 @@ def main() -> int:
         raise SystemExit(f"missing LSE checkpoint: {lse_path}")
     if not dlcm_path.is_file():
         raise SystemExit(f"missing DLCM checkpoint: {dlcm_path}")
-    if not profiles_path.is_file():
-        raise SystemExit(f"missing policy profiles: {profiles_path}")
+
+    assert_json_artifact_eligible_for_evaluation(
+        profiles_path, kind="policy profiles"
+    )
+    assert_json_artifact_eligible_for_evaluation(
+        _resolve(adaptive["descriptor_stats"]), kind="descriptor statistics"
+    )
 
     profile = load_profile(profiles_path, profile_name)
     adapter = get_adapter(dataset_name, data_path)

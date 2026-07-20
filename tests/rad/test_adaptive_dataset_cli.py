@@ -4,6 +4,9 @@ import subprocess
 import sys
 from pathlib import Path
 
+from rad.errors import ARTIFACT_INTEGRITY_EXIT_CODE
+from tests.rad.contracts.policy_fixture import write_minimal_policy_fixture
+
 REPO_ROOT = Path(__file__).resolve().parents[2]
 PYTHON = sys.executable
 
@@ -97,6 +100,8 @@ def test_zero_shot_transfer_uses_adapter_not_visa_parser() -> None:
 
 def test_zero_shot_dry_run_writes_nothing(tmp_path: Path) -> None:
     out = tmp_path / "zs_out"
+    policy_path = tmp_path / "policy_profiles.json"
+    write_minimal_policy_fixture(policy_path)
     proc = _run(
         [
             PYTHON,
@@ -107,6 +112,8 @@ def test_zero_shot_dry_run_writes_nothing(tmp_path: Path) -> None:
             "111",
             "--output-dir",
             str(out),
+            "--calibration-policy",
+            str(policy_path),
             "--dry-run",
         ]
     )
@@ -114,4 +121,27 @@ def test_zero_shot_dry_run_writes_nothing(tmp_path: Path) -> None:
     blob = proc.stdout + proc.stderr
     assert "dry-run" in blob.lower()
     assert "policy_digest" in blob
+    assert not out.exists()
+
+
+def test_zero_shot_non_dry_run_missing_policy_fails(tmp_path: Path) -> None:
+    out = tmp_path / "zs_out"
+    missing_policy = tmp_path / "missing_policy_profiles.json"
+    proc = _run(
+        [
+            PYTHON,
+            "tools/evaluate_zero_shot_transfer.py",
+            "--config",
+            "configs/rad/zero_shot_transfer.yaml",
+            "--seed",
+            "111",
+            "--output-dir",
+            str(out),
+            "--calibration-policy",
+            str(missing_policy),
+        ]
+    )
+    assert proc.returncode == ARTIFACT_INTEGRITY_EXIT_CODE
+    blob = proc.stdout + proc.stderr
+    assert "missing calibration policy" in blob.lower() or "artifact integrity" in blob.lower()
     assert not out.exists()

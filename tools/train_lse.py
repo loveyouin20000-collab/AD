@@ -17,6 +17,7 @@ REPO_ROOT = Path(__file__).resolve().parents[1]
 if str(REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(REPO_ROOT))
 
+from rad.artifacts import assert_json_artifact_eligible_for_evaluation  # noqa: E402
 from rad.config import ExperimentConfig  # noqa: E402
 from rad.data.cache_dataset import TeacherCacheDataset  # noqa: E402
 from rad.models.descriptors import (  # noqa: E402
@@ -315,6 +316,11 @@ def main() -> int:
 
     if args.dry_run:
         return 0
+
+    if stats_path:
+        assert_json_artifact_eligible_for_evaluation(
+            stats_path, kind="descriptor statistics"
+        )
 
     if not train_gains_path.is_file():
         raise SystemExit(f"missing train gain targets: {train_gains_path}")
