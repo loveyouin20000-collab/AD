@@ -46,6 +46,25 @@ Recommended tag after a complete release manifest: `cvpr-rad-visualad-v2`.
 - GitHub Actions CI (`.github/workflows/ci.yml`) runs CPU pytest, Ruff, mypy, and config/CLI dry-runs.
 - Numerical equivalence, CUDA latency, and full GPU training remain AutoDL gates and are documented in the CI workflow notice job.
 
+## P0 requirement-to-evidence matrix
+
+Machine-readable audit: [`docs/p0_manifest.json`](p0_manifest.json)
+Full audit report: [`docs/p0-research-validity-audit.md`](p0-research-validity-audit.md)
+
+| Requirement | Implementation | Test evidence | Artifact/config evidence | Status |
+|---|---|---|---|---|
+| **P0-1:** Baseline reproduction ordering (train → checkpoint verify → test) | `tools/reproduce_baseline.py` | `tests/rad/test_baseline_pipeline.py`, `tests/rad/test_baseline_smoke.py`, `tests/rad/contracts/baseline.py` | `configs/rad/baseline_mvtec_to_visa.yaml`, `configs/rad/baseline_visa_to_mvtec_official.yaml` | validated (CPU) |
+| **P0-2:** Smoke vs real evaluation separation | `tools/evaluate_adaptive_dataset.py` (paper path); `tools/smoke_adaptive_engine.py` (dev smoke only) | `tests/rad/test_adaptive_dataset_cli.py`, `tests/rad/test_experiment_matrix.py`, `tests/rad/contracts/experiment_matrix.py` | `configs/rad/experiments.yaml` (no smoke/legacy eval CLIs) | validated |
+| **P0-3:** Authoritative dataset-level metrics | `rad/evaluation/paper_metrics.py`, `rad/evaluation/dataset_evaluator.py` | `tests/rad/test_paper_metrics.py`, `tests/rad/test_dataset_evaluator.py` | `utils/metrics.py` (AUPRO fix `af06217`) | validated |
+| **P0-4:** MVTec and VisA adapters/evaluator | `rad/data/adapters/`, `rad/evaluation/dataset_evaluator.py` | `tests/rad/test_dataset_adapter_registry.py`, `tests/rad/test_mvtec_adapter.py`, `tests/rad/test_visa_adapter.py`, `tests/rad/test_preprocess_contract.py` | `configs/rad/adaptive.yaml` | validated |
+| **P0-5:** Fail-closed fusion training | `tools/train_fusion.py`, `rad/trainers/fusion_trainer.py` | `tests/rad/test_fusion_fail_closed.py` | `configs/rad/fusion.yaml` | validated |
+| **P0-6:** Fair fixed-exit and selector-ablation matrix | `configs/rad/experiments.yaml`, `configs/rad/matrix/*` | `tests/rad/test_experiment_matrix.py`, `tests/rad/contracts/experiment_matrix.py` | matrix overlays (`fixed_exit_*`, `selector_*`) | validated |
+| Residual-gain source: `sample_localization_error` | `rad/evaluation/dataset_evaluator.py` imports `rad.losses.localization` | `tests/rad/test_dataset_evaluator.py` | no AP-derived gain in evaluator | validated |
+| Selector ablation: real masked LSE input | `rad/models/selector_signals.py`, `rad/inference/adaptive_engine.py` | `tests/rad/test_selector_signal_mask.py` | `SELECTOR_MASK_STAGE=post_normalization_pre_lse` | validated |
+| Legacy synchronization: shared test contracts | `tests/rad/contracts/{baseline,experiment_matrix,zero_shot}.py` | `tests/rad/test_contract_helpers.py`, synced legacy tests | Increment 11 commit `bfe8409` | validated |
+| Artifact hygiene: no tracked generated artifacts | `.gitignore`, CI dry-runs to `/tmp` | `tests/rad/test_artifacts_git_hygiene.py` | commit `5ef6251`; `git ls-files artifacts` empty | validated |
+| Bidirectional official VisualAD baselines | `tools/reproduce_baseline.py`, `utils/metrics.py` | baseline pipeline + metrics export tests | `docs/baseline_acceptance/*.json` | accepted (records) |
+
 ## Release manifest fields
 
 `release_manifest.json` records:
