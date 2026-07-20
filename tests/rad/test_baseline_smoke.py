@@ -2,10 +2,7 @@ import subprocess
 import sys
 from pathlib import Path
 
-from tests.rad.contracts.baseline import (
-    assert_checkpoint_dry_run_skips_train,
-    assert_dry_run_resolves_train_and_test,
-)
+from tests.rad.contracts.baseline import assert_baseline_dry_run_contract
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 PYTHON = sys.executable
@@ -21,26 +18,36 @@ def _run_baseline_cli(args: list[str]) -> subprocess.CompletedProcess[str]:
     )
 
 
-def test_baseline_dry_run_resolves_paths_and_command():
+def test_baseline_dry_run_resolves_paths_and_command(tmp_path: Path):
+    output_dir = tmp_path / "baseline_smoke_out"
     result = _run_baseline_cli(
         [
             "--config",
             "configs/rad/baseline_mvtec_to_visa.yaml",
+            "--output-dir",
+            str(output_dir),
             "--dry-run",
         ]
     )
-    assert_dry_run_resolves_train_and_test(result.stdout)
+    assert_baseline_dry_run_contract(result.stdout, output_dir=output_dir)
 
 
-def test_baseline_checkpoint_dry_run_skips_train():
+def test_baseline_checkpoint_dry_run_skips_train(tmp_path: Path):
     checkpoint = "weight/train_on_mvtec/CLIP.pth"
+    output_dir = tmp_path / "baseline_ckpt_out"
     result = _run_baseline_cli(
         [
             "--config",
             "configs/rad/baseline_mvtec_to_visa.yaml",
             "--checkpoint",
             checkpoint,
+            "--output-dir",
+            str(output_dir),
             "--dry-run",
         ]
     )
-    assert_checkpoint_dry_run_skips_train(result.stdout, checkpoint)
+    assert_baseline_dry_run_contract(
+        result.stdout,
+        checkpoint=checkpoint,
+        output_dir=output_dir,
+    )

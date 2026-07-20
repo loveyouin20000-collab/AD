@@ -8,21 +8,18 @@ import pytest
 import yaml
 
 from rad.evaluation.experiment_matrix import (
-    REQUIRED_ABLATIONS,
-    REQUIRED_METHODS,
     ExperimentMatrix,
     estimate_gpu_hours,
     load_experiment_matrix,
     validate_row_immutable,
 )
 from tests.rad.contracts.experiment_matrix import (
-    REQUIRED_FIXED_EXIT_ROWS,
-    REQUIRED_SELECTOR_ABLATION_ROWS,
     assert_dataset_backed_evaluation_row,
     assert_fixed_exit_semantics,
-    assert_no_superseded_fixed_exit_ids,
-    assert_no_superseded_selector_ids,
+    assert_no_synthetic_paper_evaluation,
+    assert_required_methods_and_ablations_present,
     assert_selector_ablation_semantics,
+    assert_unique_experiment_ids,
 )
 
 REPO = Path(__file__).resolve().parents[2]
@@ -33,16 +30,12 @@ def test_experiments_yaml_exists_and_loads():
     assert EXPERIMENTS_YAML.is_file()
     matrix = load_experiment_matrix(EXPERIMENTS_YAML)
     assert isinstance(matrix, ExperimentMatrix)
-    assert len(matrix.rows) >= len(REQUIRED_METHODS) + len(REQUIRED_ABLATIONS)
+    assert_required_methods_and_ablations_present(matrix)
 
 
 def test_required_methods_and_ablations_present():
     matrix = load_experiment_matrix(EXPERIMENTS_YAML)
-    ids = {r.id for r in matrix.rows}
-    missing_m = set(REQUIRED_METHODS) - ids
-    missing_a = set(REQUIRED_ABLATIONS) - ids
-    assert not missing_m, f"missing methods: {sorted(missing_m)}"
-    assert not missing_a, f"missing ablations: {sorted(missing_a)}"
+    assert_required_methods_and_ablations_present(matrix)
 
 
 def test_each_row_is_complete_immutable_config():
@@ -53,8 +46,7 @@ def test_each_row_is_complete_immutable_config():
 
 def test_row_ids_unique():
     matrix = load_experiment_matrix(EXPERIMENTS_YAML)
-    ids = [r.id for r in matrix.rows]
-    assert len(ids) == len(set(ids))
+    assert_unique_experiment_ids(matrix)
 
 
 def test_estimate_gpu_hours_accounts_for_dual_gpus():
@@ -111,39 +103,17 @@ def test_joint_ablation_row_uses_joint_entrypoint():
 
 def test_fixed_exit_rows_have_fair_semantics():
     matrix = load_experiment_matrix(EXPERIMENTS_YAML)
-    ids = {r.id for r in matrix.rows}
-    assert_no_superseded_fixed_exit_ids(ids)
-    for row_id in REQUIRED_FIXED_EXIT_ROWS:
-        assert_fixed_exit_semantics(matrix.row_by_id(row_id))
+    assert_fixed_exit_semantics(matrix)
 
 
 def test_selector_ablation_rows_have_complete_signal_maps():
     matrix = load_experiment_matrix(EXPERIMENTS_YAML)
-    ids = {r.id for r in matrix.rows}
-    assert_no_superseded_selector_ids(ids)
-    for row_id in REQUIRED_SELECTOR_ABLATION_ROWS:
-        assert_selector_ablation_semantics(matrix.row_by_id(row_id))
+    assert_selector_ablation_semantics(matrix)
 
 
 def test_paper_evaluation_method_rows_use_dataset_cli():
     matrix = load_experiment_matrix(EXPERIMENTS_YAML)
-    eval_ids = [
-        "static_learned_fusion",
-        "dynamic_fusion_only",
-        "confidence_only_exit",
-        "stability_only_exit",
-        "confidence_stability_exit",
-        "residual_gain_equal_fusion",
-        "full_conservative",
-        "full_balanced",
-        "full_aggressive",
-        "random_exit_matched",
-        "oracle_earliest_exit",
-        *REQUIRED_FIXED_EXIT_ROWS,
-        *REQUIRED_SELECTOR_ABLATION_ROWS,
-    ]
-    for row_id in eval_ids:
-        assert_dataset_backed_evaluation_row(matrix.row_by_id(row_id))
+    assert_no_synthetic_paper_evaluation(matrix)
 
 
 def test_dry_run_effective_configs_expose_signal_maps(tmp_path: Path):
@@ -172,8 +142,7 @@ def test_dry_run_effective_configs_expose_signal_maps(tmp_path: Path):
     assert "evaluate_adaptive_dataset.py" in proc.stdout
 
     matrix = load_experiment_matrix(EXPERIMENTS_YAML)
-    equal = matrix.row_by_id("fixed_exit_12_equal")
-    assert equal.config["method"]["fusion"] == "equal"
-    stab = matrix.row_by_id("selector_without_stability")
-    assert stab.config["selector"]["signals"]["stability"] is False
-    assert stab.config["selector"]["signals"]["response"] is True
+    assert_fixed_exit_semantics(matrix)
+    assert_selector_ablation_semantics(matrix)
+    assert_dataset_backed_evaluation_row(matrix.row_by_id("fixed_exit_12_equal"))
+    assert_dataset_backed_evaluation_row(matrix.row_by_id("selector_without_stability"))
