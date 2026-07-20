@@ -7,21 +7,39 @@ from pathlib import Path
 
 import pytest
 
-from rad.errors import ARTIFACT_INTEGRITY_EXIT_CODE, ArtifactIntegrityError
+from rad.errors import ArtifactIntegrityError
 from rad.evaluation.zero_shot import (
     TargetAccessError,
     assert_policy_eligible_for_evaluation,
-    assert_policy_unchanged,
     forbid_target_access_during_calibration,
     load_frozen_policy_profile,
 )
 from tests.rad.contracts.policy_fixture import write_minimal_policy_fixture
+from tests.rad.contracts.zero_shot import (
+    assert_adapter_only_dataset_access,
+    assert_missing_policy_artifact_integrity,
+    assert_policy_fixture_rejected_for_real_run,
+    assert_real_run_rejects_test_fixture,
+    assert_source_policy_frozen,
+    assert_zero_shot_dry_run_contract,
+)
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 PYTHON = sys.executable
+ZERO_SHOT_CLI = REPO_ROOT / "tools/evaluate_zero_shot_transfer.py"
 TEST_POLICY_FIXTURE = (
     Path(__file__).resolve().parent / "fixtures" / "policy_profiles.json"
 )
+
+
+def _run(args: list[str], *, cwd: Path | None = None) -> subprocess.CompletedProcess[str]:
+    return subprocess.run(
+        args,
+        cwd=str(cwd or REPO_ROOT),
+        capture_output=True,
+        text=True,
+        check=False,
+    )
 
 
 def test_zero_shot_contract_policy_loaded_before_target_and_digest_stable(
@@ -53,18 +71,15 @@ def test_zero_shot_contract_policy_loaded_before_target_and_digest_stable(
         guard.check_path(policy_path)
         with pytest.raises(TargetAccessError, match="visa"):
             guard.check_path(tmp_path / "visa" / "meta.json")
-        _, digest = load_frozen_policy_profile(policy_path, "balanced")
-        assert_policy_unchanged(policy_path, "balanced", digest)
+        _profile, digest = load_frozen_policy_profile(policy_path, "balanced")
+        assert_source_policy_frozen(policy_path, "balanced", digest)
 
-    # After calibration window, digest must still match frozen source policy.
-    assert_policy_unchanged(policy_path, "balanced", digest)
+    assert_source_policy_frozen(policy_path, "balanced", digest)
 
 
-def test_zero_shot_cli_source_mentions_paper_metrics_and_adapters() -> None:
-    root = Path(__file__).resolve().parents[2]
-    src = (root / "tools" / "evaluate_zero_shot_transfer.py").read_text(encoding="utf-8")
-    assert "PaperMetrics" in src or "compute_paper_metrics" in src
-    assert "get_adapter" in src
+def test_zero_shot_cli_adapter_only_dataset_access() -> None:
+    src = ZERO_SHOT_CLI.read_text(encoding="utf-8")
+    assert_adapter_only_dataset_access(src)
     assert "target_tuning" in src
     assert "--calibration-policy" in src
 
@@ -76,10 +91,10 @@ def test_real_evaluation_rejects_test_policy_fixture() -> None:
 
 def test_zero_shot_non_dry_run_rejects_test_policy_fixture(tmp_path: Path) -> None:
     out = tmp_path / "zs_out"
-    proc = subprocess.run(
+    proc = _run(
         [
             PYTHON,
-            str(REPO_ROOT / "tools" / "evaluate_zero_shot_transfer.py"),
+            str(ZERO_SHOT_CLI),
             "--config",
             "configs/rad/zero_shot_transfer.yaml",
             "--seed",
@@ -88,20 +103,13 @@ def test_zero_shot_non_dry_run_rejects_test_policy_fixture(tmp_path: Path) -> No
             str(out),
             "--calibration-policy",
             str(TEST_POLICY_FIXTURE),
-        ],
-        cwd=str(REPO_ROOT),
-        capture_output=True,
-        text=True,
-        check=False,
+        ]
     )
-    assert proc.returncode == ARTIFACT_INTEGRITY_EXIT_CODE
-    blob = proc.stdout + proc.stderr
-    assert "test fixture" in blob.lower() or "artifact integrity" in blob.lower()
+    assert_policy_fixture_rejected_for_real_run(proc)
     assert not out.exists()
 
 
 def test_dynamic_policy_fixture_dry_run_ok_non_dry_run_rejected(tmp_path: Path) -> None:
-    """Regression: tmp_path policy mirrors static test_fixture contract."""
     out = tmp_path / "zs_out"
     policy_path = tmp_path / "policy_profiles.json"
     write_minimal_policy_fixture(policy_path)
@@ -110,10 +118,10 @@ def test_dynamic_policy_fixture_dry_run_ok_non_dry_run_rejected(tmp_path: Path) 
     assert payload["artifact_kind"] == "test_fixture"
     assert payload["eligible_for_evaluation"] is False
 
-    dry_proc = subprocess.run(
+    dry_proc = _run(
         [
             PYTHON,
-            str(REPO_ROOT / "tools" / "evaluate_zero_shot_transfer.py"),
+            str(ZERO_SHOT_CLI),
             "--config",
             "configs/rad/zero_shot_transfer.yaml",
             "--seed",
@@ -123,23 +131,14 @@ def test_dynamic_policy_fixture_dry_run_ok_non_dry_run_rejected(tmp_path: Path) 
             "--calibration-policy",
             str(policy_path),
             "--dry-run",
-        ],
-        cwd=str(REPO_ROOT),
-        capture_output=True,
-        text=True,
-        check=False,
+        ]
     )
-    assert dry_proc.returncode == 0, dry_proc.stdout + dry_proc.stderr
-    dry_blob = dry_proc.stdout + dry_proc.stderr
-    assert "dry-run" in dry_blob.lower()
-    assert "policy_digest" in dry_blob
-    assert f"policy_path: {policy_path}" in dry_blob
-    assert not out.exists()
+    assert_zero_shot_dry_run_contract(dry_proc, output_dir=out, policy_path=policy_path)
 
-    eval_proc = subprocess.run(
+    eval_proc = _run(
         [
             PYTHON,
-            str(REPO_ROOT / "tools" / "evaluate_zero_shot_transfer.py"),
+            str(ZERO_SHOT_CLI),
             "--config",
             "configs/rad/zero_shot_transfer.yaml",
             "--seed",
@@ -148,15 +147,75 @@ def test_dynamic_policy_fixture_dry_run_ok_non_dry_run_rejected(tmp_path: Path) 
             str(out),
             "--calibration-policy",
             str(policy_path),
-        ],
-        cwd=str(REPO_ROOT),
-        capture_output=True,
-        text=True,
-        check=False,
+        ]
     )
-    assert eval_proc.returncode == ARTIFACT_INTEGRITY_EXIT_CODE
-    eval_blob = eval_proc.stdout + eval_proc.stderr
-    assert "test fixture" in eval_blob.lower() or "artifact integrity" in eval_blob.lower()
-    assert "build_engine" not in eval_blob
-    assert "get_adapter" not in eval_blob
+    assert_real_run_rejects_test_fixture(eval_proc)
     assert not out.exists()
+
+
+def test_zero_shot_dry_run_writes_nothing(tmp_path: Path) -> None:
+    out = tmp_path / "zs_out"
+    policy_path = tmp_path / "policy_profiles.json"
+    write_minimal_policy_fixture(policy_path)
+    proc = _run(
+        [
+            PYTHON,
+            str(ZERO_SHOT_CLI),
+            "--config",
+            "configs/rad/zero_shot_transfer.yaml",
+            "--seed",
+            "111",
+            "--output-dir",
+            str(out),
+            "--calibration-policy",
+            str(policy_path),
+            "--dry-run",
+        ]
+    )
+    assert_zero_shot_dry_run_contract(proc, output_dir=out, policy_path=policy_path)
+
+
+def test_zero_shot_non_dry_run_missing_policy_fails(tmp_path: Path) -> None:
+    out = tmp_path / "zs_out"
+    missing_policy = tmp_path / "missing_policy_profiles.json"
+    proc = _run(
+        [
+            PYTHON,
+            str(ZERO_SHOT_CLI),
+            "--config",
+            "configs/rad/zero_shot_transfer.yaml",
+            "--seed",
+            "111",
+            "--output-dir",
+            str(out),
+            "--calibration-policy",
+            str(missing_policy),
+        ]
+    )
+    assert_missing_policy_artifact_integrity(proc)
+    assert not out.exists()
+
+
+def test_zero_shot_cli_policy_path_precedence_over_config(tmp_path: Path) -> None:
+    out = tmp_path / "zs_out"
+    explicit_policy = tmp_path / "explicit_policy_profiles.json"
+    write_minimal_policy_fixture(explicit_policy)
+    proc = _run(
+        [
+            PYTHON,
+            str(ZERO_SHOT_CLI),
+            "--config",
+            "configs/rad/zero_shot_transfer.yaml",
+            "--seed",
+            "111",
+            "--output-dir",
+            str(out),
+            "--calibration-policy",
+            str(explicit_policy),
+            "--dry-run",
+        ]
+    )
+    assert_zero_shot_dry_run_contract(proc, output_dir=out, policy_path=explicit_policy)
+    blob = proc.stdout + proc.stderr
+    configured = "artifacts/calibration/policy/policy_profiles.json"
+    assert configured not in blob.split("policy_path:")[-1]

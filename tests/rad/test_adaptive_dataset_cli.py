@@ -4,9 +4,6 @@ import subprocess
 import sys
 from pathlib import Path
 
-from rad.errors import ARTIFACT_INTEGRITY_EXIT_CODE
-from tests.rad.contracts.policy_fixture import write_minimal_policy_fixture
-
 REPO_ROOT = Path(__file__).resolve().parents[2]
 PYTHON = sys.executable
 
@@ -83,65 +80,3 @@ def test_smoke_cli_forbids_paper_metrics_in_source() -> None:
 def test_legacy_evaluate_adaptive_forwards_to_smoke() -> None:
     src = (REPO_ROOT / "tools" / "evaluate_adaptive.py").read_text(encoding="utf-8")
     assert "smoke_adaptive_engine" in src
-
-
-def test_zero_shot_transfer_uses_adapter_not_visa_parser() -> None:
-    src = (REPO_ROOT / "tools" / "evaluate_zero_shot_transfer.py").read_text(
-        encoding="utf-8"
-    )
-    assert "_load_visa_index" not in src
-    assert "get_adapter" in src
-    assert "evaluate_dataset" in src
-    assert "compute_paper_metrics" in src
-    assert "forbid_target_access_during_calibration" in src
-    assert "assert_policy_unchanged" in src
-    assert "pro_score_proxy" not in src
-
-
-def test_zero_shot_dry_run_writes_nothing(tmp_path: Path) -> None:
-    out = tmp_path / "zs_out"
-    policy_path = tmp_path / "policy_profiles.json"
-    write_minimal_policy_fixture(policy_path)
-    proc = _run(
-        [
-            PYTHON,
-            "tools/evaluate_zero_shot_transfer.py",
-            "--config",
-            "configs/rad/zero_shot_transfer.yaml",
-            "--seed",
-            "111",
-            "--output-dir",
-            str(out),
-            "--calibration-policy",
-            str(policy_path),
-            "--dry-run",
-        ]
-    )
-    assert proc.returncode == 0, proc.stdout + proc.stderr
-    blob = proc.stdout + proc.stderr
-    assert "dry-run" in blob.lower()
-    assert "policy_digest" in blob
-    assert not out.exists()
-
-
-def test_zero_shot_non_dry_run_missing_policy_fails(tmp_path: Path) -> None:
-    out = tmp_path / "zs_out"
-    missing_policy = tmp_path / "missing_policy_profiles.json"
-    proc = _run(
-        [
-            PYTHON,
-            "tools/evaluate_zero_shot_transfer.py",
-            "--config",
-            "configs/rad/zero_shot_transfer.yaml",
-            "--seed",
-            "111",
-            "--output-dir",
-            str(out),
-            "--calibration-policy",
-            str(missing_policy),
-        ]
-    )
-    assert proc.returncode == ARTIFACT_INTEGRITY_EXIT_CODE
-    blob = proc.stdout + proc.stderr
-    assert "missing calibration policy" in blob.lower() or "artifact integrity" in blob.lower()
-    assert not out.exists()

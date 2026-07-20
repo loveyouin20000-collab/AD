@@ -4,7 +4,12 @@ from __future__ import annotations
 
 from typing import Any
 
-from rad.evaluation.experiment_matrix import MatrixRow
+from rad.evaluation.experiment_matrix import (
+    REQUIRED_ABLATIONS,
+    REQUIRED_METHODS,
+    ExperimentMatrix,
+    MatrixRow,
+)
 
 REQUIRED_SELECTOR_SIGNAL_NAMES: tuple[str, ...] = (
     "response",
@@ -37,6 +42,22 @@ REQUIRED_SELECTOR_ABLATION_ROWS: tuple[str, ...] = (
     "selector_without_token_separation",
 )
 
+PAPER_EVALUATION_ROW_IDS: tuple[str, ...] = (
+    "static_learned_fusion",
+    "dynamic_fusion_only",
+    "confidence_only_exit",
+    "stability_only_exit",
+    "confidence_stability_exit",
+    "residual_gain_equal_fusion",
+    "full_conservative",
+    "full_balanced",
+    "full_aggressive",
+    "random_exit_matched",
+    "oracle_earliest_exit",
+    *REQUIRED_FIXED_EXIT_ROWS,
+    *REQUIRED_SELECTOR_ABLATION_ROWS,
+)
+
 
 def _command_text(row: MatrixRow) -> str:
     return " ".join(str(row.command).split())
@@ -59,7 +80,7 @@ def assert_dataset_backed_evaluation_row(row: MatrixRow) -> None:
     )
 
 
-def assert_fixed_exit_semantics(row: MatrixRow) -> None:
+def _assert_fixed_exit_row(row: MatrixRow) -> None:
     """Fixed-exit rows encode exit depth and fusion mode explicitly."""
     method = row.config.get("method") or {}
     assert isinstance(method, dict), f"row {row.id}: method must be a mapping"
@@ -80,7 +101,7 @@ def assert_fixed_exit_semantics(row: MatrixRow) -> None:
     assert_dataset_backed_evaluation_row(row)
 
 
-def assert_selector_ablation_semantics(row: MatrixRow) -> None:
+def _assert_selector_ablation_row(row: MatrixRow) -> None:
     """Selector ablation rows must carry a complete explicit signal map."""
     selector = row.config.get("selector") or {}
     assert isinstance(selector, dict), f"row {row.id}: selector must be a mapping"
@@ -115,19 +136,34 @@ def assert_selector_ablation_semantics(row: MatrixRow) -> None:
     assert_dataset_backed_evaluation_row(row)
 
 
-def assert_no_superseded_fixed_exit_ids(ids: set[str]) -> None:
-    """Old ambiguous fixed-exit IDs must not be reused after the semantics split."""
+def assert_fixed_exit_semantics(matrix: ExperimentMatrix) -> None:
+    ids = {r.id for r in matrix.rows}
     superseded = {"fixed_exit_12", "fixed_exit_18"} & ids
     assert not superseded, (
         f"superseded fixed-exit ids must not remain: {sorted(superseded)}"
     )
+    for row_id in REQUIRED_FIXED_EXIT_ROWS:
+        _assert_fixed_exit_row(matrix.row_by_id(row_id))
 
 
-def assert_no_superseded_selector_ids(ids: set[str]) -> None:
+def assert_selector_ablation_semantics(matrix: ExperimentMatrix) -> None:
+    ids = {r.id for r in matrix.rows}
     superseded = {"ablation_selector_cumulative", "ablation_selector_loo"} & ids
     assert not superseded, (
         f"superseded selector ids must not remain: {sorted(superseded)}"
     )
+    for row_id in REQUIRED_SELECTOR_ABLATION_ROWS:
+        _assert_selector_ablation_row(matrix.row_by_id(row_id))
+
+
+def assert_no_synthetic_paper_evaluation(matrix: ExperimentMatrix) -> None:
+    for row_id in PAPER_EVALUATION_ROW_IDS:
+        assert_dataset_backed_evaluation_row(matrix.row_by_id(row_id))
+
+
+def assert_unique_experiment_ids(matrix: ExperimentMatrix) -> None:
+    ids = [r.id for r in matrix.rows]
+    assert len(ids) == len(set(ids)), f"duplicate experiment ids: {ids}"
 
 
 def row_method_config(row: MatrixRow) -> dict[str, Any]:
@@ -135,3 +171,11 @@ def row_method_config(row: MatrixRow) -> dict[str, Any]:
     if not isinstance(method, dict):
         raise AssertionError(f"row {row.id}: method must be a mapping")
     return method
+
+
+def assert_required_methods_and_ablations_present(matrix: ExperimentMatrix) -> None:
+    ids = {r.id for r in matrix.rows}
+    missing_m = set(REQUIRED_METHODS) - ids
+    missing_a = set(REQUIRED_ABLATIONS) - ids
+    assert not missing_m, f"missing methods: {sorted(missing_m)}"
+    assert not missing_a, f"missing ablations: {sorted(missing_a)}"
