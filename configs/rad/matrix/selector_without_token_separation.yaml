@@ -1,0 +1,13 @@
+method:
+  name: selector_without_token_separation
+  fusion: dynamic
+selector:
+  mask_mode: train_and_infer
+  signals:
+    response: true
+    uncertainty: true
+    stability: true
+    complementarity: true
+    token_separation: false
+adaptive:
+  lse_checkpoint: artifacts/checkpoints/lse/selector_without_token_separation/lse_best.pt

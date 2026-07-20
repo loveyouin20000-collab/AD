@@ -29,6 +29,12 @@ def parse_args() -> argparse.Namespace:
         description="Real-dataset adaptive evaluation (paper metrics path)"
     )
     p.add_argument("--config", type=str, default="configs/rad/adaptive.yaml")
+    p.add_argument(
+        "--overlay",
+        type=str,
+        default=None,
+        help="Optional YAML overlay deep-merged into --config (matrix rows)",
+    )
     p.add_argument("--seed", type=int, default=None)
     p.add_argument("--output-dir", type=Path, default=None)
     p.add_argument("--profile", type=str, default=None)
@@ -40,6 +46,16 @@ def parse_args() -> argparse.Namespace:
     p.add_argument("--data-path", type=Path, default=None)
     p.add_argument("--dry-run", action="store_true")
     return p.parse_args()
+
+
+def _deep_merge(base: dict[str, Any], overlay: dict[str, Any]) -> dict[str, Any]:
+    out = dict(base)
+    for key, value in overlay.items():
+        if isinstance(value, dict) and isinstance(out.get(key), dict):
+            out[key] = _deep_merge(out[key], value)
+        else:
+            out[key] = value
+    return out
 
 
 def sha256_file(path: Path) -> str:
@@ -70,7 +86,16 @@ def _resolve(path: Path | str) -> Path:
 
 def main() -> int:
     args = parse_args()
-    raw = yaml.safe_load(Path(args.config).read_text())
+    cfg_path = Path(args.config)
+    raw = yaml.safe_load(cfg_path.read_text())
+    if args.overlay:
+        overlay_path = Path(args.overlay)
+        if not overlay_path.is_absolute():
+            overlay_path = REPO_ROOT / overlay_path
+        overlay = yaml.safe_load(overlay_path.read_text()) or {}
+        if not isinstance(overlay, dict):
+            raise SystemExit("--overlay must be a YAML mapping")
+        raw = _deep_merge(raw, overlay)
     cfg = ExperimentConfig.from_yaml(args.config)
     adaptive = dict(raw.get("adaptive", {}))
     data = dict(raw.get("data", {}))
@@ -102,6 +127,8 @@ def main() -> int:
     dlcm_path = _resolve(adaptive["dlcm_checkpoint"])
 
     print(f"config: {args.config}")
+    if args.overlay:
+        print(f"overlay: {args.overlay}")
     print(f"config_hash: {config_hash}")
     print(f"git_sha: {sha}")
     print(f"seed: {seed}")
@@ -115,6 +142,10 @@ def main() -> int:
     print(f"limit: {limit}")
     print(f"force_full_depth: {force_full_depth}")
     print(f"compute_full_depth_reference: {compute_ref}")
+    if raw.get("selector"):
+        print(f"selector_signals: {json.dumps(raw['selector'].get('signals', {}))}")
+    if raw.get("method"):
+        print(f"method: {json.dumps(raw['method'])}")
 
     if args.dry_run:
         print("dry-run ok")
@@ -209,6 +240,7 @@ def main() -> int:
             "aupro_steps": 200,
             "boundary_tolerance_ratio": 0.005,
         },
+        **engine.selector_provenance(),
     }
     atomic_write_json(output_dir / "manifest.json", manifest)
     atomic_write_json(output_dir / "metrics.json", metrics.as_dict())

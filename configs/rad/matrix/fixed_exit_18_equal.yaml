@@ -1,0 +1,17 @@
+method:
+  name: fixed_exit
+  exit_depth: 18
+  fusion: equal
+adaptive:
+  fixed_exit_depth: 18
+  fusion_mode: equal
+  early_depths: []
+  full_depth: 18
+selector:
+  mask_mode: train_and_infer
+  signals:
+    response: true
+    uncertainty: true
+    stability: true
+    complementarity: true
+    token_separation: true

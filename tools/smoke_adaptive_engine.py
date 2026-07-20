@@ -124,6 +124,38 @@ def build_engine(
     stats_path = _resolve(adaptive["descriptor_stats"])
     normalizer = DescriptorNormalizer.load(stats_path) if stats_path.is_file() else None
 
+    from rad.models.selector_signals import (
+        build_default_selector_signal_layout,
+        parse_enabled_signals,
+    )
+
+    selector_cfg = dict(raw.get("selector", {}))
+    method_cfg = dict(raw.get("method", {}))
+    enabled_signals = parse_enabled_signals(selector_cfg.get("signals"))
+    layout = build_default_selector_signal_layout()
+    mask_mode = str(selector_cfg.get("mask_mode", "train_and_infer"))
+    ckpt_signals = lse_ckpt.get("selector_signals")
+    if (
+        mask_mode == "train_and_infer"
+        and isinstance(ckpt_signals, dict)
+        and parse_enabled_signals(ckpt_signals) != enabled_signals
+    ):
+        raise ValueError(
+            "LSE checkpoint selector_signals do not match config under "
+            "mask_mode=train_and_infer (primary scientific ablation A). "
+            "Retrain LSE with the same selector.signals map, or use "
+            "mask_mode=infer_only for a named stress test."
+        )
+    fusion_mode = str(
+        method_cfg.get("fusion")
+        or adaptive.get("fusion_mode")
+        or selector_cfg.get("fusion_mode")
+        or "dynamic"
+    )
+    fixed_exit_depth = method_cfg.get("exit_depth", adaptive.get("fixed_exit_depth"))
+    if fixed_exit_depth is not None:
+        fixed_exit_depth = int(fixed_exit_depth)
+
     engine = AdaptiveEngine(
         visual=visual,
         map_generator=CheckpointMapGenerator(
@@ -140,6 +172,10 @@ def build_engine(
         image_size=image_size,
         normalizer=normalizer,
         temperature=temperature,
+        enabled_signals=enabled_signals,
+        selector_layout=layout,
+        fusion_mode=fusion_mode,
+        fixed_exit_depth=fixed_exit_depth,
     )
     return engine.to(device)
 

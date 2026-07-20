@@ -41,6 +41,14 @@ lse:
   patience: 10
   output_dir: artifacts/targets/gain
   train_output_dir: artifacts/checkpoints/lse
+selector:
+  mask_mode: train_and_infer
+  signals:
+    response: true
+    uncertainty: true
+    stability: true
+    complementarity: true
+    token_separation: true
 zero_shot:
   source_dataset: mvtec
   target_datasets: [visa]

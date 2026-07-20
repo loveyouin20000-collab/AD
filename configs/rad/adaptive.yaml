@@ -30,3 +30,11 @@ adaptive:
   warmup: 50
   limit: null
   compute_full_depth_reference: false
+selector:
+  mask_mode: train_and_infer
+  signals:
+    response: true
+    uncertainty: true
+    stability: true
+    complementarity: true
+    token_separation: true

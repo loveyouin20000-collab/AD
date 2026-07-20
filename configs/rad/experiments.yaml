@@ -1,7 +1,7 @@
 schema_version: 1
 description: Immutable paper experiment matrix for Residual-Aware Adaptive-Depth VisualAD.
-hardware_note: Primary wall-clock estimates assume independent rows parallelized across
-  available GPUs (e.g. 2x RTX 4090D).
+hardware_note: Primary wall-clock estimates assume independent rows parallelized across available GPUs
+  (e.g. 2x RTX 4090D).
 defaults:
   seed: 111
   image_size: 518
@@ -35,8 +35,8 @@ matrix:
   immutable: true
   seed: 111
   device: '{device}'
-  command: python tools/reproduce_baseline.py --config configs/rad/baseline_mvtec_to_visa.yaml
-    --seed {seed} --device {device} --output-dir {output_dir}
+  command: python tools/reproduce_baseline.py --config configs/rad/baseline_mvtec_to_visa.yaml --seed
+    {seed} --device {device} --output-dir {output_dir}
   config:
     method:
       name: original_visualad
@@ -46,39 +46,69 @@ matrix:
   estimated_gpu_hours: 0.4
   output_dir: artifacts/experiments/original_visualad
   tags: []
-- id: fixed_exit_12
+- id: fixed_exit_12_equal
   group: method
-  description: Fixed early exit at layer 12
+  description: Fixed early exit at layer 12 with equal fusion
   immutable: true
   seed: 111
   device: '{device}'
-  command: python tools/benchmark_latency.py --config configs/rad/benchmark.yaml --methods
-    fixed_12 --warmup 5 --repetitions 20 --seed {seed} --device {device} --output-dir
-    {output_dir}
+  command: python tools/evaluate_adaptive_dataset.py --config configs/rad/adaptive.yaml --overlay configs/rad/matrix/fixed_exit_12_equal.yaml
+    --seed {seed} --device {device} --output-dir {output_dir}
+  config:
+    method:
+      name: fixed_exit
+      exit_depth: 12
+      fusion: equal
+  estimated_gpu_hours: 0.25
+  output_dir: artifacts/experiments/fixed_exit_12_equal
+  tags: []
+- id: fixed_exit_18_equal
+  group: method
+  description: Fixed early exit at layer 18 with equal fusion
+  immutable: true
+  seed: 111
+  device: '{device}'
+  command: python tools/evaluate_adaptive_dataset.py --config configs/rad/adaptive.yaml --overlay configs/rad/matrix/fixed_exit_18_equal.yaml
+    --seed {seed} --device {device} --output-dir {output_dir}
+  config:
+    method:
+      name: fixed_exit
+      exit_depth: 18
+      fusion: equal
+  estimated_gpu_hours: 0.3
+  output_dir: artifacts/experiments/fixed_exit_18_equal
+  tags: []
+- id: fixed_exit_12_dynamic
+  group: method
+  description: Fixed early exit at layer 12 with dynamic fusion
+  immutable: true
+  seed: 111
+  device: '{device}'
+  command: python tools/evaluate_adaptive_dataset.py --config configs/rad/adaptive.yaml --overlay configs/rad/matrix/fixed_exit_12_dynamic.yaml
+    --seed {seed} --device {device} --output-dir {output_dir}
   config:
     method:
       name: fixed_exit
       exit_depth: 12
       fusion: dynamic
   estimated_gpu_hours: 0.25
-  output_dir: artifacts/experiments/fixed_exit_12
+  output_dir: artifacts/experiments/fixed_exit_12_dynamic
   tags: []
-- id: fixed_exit_18
+- id: fixed_exit_18_dynamic
   group: method
-  description: Fixed early exit at layer 18
+  description: Fixed early exit at layer 18 with dynamic fusion
   immutable: true
   seed: 111
   device: '{device}'
-  command: python tools/benchmark_latency.py --config configs/rad/benchmark.yaml --methods
-    fixed_18 --warmup 5 --repetitions 20 --seed {seed} --device {device} --output-dir
-    {output_dir}
+  command: python tools/evaluate_adaptive_dataset.py --config configs/rad/adaptive.yaml --overlay configs/rad/matrix/fixed_exit_18_dynamic.yaml
+    --seed {seed} --device {device} --output-dir {output_dir}
   config:
     method:
       name: fixed_exit
       exit_depth: 18
       fusion: dynamic
   estimated_gpu_hours: 0.3
-  output_dir: artifacts/experiments/fixed_exit_18
+  output_dir: artifacts/experiments/fixed_exit_18_dynamic
   tags: []
 - id: static_learned_fusion
   group: method
@@ -86,8 +116,8 @@ matrix:
   immutable: true
   seed: 111
   device: '{device}'
-  command: python tools/evaluate_adaptive.py --config configs/rad/adaptive.yaml --seed
-    {seed} --device {device} --output-dir {output_dir} --profile balanced --force-full-depth
+  command: python tools/evaluate_adaptive_dataset.py --config configs/rad/adaptive.yaml --seed {seed}
+    --device {device} --output-dir {output_dir} --profile balanced --force-full-depth
   config:
     method:
       name: static_learned_fusion
@@ -102,8 +132,8 @@ matrix:
   immutable: true
   seed: 111
   device: '{device}'
-  command: python tools/evaluate_adaptive.py --config configs/rad/adaptive.yaml --force-full-depth
-    --seed {seed} --device {device} --output-dir {output_dir}
+  command: python tools/evaluate_adaptive_dataset.py --config configs/rad/adaptive.yaml --seed {seed}
+    --device {device} --output-dir {output_dir} --force-full-depth
   config:
     method:
       name: dynamic_fusion_only
@@ -118,8 +148,8 @@ matrix:
   immutable: true
   seed: 111
   device: '{device}'
-  command: python tools/evaluate_adaptive.py --config configs/rad/adaptive.yaml --seed
-    {seed} --device {device} --output-dir {output_dir} --profile balanced
+  command: python tools/evaluate_adaptive_dataset.py --config configs/rad/adaptive.yaml --seed {seed}
+    --device {device} --output-dir {output_dir} --profile balanced
   config:
     method:
       name: confidence_only_exit
@@ -138,8 +168,8 @@ matrix:
   immutable: true
   seed: 111
   device: '{device}'
-  command: python tools/evaluate_adaptive.py --config configs/rad/adaptive.yaml --seed
-    {seed} --device {device} --output-dir {output_dir} --profile balanced
+  command: python tools/evaluate_adaptive_dataset.py --config configs/rad/adaptive.yaml --seed {seed}
+    --device {device} --output-dir {output_dir} --profile balanced
   config:
     method:
       name: stability_only_exit
@@ -158,8 +188,8 @@ matrix:
   immutable: true
   seed: 111
   device: '{device}'
-  command: python tools/evaluate_adaptive.py --config configs/rad/adaptive.yaml --seed
-    {seed} --device {device} --output-dir {output_dir} --profile balanced
+  command: python tools/evaluate_adaptive_dataset.py --config configs/rad/adaptive.yaml --seed {seed}
+    --device {device} --output-dir {output_dir} --profile balanced
   config:
     method:
       name: confidence_stability_exit
@@ -178,8 +208,8 @@ matrix:
   immutable: true
   seed: 111
   device: '{device}'
-  command: python tools/evaluate_adaptive.py --config configs/rad/adaptive.yaml --seed
-    {seed} --device {device} --output-dir {output_dir} --profile balanced
+  command: python tools/evaluate_adaptive_dataset.py --config configs/rad/adaptive.yaml --seed {seed}
+    --device {device} --output-dir {output_dir} --profile balanced
   config:
     method:
       name: residual_gain_equal_fusion
@@ -194,8 +224,8 @@ matrix:
   immutable: true
   seed: 111
   device: '{device}'
-  command: python tools/evaluate_adaptive.py --config configs/rad/adaptive.yaml --profile
-    conservative --seed {seed} --device {device} --output-dir {output_dir}
+  command: python tools/evaluate_adaptive_dataset.py --config configs/rad/adaptive.yaml --seed {seed}
+    --device {device} --output-dir {output_dir} --profile conservative
   config:
     method:
       name: full_method
@@ -210,8 +240,8 @@ matrix:
   immutable: true
   seed: 111
   device: '{device}'
-  command: python tools/evaluate_adaptive.py --config configs/rad/adaptive.yaml --profile
-    balanced --seed {seed} --device {device} --output-dir {output_dir}
+  command: python tools/evaluate_adaptive_dataset.py --config configs/rad/adaptive.yaml --seed {seed}
+    --device {device} --output-dir {output_dir} --profile balanced
   config:
     method:
       name: full_method
@@ -226,8 +256,8 @@ matrix:
   immutable: true
   seed: 111
   device: '{device}'
-  command: python tools/evaluate_adaptive.py --config configs/rad/adaptive.yaml --profile
-    aggressive --seed {seed} --device {device} --output-dir {output_dir}
+  command: python tools/evaluate_adaptive_dataset.py --config configs/rad/adaptive.yaml --seed {seed}
+    --device {device} --output-dir {output_dir} --profile aggressive
   config:
     method:
       name: full_method
@@ -242,8 +272,8 @@ matrix:
   immutable: true
   seed: 111
   device: '{device}'
-  command: python tools/evaluate_adaptive.py --config configs/rad/adaptive.yaml --seed
-    {seed} --device {device} --output-dir {output_dir} --profile balanced
+  command: python tools/evaluate_adaptive_dataset.py --config configs/rad/adaptive.yaml --seed {seed}
+    --device {device} --output-dir {output_dir} --profile balanced
   config:
     method:
       name: random_exit_matched
@@ -257,8 +287,8 @@ matrix:
   immutable: true
   seed: 111
   device: '{device}'
-  command: python tools/evaluate_adaptive.py --config configs/rad/adaptive.yaml --seed
-    {seed} --device {device} --output-dir {output_dir} --profile balanced
+  command: python tools/evaluate_adaptive_dataset.py --config configs/rad/adaptive.yaml --seed {seed}
+    --device {device} --output-dir {output_dir} --profile balanced
   config:
     method:
       name: oracle_earliest_exit
@@ -272,8 +302,8 @@ matrix:
   immutable: true
   seed: 111
   device: '{device}'
-  command: python tools/train_fusion.py --config configs/rad/fusion.yaml --seed {seed}
-    --device {device} --output-dir {output_dir}
+  command: python tools/train_fusion.py --config configs/rad/fusion.yaml --seed {seed} --device {device}
+    --output-dir {output_dir}
   config:
     method:
       name: ablation
@@ -291,8 +321,8 @@ matrix:
   immutable: true
   seed: 111
   device: '{device}'
-  command: python tools/train_fusion.py --config configs/rad/fusion.yaml --seed {seed}
-    --device {device} --output-dir {output_dir}
+  command: python tools/train_fusion.py --config configs/rad/fusion.yaml --seed {seed} --device {device}
+    --output-dir {output_dir}
   config:
     method:
       name: ablation
@@ -310,8 +340,8 @@ matrix:
   immutable: true
   seed: 111
   device: '{device}'
-  command: python tools/generate_shapley_targets.py --config configs/rad/fusion.yaml
-    --seed {seed} --device {device} --output-dir {output_dir}
+  command: python tools/generate_shapley_targets.py --config configs/rad/fusion.yaml --seed {seed} --device
+    {device} --output-dir {output_dir}
   config:
     method:
       name: ablation
@@ -328,8 +358,8 @@ matrix:
   immutable: true
   seed: 111
   device: '{device}'
-  command: python tools/generate_shapley_targets.py --config configs/rad/fusion.yaml
-    --seed {seed} --device {device} --output-dir {output_dir}
+  command: python tools/generate_shapley_targets.py --config configs/rad/fusion.yaml --seed {seed} --device
+    {device} --output-dir {output_dir}
   config:
     method:
       name: ablation
@@ -340,40 +370,160 @@ matrix:
   output_dir: artifacts/experiments/ablation_shapley_loo
   tags:
   - shapley
-- id: ablation_selector_cumulative
+- id: selector_full
   group: ablation
-  description: Selector uses cumulative checkpoint features
+  description: Selector with all descriptor signal groups enabled
   immutable: true
   seed: 111
   device: '{device}'
-  command: python tools/evaluate_adaptive.py --config configs/rad/adaptive.yaml --seed
-    {seed} --device {device} --output-dir {output_dir} --profile balanced
+  command: python tools/evaluate_adaptive_dataset.py --config configs/rad/adaptive.yaml --overlay configs/rad/matrix/selector_full.yaml
+    --seed {seed} --device {device} --output-dir {output_dir} --profile balanced
   config:
     method:
-      name: ablation
-      selector_inputs: cumulative
+      name: selector_full
+      fusion: dynamic
     selector:
-      input_mode: cumulative
+      mask_mode: train_and_infer
+      signals:
+        response: true
+        uncertainty: true
+        stability: true
+        complementarity: true
+        token_separation: true
+    adaptive:
+      lse_checkpoint: artifacts/checkpoints/lse/selector_full/lse_best.pt
   estimated_gpu_hours: 0.4
-  output_dir: artifacts/experiments/ablation_selector_cumulative
+  output_dir: artifacts/experiments/selector_full
   tags:
   - selector
-- id: ablation_selector_loo
+- id: selector_without_response
   group: ablation
-  description: Selector uses leave-one-out features
+  description: Selector ablation without response signal group (train_and_infer)
   immutable: true
   seed: 111
   device: '{device}'
-  command: python tools/evaluate_adaptive.py --config configs/rad/adaptive.yaml --seed
-    {seed} --device {device} --output-dir {output_dir} --profile balanced
+  command: python tools/evaluate_adaptive_dataset.py --config configs/rad/adaptive.yaml --overlay configs/rad/matrix/selector_without_response.yaml
+    --seed {seed} --device {device} --output-dir {output_dir} --profile balanced
   config:
     method:
-      name: ablation
-      selector_inputs: leave_one_out
+      name: selector_without_response
+      fusion: dynamic
     selector:
-      input_mode: leave_one_out
+      mask_mode: train_and_infer
+      signals:
+        response: false
+        uncertainty: true
+        stability: true
+        complementarity: true
+        token_separation: true
+    adaptive:
+      lse_checkpoint: artifacts/checkpoints/lse/selector_without_response/lse_best.pt
   estimated_gpu_hours: 0.4
-  output_dir: artifacts/experiments/ablation_selector_loo
+  output_dir: artifacts/experiments/selector_without_response
+  tags:
+  - selector
+- id: selector_without_uncertainty
+  group: ablation
+  description: Selector ablation without uncertainty signal group (train_and_infer)
+  immutable: true
+  seed: 111
+  device: '{device}'
+  command: python tools/evaluate_adaptive_dataset.py --config configs/rad/adaptive.yaml --overlay configs/rad/matrix/selector_without_uncertainty.yaml
+    --seed {seed} --device {device} --output-dir {output_dir} --profile balanced
+  config:
+    method:
+      name: selector_without_uncertainty
+      fusion: dynamic
+    selector:
+      mask_mode: train_and_infer
+      signals:
+        response: true
+        uncertainty: false
+        stability: true
+        complementarity: true
+        token_separation: true
+    adaptive:
+      lse_checkpoint: artifacts/checkpoints/lse/selector_without_uncertainty/lse_best.pt
+  estimated_gpu_hours: 0.4
+  output_dir: artifacts/experiments/selector_without_uncertainty
+  tags:
+  - selector
+- id: selector_without_stability
+  group: ablation
+  description: Selector ablation without stability signal group (train_and_infer)
+  immutable: true
+  seed: 111
+  device: '{device}'
+  command: python tools/evaluate_adaptive_dataset.py --config configs/rad/adaptive.yaml --overlay configs/rad/matrix/selector_without_stability.yaml
+    --seed {seed} --device {device} --output-dir {output_dir} --profile balanced
+  config:
+    method:
+      name: selector_without_stability
+      fusion: dynamic
+    selector:
+      mask_mode: train_and_infer
+      signals:
+        response: true
+        uncertainty: true
+        stability: false
+        complementarity: true
+        token_separation: true
+    adaptive:
+      lse_checkpoint: artifacts/checkpoints/lse/selector_without_stability/lse_best.pt
+  estimated_gpu_hours: 0.4
+  output_dir: artifacts/experiments/selector_without_stability
+  tags:
+  - selector
+- id: selector_without_complementarity
+  group: ablation
+  description: Selector ablation without complementarity signal group (train_and_infer)
+  immutable: true
+  seed: 111
+  device: '{device}'
+  command: python tools/evaluate_adaptive_dataset.py --config configs/rad/adaptive.yaml --overlay configs/rad/matrix/selector_without_complementarity.yaml
+    --seed {seed} --device {device} --output-dir {output_dir} --profile balanced
+  config:
+    method:
+      name: selector_without_complementarity
+      fusion: dynamic
+    selector:
+      mask_mode: train_and_infer
+      signals:
+        response: true
+        uncertainty: true
+        stability: true
+        complementarity: false
+        token_separation: true
+    adaptive:
+      lse_checkpoint: artifacts/checkpoints/lse/selector_without_complementarity/lse_best.pt
+  estimated_gpu_hours: 0.4
+  output_dir: artifacts/experiments/selector_without_complementarity
+  tags:
+  - selector
+- id: selector_without_token_separation
+  group: ablation
+  description: Selector ablation without token_separation signal group (train_and_infer)
+  immutable: true
+  seed: 111
+  device: '{device}'
+  command: python tools/evaluate_adaptive_dataset.py --config configs/rad/adaptive.yaml --overlay configs/rad/matrix/selector_without_token_separation.yaml
+    --seed {seed} --device {device} --output-dir {output_dir} --profile balanced
+  config:
+    method:
+      name: selector_without_token_separation
+      fusion: dynamic
+    selector:
+      mask_mode: train_and_infer
+      signals:
+        response: true
+        uncertainty: true
+        stability: true
+        complementarity: true
+        token_separation: false
+    adaptive:
+      lse_checkpoint: artifacts/checkpoints/lse/selector_without_token_separation/lse_best.pt
+  estimated_gpu_hours: 0.4
+  output_dir: artifacts/experiments/selector_without_token_separation
   tags:
   - selector
 - id: ablation_kd_none
@@ -382,8 +532,8 @@ matrix:
   immutable: true
   seed: 111
   device: '{device}'
-  command: python tools/train_fusion.py --config configs/rad/fusion.yaml --seed {seed}
-    --device {device} --output-dir {output_dir}
+  command: python tools/train_fusion.py --config configs/rad/fusion.yaml --seed {seed} --device {device}
+    --output-dir {output_dir}
   config:
     method:
       name: ablation
@@ -401,8 +551,8 @@ matrix:
   immutable: true
   seed: 111
   device: '{device}'
-  command: python tools/train_fusion.py --config configs/rad/fusion.yaml --seed {seed}
-    --device {device} --output-dir {output_dir}
+  command: python tools/train_fusion.py --config configs/rad/fusion.yaml --seed {seed} --device {device}
+    --output-dir {output_dir}
   config:
     method:
       name: ablation
@@ -420,8 +570,8 @@ matrix:
   immutable: true
   seed: 111
   device: '{device}'
-  command: python tools/train_fusion.py --config configs/rad/fusion.yaml --seed {seed}
-    --device {device} --output-dir {output_dir}
+  command: python tools/train_fusion.py --config configs/rad/fusion.yaml --seed {seed} --device {device}
+    --output-dir {output_dir}
   config:
     method:
       name: ablation
@@ -439,8 +589,8 @@ matrix:
   immutable: true
   seed: 111
   device: '{device}'
-  command: python tools/train_fusion.py --config configs/rad/fusion.yaml --seed {seed}
-    --device {device} --output-dir {output_dir}
+  command: python tools/train_fusion.py --config configs/rad/fusion.yaml --seed {seed} --device {device}
+    --output-dir {output_dir}
   config:
     method:
       name: ablation
@@ -463,9 +613,8 @@ matrix:
   requires_gates:
   - fusion_stage_passed
   - lse_stage_passed
-  command: python tools/train_joint.py --config configs/rad/joint.yaml --fusion-checkpoint
-    artifacts/fusion/mvtec_seed111/checkpoints/best_gate_passed.pt --lse-checkpoint
-    artifacts/lse/mvtec_seed111/checkpoints/best_gate_passed.pt --seed {seed} --device
+  command: python tools/train_joint.py --config configs/rad/joint.yaml --fusion-checkpoint artifacts/fusion/mvtec_seed111/checkpoints/best_gate_passed.pt
+    --lse-checkpoint artifacts/lse/mvtec_seed111/checkpoints/best_gate_passed.pt --seed {seed} --device
     {device} --output-dir {output_dir} --allow-joint
   config:
     method:
