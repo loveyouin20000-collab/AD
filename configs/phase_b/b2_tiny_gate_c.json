@@ -1,0 +1,92 @@
+{
+  "schema_version": 1,
+  "specification_id": "b2_tiny_gate_c",
+  "transfer_direction": "mvtec_to_visa",
+  "source_dataset": "mvtec",
+  "forbidden_target_dataset": "visa",
+  "categories": [
+    "bottle",
+    "carpet"
+  ],
+  "splits": {
+    "training": {
+      "total": 16,
+      "per_category": 8,
+      "normal_per_category": 4,
+      "anomalous_per_category": 4
+    },
+    "calibration": {
+      "total": 8,
+      "per_category": 4,
+      "normal_per_category": 2,
+      "anomalous_per_category": 2
+    },
+    "evaluation": {
+      "total": 8,
+      "per_category": 4,
+      "normal_per_category": 2,
+      "anomalous_per_category": 2
+    }
+  },
+  "total_selected_samples": 32,
+  "label_requirements": {
+    "normal": 0,
+    "anomalous": 1,
+    "allowed_labels": [
+      0,
+      1
+    ],
+    "stratify_by": [
+      "category",
+      "image_label"
+    ]
+  },
+  "mask_requirements": {
+    "normal_mask_identity": null,
+    "anomalous_mask_required": true,
+    "anomalous_mask_must_exist": true
+  },
+  "seed": 111,
+  "stable_sample_id_rule": {
+    "algorithm": "sha256",
+    "canonical_encoding": "utf-8 compact sorted-key json",
+    "identity_fields": [
+      "dataset",
+      "category",
+      "source_split",
+      "anomaly_type",
+      "image_identity"
+    ],
+    "image_identity": "dataset-root-relative POSIX path",
+    "ordering": "ascending stable_sample_id before seeded stratification"
+  },
+  "execution_profile": {
+    "name": "frozen_deterministic_math",
+    "path": "configs/execution/frozen_deterministic_math.json",
+    "sha256": "7af8dba39633743da0380fef9710940cded655f68c9efa8f84f5a52aeddb3c8d"
+  },
+  "b1_base": {
+    "tag": "b1-strict-independent-v1",
+    "commit": "3a751b2784a50eb0a08ed49e1db2df0b53608ccc"
+  },
+  "fail_closed_requirements": [
+    "production_registry_mvtec_adapter_only",
+    "selected_categories_only",
+    "unknown_category_rejected",
+    "insufficient_stratum_rejected",
+    "invalid_label_rejected",
+    "missing_anomalous_mask_rejected",
+    "stable_id_collision_rejected",
+    "filesystem_order_independent",
+    "pairwise_disjoint_memberships",
+    "tests_fixtures_examples_synthetic_paths_rejected",
+    "forbidden_target_not_enumerated_opened_or_hashed",
+    "source_state_change_rejected",
+    "execution_profile_identity_required",
+    "immutable_runtime_attestation_required",
+    "seed_drift_rejected",
+    "output_collision_rejected",
+    "atomic_official_write_required",
+    "direct_tool_invocation_rejected"
+  ]
+}
