@@ -30,6 +30,53 @@ PRODUCTION_MVTEC_ROOT = Path("/root/autodl-tmp/data/mvtec")
 EXPECTED_PROFILE_SHA256 = (
     "7af8dba39633743da0380fef9710940cded655f68c9efa8f84f5a52aeddb3c8d"
 )
+EXPECTED_LEGACY_HASH_V1 = (
+    "0b9371deb6c55f359a14959c8b46ff50205191b1189a48ee380eafaf28c5791a"
+)
+EXPECTED_SCIENTIFIC_HASH_V2 = (
+    "91570da1fed6d7859d407196b10403581832ae0ff677a1ea7657ca76b91471f0"
+)
+REJECTED_INTERMEDIATE_HASH = (
+    "f840fd54f4385acda5af76f17d39e35251384f9ed56164b6b0769a0120ef6d88"
+)
+HASH_MIGRATION = (
+    "V1 mixed runtime provenance with science; f840fd54 was rejected because "
+    "it retained branch/worktree fields; V2 uses a strict scientific whitelist."
+)
+EXPECTED_STABLE_IDS = {
+    "0b2f3b31acc9e921f27741ce925748e51fc5ae9bafde688df4fdfa56d06c0568",
+    "110187c718114d1555fe49d7d51813c5f1e38630e40848a95c57421153fee3ed",
+    "1805392e5bbb2c23955b65954ca41529375d8e4b5dcb6cdb5843f6b45299377e",
+    "1a23cfbc654627fa40355296ef5b35c5c74aafb8cf930cc63e5ccb81d80c606e",
+    "21e574b912c19b6cc865795240bb63b590e49bc8c282b45ee4be86612518dc67",
+    "27132d1f08fb1ac31a64d08865646bb30bc979a0dcd45149b85c1c050d4a7ad4",
+    "334267832320d6574ef39f56a8429cd09f5892c67b985da72991628e1ace8e8f",
+    "356d42931fc7166a7043237f7c58ae5ae5035127e92d55907423e9612f29553a",
+    "39e5843992fb7946bc422b00a9dd5221a9edb0e89be3d96dd70b46ba0c84e9db",
+    "470b6ac9a792158887fa97063a475003b459996806bbbc9a29dac172a63fb75a",
+    "4cb7a040ad5db2f12aff0f5b4a3448e449e9a5f12485b3d994ab004fce5e8cf9",
+    "51515673757b1a05057d9b6078f8a063077bce33cb12d89cd70e8edae75de2f3",
+    "58bd40b827230b0647a47736e3fa703a2207a5756c12d5b244c09ea0c3b11ece",
+    "6af754e5bf30ca26b9e44cbfab026f2fcd1e89c476b65795e382ab5fcf7af743",
+    "6e6fe71d8c200d48d3bacac94cd99f0b4cbe444220486e65b9d935293af075cb",
+    "739b37724fed11a806b02d4251b6947c55f72437a73706afd0b919516e01f3ab",
+    "739d3b84f30449b0ca0d5e512413343a86a21ddf1cc6f790938fe6f040418539",
+    "75bfc286b425959334a3b2152bfab56dd36da505ef504bc070ab48029b15b4c6",
+    "807a6dd2cc9d1a76a19ee614912d6ad2889e88a8baa3454ac847f1ad0bdd1f05",
+    "8f68b6aad99aa55fce3a1cebe2a63ead6f84fec6073c6ab86cc684409c6335a8",
+    "b337dfcf7da6f062d5ddb741345a71dc6acfb4cd04c37883d2a449a389f79bdd",
+    "b65ec198775f295af3078c1ba0d082e0c24f4cdde8cd4d8524e48bb3b1a75459",
+    "b810eb668bb5e847eb8328d3f4855b787d96b01ace0322b4711377a12a5a7e8a",
+    "b8e2d4c737dc749801a5e0ee14644af086ef254a1047aba50498bd6d4535eded",
+    "c06a144bb9b47feeff8802d80e3aba03bdc7d0602ddcc39110e6bb748fd5f5e4",
+    "c0f7b822157ab6c76c7aa681f2f8cec7a54ccf8c25860cd6a4ea8997478fc102",
+    "ce4c220fe047beb3dc5f8ccf8f913b5a935eb494f15e500125dfbb5c94d3f68c",
+    "db65fd91e8de32de3d303f678c9a523e94f1109a6a92521c149e93ec629eecff",
+    "e037290913264076779a86b0f8f75b92f190f30563ceefe7b2193590d9d9c933",
+    "e2a2ef9c18627ab5773229786424db9f7159181d6c5098de65cf4aa9e701124a",
+    "f504d5d07ffd0d18fc38578dd4cce6fa41f7bb72b2fbf5a7dc1a9c81d3b61717",
+    "fd9fb5fda2c48f34ee2234e62e0d34ddfb72fa1a572fb3612ac8b667d5141c32",
+}
 RESULT_PREFIX = "B2_TINY_SPLIT_RESULT="
 AUDIT_PREFIX = "B2_TEST_AUDIT="
 SUBPROCESS_TIMEOUT_SECONDS = 60
@@ -276,6 +323,19 @@ exit_code = 0
 try:
     module = runpy.run_path(str(cli_path), run_name="b2_cli_contract")
     module["main"].__globals__["_apply_profile"] = lambda _repo: attestation
+    if case != "dirty_worktree":
+        real_derive_repository_identity = module["_derive_repository_identity"]
+        def controlled_clean_repository_identity(repo, specification, *, require_clean):
+            identity = real_derive_repository_identity(
+                repo,
+                specification,
+                require_clean=False,
+            )
+            identity["worktree_clean"] = True
+            return identity
+        module["main"].__globals__["_derive_repository_identity"] = (
+            controlled_clean_repository_identity
+        )
     exit_code = module["main"](cli_args)
 finally:
     print({AUDIT_PREFIX!r} + json.dumps(audit, sort_keys=True))
@@ -446,6 +506,22 @@ def test_direct_invocation_fails_before_registry_or_artifact_creation(tmp_path: 
     assert not (output / run_id).exists()
 
 
+def test_dirty_official_run_fails_before_registry_or_artifact_creation(
+    tmp_path: Path,
+) -> None:
+    marker = REPO_ROOT / ".b2-dirty-worktree-test"
+    marker.write_text("dirty\n", encoding="utf-8")
+    try:
+        proc, _, output = _run_cli(tmp_path, case="dirty_worktree")
+    finally:
+        marker.unlink(missing_ok=True)
+
+    assert proc.returncode == 1
+    assert "B2_WORKTREE_DIRTY" in proc.stdout + proc.stderr
+    assert _audit(proc)["registry_calls"] == []
+    assert not (output / _test_run_id(tmp_path)).exists()
+
+
 def test_valid_dry_run_performs_complete_in_memory_validation_and_writes_nothing(
     tmp_path: Path,
 ) -> None:
@@ -454,16 +530,31 @@ def test_valid_dry_run_performs_complete_in_memory_validation_and_writes_nothing
     payload = _result(proc)
     audit = _audit(proc)
     assert payload["mode"] == "dry-run"
-    assert payload["canonical_scientific_sha256"] == hashlib.sha256(
+    assert payload["canonical_scientific_hash_v2"] == hashlib.sha256(
         json.dumps(
-            payload["canonical_scientific_content"],
+            payload["canonical_scientific_content_v2"],
             sort_keys=True,
             separators=(",", ":"),
             ensure_ascii=False,
         ).encode("utf-8")
     ).hexdigest()
+    assert payload["canonical_scientific_hash_v2"] == EXPECTED_SCIENTIFIC_HASH_V2
+    selected_ids = {
+        sample["stable_sample_id"]
+        for split in ("training", "calibration", "evaluation")
+        for sample in payload["official_manifest"]["splits"][split]
+    }
+    assert selected_ids == EXPECTED_STABLE_IDS
     assert payload["official_manifest"]["source"]["dataset"] == "mvtec"
     assert payload["official_manifest"]["status"] == "passed"
+    assert payload["official_manifest"]["scientific_hash_contract"] == {
+        "active_version": 2,
+        "legacy_canonical_hash_v1": EXPECTED_LEGACY_HASH_V1,
+        "rejected_intermediate_candidate": REJECTED_INTERMEDIATE_HASH,
+        "canonical_scientific_hash_v2": EXPECTED_SCIENTIFIC_HASH_V2,
+        "migration": HASH_MIGRATION,
+    }
+    assert payload["official_manifest"]["runtime_attestation"]["environment"]
     validation = payload["validation"]
     assert set(validation) == {
         "execution_profile_attestation",
@@ -524,8 +615,8 @@ def test_dry_run_hash_equals_subsequent_official_hash_and_manifest_is_unique(
     assert manifests == [output / run_id / "split_manifest.json"]
     manifest = json.loads(manifests[0].read_text(encoding="utf-8"))
     assert manifest == official_payload["official_manifest"]
-    assert dry_payload["canonical_scientific_sha256"] == (
-        official_payload["canonical_scientific_sha256"]
+    assert dry_payload["canonical_scientific_hash_v2"] == (
+        official_payload["canonical_scientific_hash_v2"]
     )
     attested = _audit(official_proc)["attestation_provenance"]
     assert set(attested) == {
@@ -548,8 +639,8 @@ def test_repeated_dry_run_has_no_collision_lock_temp_or_atomic_replace(
         dry_run=True,
     )
     assert first.returncode == second.returncode == 0
-    assert _result(first)["canonical_scientific_sha256"] == (
-        _result(second)["canonical_scientific_sha256"]
+    assert _result(first)["canonical_scientific_hash_v2"] == (
+        _result(second)["canonical_scientific_hash_v2"]
     )
     assert _audit(first)["os_replace_calls"] == _audit(second)["os_replace_calls"] == []
     assert _audit(first)["output_mutations"] == _audit(second)["output_mutations"] == []

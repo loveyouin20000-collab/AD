@@ -69,6 +69,13 @@
     "tag": "b1-strict-independent-v1",
     "commit": "3a751b2784a50eb0a08ed49e1db2df0b53608ccc"
   },
+  "scientific_hash_contract": {
+    "active_version": 2,
+    "legacy_canonical_hash_v1": "0b9371deb6c55f359a14959c8b46ff50205191b1189a48ee380eafaf28c5791a",
+    "rejected_intermediate_candidate": "f840fd54f4385acda5af76f17d39e35251384f9ed56164b6b0769a0120ef6d88",
+    "canonical_scientific_hash_v2": "91570da1fed6d7859d407196b10403581832ae0ff677a1ea7657ca76b91471f0",
+    "migration": "V1 mixed runtime provenance with science; f840fd54 was rejected because it retained branch/worktree fields; V2 uses a strict scientific whitelist."
+  },
   "fail_closed_requirements": [
     "production_registry_mvtec_adapter_only",
     "selected_categories_only",

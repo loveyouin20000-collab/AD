@@ -15,6 +15,8 @@ from typing import Any, NoReturn
 
 RESULT_PREFIX = "B2_TINY_SPLIT_RESULT="
 APPROVED_SEED = 111
+EXPECTED_B1_TAG = "b1-strict-independent-v1"
+EXPECTED_B1_COMMIT = "3a751b2784a50eb0a08ed49e1db2df0b53608ccc"
 SAFE_RUN_ID = re.compile(r"[A-Za-z0-9][A-Za-z0-9._-]{0,127}\Z")
 UTC_TIMESTAMP = re.compile(r"\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}Z\Z")
 VISA_CATEGORIES = frozenset(
@@ -118,9 +120,9 @@ def _validate_creation_timestamp(value: str) -> str:
     return value
 
 
-def _git(repo: Path, *arguments: str) -> str:
+def _run_git(repo: Path, *arguments: str) -> subprocess.CompletedProcess[str]:
     try:
-        completed = subprocess.run(
+        return subprocess.run(
             ["git", "-C", str(repo), *arguments],
             check=False,
             capture_output=True,
@@ -128,18 +130,25 @@ def _git(repo: Path, *arguments: str) -> str:
         )
     except OSError as exc:
         _fail("B2_REPOSITORY_IDENTITY_UNAVAILABLE", f"cannot execute git: {exc}")
+
+
+def _git(repo: Path, *arguments: str, allow_empty: bool = False) -> str:
+    completed = _run_git(repo, *arguments)
     if completed.returncode != 0:
         detail = completed.stderr.strip() or completed.stdout.strip() or "git failed"
         _fail("B2_REPOSITORY_IDENTITY_UNAVAILABLE", detail)
     value = completed.stdout.strip()
-    if not value:
+    if not value and not allow_empty:
         _fail("B2_REPOSITORY_IDENTITY_UNAVAILABLE", "git returned an empty identity")
     return value
 
 
 def _derive_repository_identity(
-    repo: Path, specification: Mapping[str, Any]
-) -> dict[str, str]:
+    repo: Path,
+    specification: Mapping[str, Any],
+    *,
+    require_clean: bool,
+) -> dict[str, Any]:
     base = specification.get("b1_base")
     if not isinstance(base, Mapping):
         _fail("B2_CONFIG_SCHEMA_INVALID", "configuration is missing b1_base")
@@ -147,23 +156,64 @@ def _derive_repository_identity(
     configured_base_commit = base.get("commit")
     if not isinstance(base_tag, str) or not isinstance(configured_base_commit, str):
         _fail("B2_CONFIG_SCHEMA_INVALID", "b1_base tag and commit must be strings")
+    if base_tag != EXPECTED_B1_TAG or configured_base_commit != EXPECTED_B1_COMMIT:
+        _fail(
+            "B2_REPOSITORY_IDENTITY_MISMATCH",
+            "configuration does not pin the accepted B1 tag and commit",
+        )
 
     worktree = Path(_git(repo, "rev-parse", "--show-toplevel")).resolve()
     head = _git(repo, "rev-parse", "HEAD")
-    branch = _git(repo, "branch", "--show-current")
+    branch = _git(repo, "branch", "--show-current", allow_empty=True)
     derived_base_commit = _git(repo, "rev-parse", f"{base_tag}^{{commit}}")
     if derived_base_commit != configured_base_commit:
         _fail(
             "B2_REPOSITORY_IDENTITY_MISMATCH",
             "configured base commit does not resolve from the configured base tag",
         )
-    return {
-        "base_tag": base_tag,
-        "base_commit": derived_base_commit,
+    ancestry = _run_git(repo, "merge-base", "--is-ancestor", configured_base_commit, head)
+    if ancestry.returncode == 1:
+        _fail(
+            "B2_REPOSITORY_ANCESTRY_MISMATCH",
+            "current HEAD is not a descendant of the accepted B1 commit",
+        )
+    if ancestry.returncode != 0:
+        detail = ancestry.stderr.strip() or ancestry.stdout.strip() or "git failed"
+        _fail("B2_REPOSITORY_IDENTITY_UNAVAILABLE", detail)
+    worktree_clean = not bool(
+        _git(repo, "status", "--porcelain", "--untracked-files=all", allow_empty=True)
+    )
+    if require_clean and not worktree_clean:
+        _fail(
+            "B2_WORKTREE_DIRTY",
+            "authoritative official generation requires a clean worktree",
+        )
+    identity = {
+        "b1_base_tag": base_tag,
+        "b1_base_commit": derived_base_commit,
+        "generation_git_commit": head,
+        "generation_branch": branch,
+        "worktree_clean": worktree_clean,
         "worktree_path": str(worktree),
-        "branch": branch,
-        "worktree_git_sha": head,
     }
+    _validate_repository_identity(identity, observed_head=head)
+    return identity
+
+
+def _validate_repository_identity(
+    identity: Mapping[str, Any],
+    *,
+    observed_head: str,
+) -> None:
+    if (
+        identity.get("b1_base_tag") != EXPECTED_B1_TAG
+        or identity.get("b1_base_commit") != EXPECTED_B1_COMMIT
+        or identity.get("generation_git_commit") != observed_head
+    ):
+        _fail(
+            "B2_REPOSITORY_IDENTITY_MISMATCH",
+            "manifest repository provenance differs from observed Git identity",
+        )
 
 
 def _thaw(value: Any) -> Any:
@@ -215,6 +265,8 @@ def _result_payload(
     return {
         "mode": "dry-run" if dry_run else "official",
         "official_manifest": _thaw(manifest),
+        "canonical_scientific_content_v2": _thaw(scientific_content),
+        "canonical_scientific_hash_v2": scientific_sha256,
         "canonical_scientific_content": _thaw(scientific_content),
         "canonical_scientific_sha256": scientific_sha256,
         "validation": validation,
@@ -229,7 +281,7 @@ def _execute(
     from rad.artifacts import atomic_write_json
     from rad.phase_b.b2_tiny_split import (
         build_split_manifest,
-        canonical_scientific_content,
+        canonical_scientific_content_v2,
         collect_source_records,
     )
 
@@ -246,15 +298,14 @@ def _execute(
             f"output base must be exactly {approved_output.resolve()}",
         )
 
-    repository_identity = _derive_repository_identity(repo, specification)
+    repository_identity = _derive_repository_identity(
+        repo,
+        specification,
+        require_clean=not bool(args.dry_run),
+    )
     run_directory = output_base / run_id
-    if not args.dry_run:
-        try:
-            run_directory.mkdir(parents=True, exist_ok=False)
-        except FileExistsError:
-            _fail("B2_OUTPUT_COLLISION", f"run directory already exists: {run_directory}")
-        except OSError as exc:
-            _fail("B2_OUTPUT_CREATION_FAILED", f"cannot reserve run directory: {exc}")
+    if not args.dry_run and run_directory.exists():
+        _fail("B2_OUTPUT_COLLISION", f"run directory already exists: {run_directory}")
 
     source_snapshot = collect_source_records(
         source_root=Path(args.dataset_root),
@@ -271,7 +322,7 @@ def _execute(
             "output_directory": str(run_directory.resolve()),
         },
     )
-    scientific_content = canonical_scientific_content(built.manifest)
+    scientific_content = canonical_scientific_content_v2(built.manifest)
     payload = _result_payload(
         dry_run=bool(args.dry_run),
         manifest=built.manifest,
@@ -281,8 +332,21 @@ def _execute(
         source_snapshot=source_snapshot,
     )
     if not args.dry_run:
+        final_repository_identity = _derive_repository_identity(
+            repo,
+            specification,
+            require_clean=True,
+        )
+        if final_repository_identity != repository_identity:
+            _fail(
+                "B2_REPOSITORY_IDENTITY_MISMATCH",
+                "repository identity changed during official generation",
+            )
         try:
+            run_directory.mkdir(parents=True, exist_ok=False)
             atomic_write_json(run_directory / "split_manifest.json", _thaw(built.manifest))
+        except FileExistsError:
+            _fail("B2_OUTPUT_COLLISION", f"run directory already exists: {run_directory}")
         except Exception as exc:
             _fail("B2_ATOMIC_WRITE_FAILED", f"official manifest publication failed: {exc}")
     return payload

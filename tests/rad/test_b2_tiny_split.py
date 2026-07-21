@@ -29,7 +29,23 @@ PROFILE_PATH = REPO_ROOT / "configs" / "execution" / "frozen_deterministic_math.
 EXPECTED_PROFILE_SHA256 = (
     "7af8dba39633743da0380fef9710940cded655f68c9efa8f84f5a52aeddb3c8d"
 )
+EXPECTED_SPECIFICATION_SHA256 = (
+    "06ceb68c7b89a70ce9ead5e38680c9fe158747dace337d3f901d48393bb7b630"
+)
 EXPECTED_BASE_COMMIT = "3a751b2784a50eb0a08ed49e1db2df0b53608ccc"
+EXPECTED_LEGACY_HASH_V1 = (
+    "0b9371deb6c55f359a14959c8b46ff50205191b1189a48ee380eafaf28c5791a"
+)
+EXPECTED_SCIENTIFIC_HASH_V2 = (
+    "91570da1fed6d7859d407196b10403581832ae0ff677a1ea7657ca76b91471f0"
+)
+REJECTED_INTERMEDIATE_HASH = (
+    "f840fd54f4385acda5af76f17d39e35251384f9ed56164b6b0769a0120ef6d88"
+)
+HASH_MIGRATION = (
+    "V1 mixed runtime provenance with science; f840fd54 was rejected because "
+    "it retained branch/worktree fields; V2 uses a strict scientific whitelist."
+)
 EXPECTED_SPLIT_COUNTS = {"training": 16, "calibration": 8, "evaluation": 8}
 EXPECTED_PER_CATEGORY = {"training": 8, "calibration": 4, "evaluation": 4}
 EXPECTED_PER_CATEGORY_LABEL = {"training": 4, "calibration": 2, "evaluation": 2}
@@ -39,6 +55,8 @@ REQUIRED_API = {
     "build_split_manifest",
     "canonical_scientific_content",
     "canonical_scientific_sha256",
+    "canonical_scientific_content_v2",
+    "canonical_scientific_hash_v2",
     "collect_source_records",
 }
 
@@ -180,6 +198,12 @@ class _ControlledAttestationFixture:
     def __init__(self) -> None:
         self.attestation_sha256 = "a" * 64
 
+    def canonical_attestation(self) -> dict[str, Any]:
+        return {
+            "schema_version": 1,
+            "environment": {"python": "controlled"},
+        }
+
 
 def _controlled_attestation() -> _ControlledAttestationFixture:
     return _ControlledAttestationFixture()
@@ -210,11 +234,12 @@ def _install_attestation_boundary(
 
 def _repository_identity() -> dict[str, Any]:
     return {
-        "base_tag": "b1-strict-independent-v1",
-        "base_commit": EXPECTED_BASE_COMMIT,
+        "b1_base_tag": "b1-strict-independent-v1",
+        "b1_base_commit": EXPECTED_BASE_COMMIT,
+        "generation_git_commit": "166756dfd0eaeddd1bdf95be1610c7e87dcc5945",
+        "generation_branch": "phase-b2-tiny-gate-c",
+        "worktree_clean": True,
         "worktree_path": "/root/autodl-tmp/AD-phase-b2-gate-c",
-        "branch": "phase-b2-tiny-gate-c",
-        "worktree_git_sha": EXPECTED_BASE_COMMIT,
     }
 
 
@@ -349,6 +374,13 @@ def test_tracked_specification_pins_the_complete_tiny_split_contract() -> None:
     assert spec["b1_base"] == {
         "tag": "b1-strict-independent-v1",
         "commit": EXPECTED_BASE_COMMIT,
+    }
+    assert spec["scientific_hash_contract"] == {
+        "active_version": 2,
+        "legacy_canonical_hash_v1": EXPECTED_LEGACY_HASH_V1,
+        "rejected_intermediate_candidate": REJECTED_INTERMEDIATE_HASH,
+        "canonical_scientific_hash_v2": EXPECTED_SCIENTIFIC_HASH_V2,
+        "migration": HASH_MIGRATION,
     }
 
 
@@ -644,10 +676,8 @@ def test_execution_profile_mismatch_fails_closed(
 @pytest.mark.parametrize(
     ("field", "value"),
     [
-        ("base_tag", "wrong-tag"),
-        ("base_commit", "0" * 40),
-        ("branch", "wrong-branch"),
-        ("worktree_path", "/tmp/wrong-worktree"),
+        ("b1_base_tag", "wrong-tag"),
+        ("b1_base_commit", "0" * 40),
     ],
 )
 def test_repository_identity_drift_fails_closed(
@@ -865,10 +895,12 @@ def test_manifest_records_source_spec_profile_base_and_worktree_identity(
         "run_id",
         "creation_timestamp",
         "output_directory",
-        "git_commit",
-        "branch",
-        "base",
-        "worktree",
+        "b1_base_tag",
+        "b1_base_commit",
+        "generation_git_commit",
+        "generation_branch",
+        "generation_worktree_path",
+        "worktree_clean",
         "transfer_direction",
         "source",
         "forbidden_target_dataset",
@@ -876,6 +908,8 @@ def test_manifest_records_source_spec_profile_base_and_worktree_identity(
         "seed",
         "specification",
         "execution_profile",
+        "runtime_attestation",
+        "scientific_hash_contract",
         "splits",
         "count_audit",
         "overlap_audit",
@@ -885,8 +919,13 @@ def test_manifest_records_source_spec_profile_base_and_worktree_identity(
     }
     assert manifest["schema_version"] == 1
     assert manifest["status"] == "passed"
-    assert manifest["git_commit"] == EXPECTED_BASE_COMMIT
-    assert manifest["branch"] == "phase-b2-tiny-gate-c"
+    assert manifest["generation_git_commit"] == (
+        "166756dfd0eaeddd1bdf95be1610c7e87dcc5945"
+    )
+    assert manifest["generation_branch"] == "phase-b2-tiny-gate-c"
+    assert manifest["generation_worktree_path"] == (
+        "/root/autodl-tmp/AD-phase-b2-gate-c"
+    )
     assert manifest["transfer_direction"] == "mvtec_to_visa"
     assert manifest["forbidden_target_dataset"] == "visa"
     assert manifest["categories"] == ["bottle", "carpet"]
@@ -906,21 +945,16 @@ def test_manifest_records_source_spec_profile_base_and_worktree_identity(
     assert manifest["specification"] == {
         "specification_id": "b2_tiny_gate_c",
         "path": "configs/phase_b/b2_tiny_gate_c.json",
-        "sha256": hashlib.sha256(SPEC_PATH.read_bytes()).hexdigest(),
+        "sha256": EXPECTED_SPECIFICATION_SHA256,
     }
     assert manifest["execution_profile"] == {
         "execution_profile_name": "frozen_deterministic_math",
         "execution_profile_sha256": EXPECTED_PROFILE_SHA256,
         "runtime_attestation_sha256": _controlled_attestation().attestation_sha256,
     }
-    assert manifest["base"] == {
-        "tag": "b1-strict-independent-v1",
-        "commit": EXPECTED_BASE_COMMIT,
-    }
-    assert manifest["worktree"] == {
-        "path": "/root/autodl-tmp/AD-phase-b2-gate-c",
-        "branch": "phase-b2-tiny-gate-c",
-        "git_sha": EXPECTED_BASE_COMMIT,
+    assert manifest["runtime_attestation"] == {
+        "schema_version": 1,
+        "environment": {"python": "controlled"},
     }
     selected = [
         sample
@@ -1043,33 +1077,100 @@ def test_manifest_construction_is_pure_after_source_collection(
     assert result.scientific_sha256
 
 
-def test_canonical_scientific_hash_excludes_exactly_run_metadata(
+def test_canonical_scientific_hash_excludes_run_metadata_and_repository_provenance(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     module = _subject()
     manifest = dict(
         _manifest(_build(module, monkeypatch, tmp_path / "controlled_mvtec"))
     )
-    canonical = module.canonical_scientific_content(manifest)
-    assert {"run_id", "creation_timestamp", "output_directory"}.isdisjoint(canonical)
-    expected = copy.deepcopy(manifest)
-    for key in ("run_id", "creation_timestamp", "output_directory"):
-        expected.pop(key)
-    assert canonical == expected
+    canonical = module.canonical_scientific_content_v2(manifest)
+    excluded = {
+        "run_id",
+        "creation_timestamp",
+        "output_directory",
+        "generation_git_commit",
+        "generation_branch",
+        "generation_worktree_path",
+        "worktree_clean",
+        "scientific_hash_contract",
+        "runtime_attestation",
+    }
+    assert excluded.isdisjoint(canonical)
+    assert set(canonical) == {
+        "b1_base_tag",
+        "b1_base_commit",
+        "transfer_direction",
+        "source_dataset",
+        "source_categories",
+        "seed",
+        "split_specification_sha256",
+        "enumerated_source_list_sha256",
+        "execution_profile_sha256",
+        "selected_samples",
+    }
+    assert {
+        key: manifest[key]
+        for key in (
+            "b1_base_tag",
+            "b1_base_commit",
+            "generation_git_commit",
+            "generation_branch",
+            "generation_worktree_path",
+            "worktree_clean",
+        )
+    } == {
+        "b1_base_tag": "b1-strict-independent-v1",
+        "b1_base_commit": EXPECTED_BASE_COMMIT,
+        "generation_git_commit": "166756dfd0eaeddd1bdf95be1610c7e87dcc5945",
+        "generation_branch": "phase-b2-tiny-gate-c",
+        "generation_worktree_path": "/root/autodl-tmp/AD-phase-b2-gate-c",
+        "worktree_clean": True,
+    }
     digest = hashlib.sha256(
         json.dumps(
-            expected,
+            canonical,
             sort_keys=True,
             separators=(",", ":"),
             ensure_ascii=False,
         ).encode("utf-8")
     ).hexdigest()
-    assert module.canonical_scientific_sha256(manifest) == digest
+    assert module.canonical_scientific_hash_v2(manifest) == digest
 
-    for key in ("run_id", "creation_timestamp", "output_directory"):
+    for key in (
+        "run_id",
+        "creation_timestamp",
+        "output_directory",
+        "generation_git_commit",
+        "generation_branch",
+        "generation_worktree_path",
+        "worktree_clean",
+        "runtime_attestation",
+    ):
         changed = copy.deepcopy(manifest)
         changed[key] = f"changed-{key}"
-        assert module.canonical_scientific_sha256(changed) == digest
+        assert module.canonical_scientific_hash_v2(changed) == digest
+    for key, value in (
+        ("git_commit", "0" * 40),
+        ("branch", "other-branch"),
+        ("worktree", {"path": "/other/machine", "git_sha": "0" * 40}),
+    ):
+        changed = copy.deepcopy(manifest)
+        changed[key] = value
+        assert module.canonical_scientific_hash_v2(changed) == digest
+
+    changed_attestation = copy.deepcopy(manifest)
+    changed_attestation["execution_profile"]["runtime_attestation_sha256"] = "0" * 64
+    assert module.canonical_scientific_hash_v2(changed_attestation) == digest
+    assert "runtime_attestation_sha256" not in canonical
+
+    assert manifest["scientific_hash_contract"] == {
+        "active_version": 2,
+        "legacy_canonical_hash_v1": EXPECTED_LEGACY_HASH_V1,
+        "rejected_intermediate_candidate": REJECTED_INTERMEDIATE_HASH,
+        "canonical_scientific_hash_v2": module.canonical_scientific_hash_v2(manifest),
+        "migration": HASH_MIGRATION,
+    }
 
 
 @pytest.mark.parametrize(
@@ -1087,8 +1188,7 @@ def test_canonical_scientific_hash_excludes_exactly_run_metadata(
             "execution-profile hash",
             lambda m: m["execution_profile"].update(execution_profile_sha256="0" * 64),
         ),
-        ("base identity", lambda m: m["base"].update(commit="0" * 40)),
-        ("worktree identity", lambda m: m["worktree"].update(git_sha="0" * 40)),
+        ("base identity", lambda m: m.update(b1_base_commit="0" * 40)),
     ],
 )
 def test_canonical_hash_includes_every_required_scientific_field(
@@ -1101,6 +1201,6 @@ def test_canonical_hash_includes_every_required_scientific_field(
     manifest = copy.deepcopy(
         dict(_manifest(_build(module, monkeypatch, tmp_path / "controlled_mvtec")))
     )
-    before = module.canonical_scientific_sha256(manifest)
+    before = module.canonical_scientific_hash_v2(manifest)
     mutate(manifest)
-    assert module.canonical_scientific_sha256(manifest) != before, scientific_field
+    assert module.canonical_scientific_hash_v2(manifest) != before, scientific_field

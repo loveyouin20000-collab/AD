@@ -25,8 +25,19 @@ _SPECIFICATION_SHA256 = (
 _PROFILE_SHA256 = "7af8dba39633743da0380fef9710940cded655f68c9efa8f84f5a52aeddb3c8d"
 _BASE_COMMIT = "3a751b2784a50eb0a08ed49e1db2df0b53608ccc"
 _BASE_TAG = "b1-strict-independent-v1"
-_BRANCH = "phase-b2-tiny-gate-c"
-_WORKTREE = "/root/autodl-tmp/AD-phase-b2-gate-c"
+_LEGACY_CANONICAL_HASH_V1 = (
+    "0b9371deb6c55f359a14959c8b46ff50205191b1189a48ee380eafaf28c5791a"
+)
+_CANONICAL_SCIENTIFIC_HASH_V2 = (
+    "91570da1fed6d7859d407196b10403581832ae0ff677a1ea7657ca76b91471f0"
+)
+_REJECTED_INTERMEDIATE_HASH = (
+    "f840fd54f4385acda5af76f17d39e35251384f9ed56164b6b0769a0120ef6d88"
+)
+_HASH_MIGRATION = (
+    "V1 mixed runtime provenance with science; f840fd54 was rejected because "
+    "it retained branch/worktree fields; V2 uses a strict scientific whitelist."
+)
 _CATEGORIES = ("bottle", "carpet")
 _SPLIT_ORDER = ("training", "calibration", "evaluation")
 _FORBIDDEN_PATH_COMPONENTS = frozenset({"tests", "fixtures", "examples", "synthetic"})
@@ -188,6 +199,22 @@ def _fixed_specification() -> dict[str, Any]:
     }
 
 
+def _hash_contract() -> dict[str, Any]:
+    return {
+        "active_version": 2,
+        "legacy_canonical_hash_v1": _LEGACY_CANONICAL_HASH_V1,
+        "rejected_intermediate_candidate": _REJECTED_INTERMEDIATE_HASH,
+        "canonical_scientific_hash_v2": _CANONICAL_SCIENTIFIC_HASH_V2,
+        "migration": _HASH_MIGRATION,
+    }
+
+
+def _scientific_specification(specification: Mapping[str, Any]) -> dict[str, Any]:
+    scientific = copy.deepcopy(dict(specification))
+    scientific.pop("scientific_hash_contract", None)
+    return scientific
+
+
 def _validate_specification(specification: Mapping[str, Any]) -> None:
     categories = specification.get("categories")
     if categories != list(_CATEGORIES):
@@ -197,7 +224,10 @@ def _validate_specification(specification: Mapping[str, Any]) -> None:
         _fail("B2_EXECUTION_PROFILE_MISMATCH", "execution profile hash is not approved")
     if specification.get("source_dataset") != "mvtec":
         _fail("B2_TARGET_DATASET_FORBIDDEN", "the only permitted source is MVTec")
-    if dict(specification) != _fixed_specification():
+    if (
+        _scientific_specification(specification) != _fixed_specification()
+        or specification.get("scientific_hash_contract") != _hash_contract()
+    ):
         _fail("B2_SPECIFICATION_MISMATCH", "specification differs from the fixed contract")
 
 
@@ -286,8 +316,15 @@ def collect_source_records(
         )
 
     canonical.sort(key=lambda item: item["stable_sample_id"])
-    spec_path = Path(__file__).resolve().parents[2] / _SPECIFICATION_PATH
-    specification_sha256 = hashlib.sha256(spec_path.read_bytes()).hexdigest()
+    scientific_specification_bytes = (
+        json.dumps(
+            _scientific_specification(specification),
+            indent=2,
+            ensure_ascii=False,
+        )
+        + "\n"
+    ).encode("utf-8")
+    specification_sha256 = hashlib.sha256(scientific_specification_bytes).hexdigest()
     if specification_sha256 != _SPECIFICATION_SHA256:
         _fail(
             "B2_SPECIFICATION_HASH_MISMATCH",
@@ -431,14 +468,17 @@ def _attestation_provenance(attestation: Any) -> dict[str, str]:
 
 
 def _validate_repository_identity(identity: Mapping[str, Any]) -> None:
-    expected = {
-        "base_tag": _BASE_TAG,
-        "base_commit": _BASE_COMMIT,
-        "worktree_path": _WORKTREE,
-        "branch": _BRANCH,
-        "worktree_git_sha": _BASE_COMMIT,
-    }
-    if dict(identity) != expected:
+    generation_commit = identity.get("generation_git_commit")
+    if (
+        identity.get("b1_base_tag") != _BASE_TAG
+        or identity.get("b1_base_commit") != _BASE_COMMIT
+        or not isinstance(generation_commit, str)
+        or len(generation_commit) != 40
+        or any(character not in "0123456789abcdef" for character in generation_commit)
+        or not isinstance(identity.get("generation_branch"), str)
+        or not isinstance(identity.get("worktree_path"), str)
+        or not isinstance(identity.get("worktree_clean"), bool)
+    ):
         _fail("B2_REPOSITORY_IDENTITY_MISMATCH", "repository identity drifted")
 
 
@@ -644,14 +684,12 @@ def build_split_manifest(
         "run_id": run_metadata["run_id"],
         "creation_timestamp": run_metadata["creation_timestamp"],
         "output_directory": run_metadata["output_directory"],
-        "git_commit": _BASE_COMMIT,
-        "branch": _BRANCH,
-        "base": {"tag": _BASE_TAG, "commit": _BASE_COMMIT},
-        "worktree": {
-            "path": _WORKTREE,
-            "branch": _BRANCH,
-            "git_sha": _BASE_COMMIT,
-        },
+        "b1_base_tag": repository_identity["b1_base_tag"],
+        "b1_base_commit": repository_identity["b1_base_commit"],
+        "generation_git_commit": repository_identity["generation_git_commit"],
+        "generation_branch": repository_identity["generation_branch"],
+        "generation_worktree_path": repository_identity["worktree_path"],
+        "worktree_clean": repository_identity["worktree_clean"],
         "transfer_direction": "mvtec_to_visa",
         "source": {
             "dataset": "mvtec",
@@ -670,6 +708,9 @@ def build_split_manifest(
             "sha256": source_snapshot.specification_sha256,
         },
         "execution_profile": provenance,
+        "runtime_attestation": _thaw_for_json(
+            runtime_attestation.canonical_attestation()
+        ),
         "splits": selected,
         "count_audit": count_audit,
         "overlap_audit": overlap_audit,
@@ -677,20 +718,64 @@ def build_split_manifest(
         "fixture_path_audit": fixture_path_audit,
         "mask_audit": mask_audit,
     }
-    scientific_sha256 = canonical_scientific_sha256(manifest)
+    scientific_sha256 = canonical_scientific_hash_v2(manifest)
+    manifest["scientific_hash_contract"] = {
+        "active_version": 2,
+        "legacy_canonical_hash_v1": _LEGACY_CANONICAL_HASH_V1,
+        "rejected_intermediate_candidate": _REJECTED_INTERMEDIATE_HASH,
+        "canonical_scientific_hash_v2": scientific_sha256,
+        "migration": _HASH_MIGRATION,
+    }
     return BuiltSplitManifest(manifest=manifest, scientific_sha256=scientific_sha256)
 
 
-def canonical_scientific_content(manifest: Mapping[str, Any]) -> dict[str, Any]:
-    """Deep-copy a manifest and remove only non-scientific run metadata."""
+def canonical_scientific_content_v2(manifest: Mapping[str, Any]) -> dict[str, Any]:
+    """Project the strict V2 whitelist from current or historical manifests."""
 
-    canonical = copy.deepcopy(dict(manifest))
-    for key in ("run_id", "creation_timestamp", "output_directory"):
-        canonical.pop(key, None)
-    return canonical
+    historical_base = manifest.get("base")
+    if not isinstance(historical_base, Mapping):
+        historical_base = {}
+    source = manifest["source"]
+    specification = manifest["specification"]
+    execution_profile = manifest["execution_profile"]
+    selected_samples = [
+        {
+            "stable_sample_id": row["stable_sample_id"],
+            "category": row["category"],
+            "image_label": row["image_label"],
+            "mask_identity": row["mask_identity"],
+            "membership": row["membership"],
+        }
+        for split in _SPLIT_ORDER
+        for row in manifest["splits"][split]
+    ]
+    return {
+        "b1_base_tag": manifest.get("b1_base_tag", historical_base.get("tag")),
+        "b1_base_commit": manifest.get("b1_base_commit", historical_base.get("commit")),
+        "transfer_direction": manifest["transfer_direction"],
+        "source_dataset": source["dataset"],
+        "source_categories": copy.deepcopy(manifest["categories"]),
+        "seed": manifest["seed"],
+        "split_specification_sha256": specification["sha256"],
+        "enumerated_source_list_sha256": source["source_list_sha256"],
+        "execution_profile_sha256": execution_profile["execution_profile_sha256"],
+        "selected_samples": selected_samples,
+    }
+
+
+def canonical_scientific_hash_v2(manifest: Mapping[str, Any]) -> str:
+    """Hash V2 canonical scientific content without machine provenance."""
+
+    return _canonical_sha256(canonical_scientific_content_v2(manifest))
+
+
+def canonical_scientific_content(manifest: Mapping[str, Any]) -> dict[str, Any]:
+    """Compatibility alias for the active V2 scientific-content contract."""
+
+    return canonical_scientific_content_v2(manifest)
 
 
 def canonical_scientific_sha256(manifest: Mapping[str, Any]) -> str:
-    """Hash canonical scientific content without embedding a self-reference."""
+    """Compatibility alias for the active V2 scientific hash."""
 
-    return _canonical_sha256(canonical_scientific_content(manifest))
+    return canonical_scientific_hash_v2(manifest)
