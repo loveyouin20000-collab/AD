@@ -16,6 +16,8 @@ RESULT_PREFIX = "B2_TEACHER_CACHE_RESULT="
 APPROVED_SEED = 111
 EXPECTED_B2_TAG = "b2-tiny-split-v1"
 EXPECTED_B2_COMMIT = "18bac047227754c975b23b46842458a5b41d5e2a"
+EXPECTED_CONTRACT_TAG = "b2-teacher-cache-contract-v1"
+MVTEC_ROOT = Path("/root/autodl-tmp/data/mvtec")
 
 
 class B2TeacherCacheCLIError(RuntimeError):
@@ -113,6 +115,28 @@ def _derive_repository_identity(
     else:
         detail = ancestry.stderr.strip() or ancestry.stdout.strip() or "git failed"
         _fail("B2_CACHE_REPOSITORY_IDENTITY_UNAVAILABLE", detail)
+    contract_probe = _run_git(repo, "rev-parse", f"{EXPECTED_CONTRACT_TAG}^{{commit}}")
+    if contract_probe.returncode != 0:
+        _fail(
+            "B2_CACHE_CONTRACT_TAG_UNRESOLVED",
+            f"missing contract tag {EXPECTED_CONTRACT_TAG}",
+        )
+    contract_commit = contract_probe.stdout.strip()
+    contract_ancestry = _run_git(
+        repo, "merge-base", "--is-ancestor", contract_commit, head
+    )
+    if contract_ancestry.returncode == 1:
+        _fail(
+            "B2_CACHE_CONTRACT_HEAD_NOT_DESCENDANT",
+            "HEAD is not a descendant of the teacher-cache contract tag",
+        )
+    if contract_ancestry.returncode != 0:
+        detail = (
+            contract_ancestry.stderr.strip()
+            or contract_ancestry.stdout.strip()
+            or "git failed"
+        )
+        _fail("B2_CACHE_REPOSITORY_IDENTITY_UNAVAILABLE", detail)
     worktree_clean = not bool(
         _git(repo, "status", "--porcelain", "--untracked-files=all", allow_empty=True)
     )
@@ -120,6 +144,7 @@ def _derive_repository_identity(
         _fail("B2_CACHE_WORKTREE_DIRTY", "official worktree is dirty")
     return {
         "b2_tag_commit": b2_tag_commit,
+        "contract_tag_commit": contract_commit,
         "head_commit": head,
         "head_is_descendant": head_is_descendant,
         "worktree_clean": worktree_clean,
@@ -167,13 +192,12 @@ def _apply_profile(repo: Path) -> Any:
         raise
 
 
-def _resolve_production_teacher() -> Any:
-    """B2-02A placeholder: never loads VisualAD; rejects fixture teachers."""
+def _resolve_production_teacher(checkpoint: Path, candidate_layers: tuple[int, ...]) -> Any:
+    """Load the frozen CUDA production teacher once for an official cache run."""
 
-    _fail(
-        "B2_CACHE_GPU_PATH_DISABLED",
-        "B2-02A must not execute a real GPU teacher",
-    )
+    from rad.phase_b.b2_teacher_cache import ProductionTeacher
+
+    return ProductionTeacher.load(checkpoint, candidate_layers=candidate_layers)
 
 
 def _execute(args: argparse.Namespace, attestation: Any, repo: Path) -> dict[str, Any]:
@@ -181,6 +205,7 @@ def _execute(args: argparse.Namespace, attestation: Any, repo: Path) -> dict[str
         build_generation_plan,
         build_intended_manifest_metadata,
         claim_new_run_directory,
+        generate_production_teacher_cache,
         load_teacher_cache_config,
         require_production_teacher,
         validate_checkpoint_bytes,
@@ -248,12 +273,39 @@ def _execute(args: argparse.Namespace, attestation: Any, repo: Path) -> dict[str
             "intended_manifest_metadata": _thaw(intended),
         }
 
-    teacher = _resolve_production_teacher()
+    if bool(args.resume):
+        _fail(
+            "B2_CACHE_RESUME_NOT_ENABLED_IN_CLI",
+            "B2-02B official generation uses fresh output directories only",
+        )
+    if output_dir.exists():
+        claim_new_run_directory(output_dir)
+
+    teacher = _resolve_production_teacher(checkpoint, config.candidate_layers)
     require_production_teacher(teacher)
-    _fail(
-        "B2_CACHE_GPU_PATH_DISABLED",
-        "B2-02A must not execute a real GPU teacher",
+    final = generate_production_teacher_cache(
+        run_dir=output_dir,
+        repo_root=repo,
+        mvtec_root=MVTEC_ROOT,
+        config=config,
+        plan=plan,
+        provenance=provenance,
+        teacher=teacher,
     )
+    return {
+        "mode": "generate",
+        "status": final.get("status", "passed"),
+        "artifact_written": True,
+        "run_directory_created": True,
+        "planned_samples": len(plan),
+        "split_scientific_hash_version": config.split_scientific_hash_version,
+        "split_scientific_sha256": config.split_scientific_sha256,
+        "checkpoint_sha256": provenance.checkpoint_sha256,
+        "candidate_layers": list(config.candidate_layers),
+        "output_dir": str(output_dir),
+        "cache_scientific_sha256": final.get("cache_scientific_sha256"),
+        "sample_coverage_sha256": final.get("sample_coverage_sha256"),
+    }
 
 
 def main(argv: list[str] | None = None) -> int:

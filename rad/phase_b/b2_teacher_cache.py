@@ -21,6 +21,7 @@ from rad.runtime.execution_profile import (
 sum_preserving_fusion: Any = None
 LayerDescriptorExtractor: Any = None
 compute_exit_signals: Any = None
+load_teacher_bundle: Any = None
 
 _MEMBERSHIPS = ("training", "calibration", "evaluation")
 _EXPECTED_PROFILE_SHA256 = (
@@ -1850,6 +1851,137 @@ def build_final_manifest(
     )
     return MappingProxyType(payload)
 
+
+@dataclass(frozen=True)
+class ProductionTeacher:
+    """CUDA-only frozen VisualAD teacher adapter for B2 cache generation."""
+
+    bundle: Any
+    candidate_layers: tuple[int, ...]
+    artifact_kind: str = "production"
+
+    @classmethod
+    def load(
+        cls,
+        checkpoint_path: Path,
+        *,
+        candidate_layers: tuple[int, ...],
+    ) -> ProductionTeacher:
+        torch = _bind_production_tensor_apis()
+        if not torch.cuda.is_available():
+            _fail("B2_CACHE_CUDA_REQUIRED", "official cache generation requires CUDA")
+        global load_teacher_bundle
+        if load_teacher_bundle is None:
+            from rad.data.teacher_inference import load_teacher_bundle as _load
+
+            load_teacher_bundle = _load
+        bundle = load_teacher_bundle(checkpoint_path, device="cuda:0")
+        if getattr(bundle.device, "type", None) != "cuda":
+            _fail("B2_CACHE_CUDA_REQUIRED", "teacher bundle is not CUDA-backed")
+        modules = [bundle.model, bundle.layer_transforms]
+        if bundle.cross_attn is not None:
+            modules.append(bundle.cross_attn)
+        for module in modules:
+            module.eval()
+            for parameter in module.parameters():
+                parameter.requires_grad_(False)
+            if module.training:
+                _fail("B2_CACHE_TEACHER_NOT_EVAL", "teacher module is not in eval mode")
+            if any(parameter.requires_grad for parameter in module.parameters()):
+                _fail("B2_CACHE_TEACHER_NOT_FROZEN", "teacher parameters require gradients")
+        return cls(bundle=bundle, candidate_layers=tuple(candidate_layers))
+
+    def forward(
+        self,
+        *,
+        sample: PlannedSample,
+        image: Any,
+        anomalous_mask: Any,
+        contract: CacheContract,
+    ) -> TeacherOutput:
+        torch = _bind_production_tensor_apis()
+        if torch.is_autocast_enabled():
+            _fail("B2_CACHE_AMP_FORBIDDEN", "AMP must be disabled for official generation")
+        from rad.data.teacher_inference import build_causal_maps_and_ingredients
+
+        with torch.autocast(device_type="cuda", enabled=False):
+            maps_by_depth, _ingredients, _full = build_causal_maps_and_ingredients(
+                self.bundle, image, self.candidate_layers
+            )
+        maps: dict[MapIdentity, Any] = {}
+        semantics: dict[MapIdentity, tuple[str, ...]] = {}
+        for identity in sorted(expected_lattice(contract.candidate_layers, contract.prediction_depths)):
+            try:
+                causal = maps_by_depth[identity.checkpoint_depth][identity.candidate_layer_id]
+            except KeyError:
+                _fail("B2_CACHE_MAP_LATTICE_MISMATCH", f"missing causal map {identity}")
+            tensor = causal.detach().to(dtype=torch.float32, device="cpu").unsqueeze(0).unsqueeze(0)
+            maps[identity] = tensor
+            semantics[identity] = contract.map_dimension_semantics
+        if sample.image_label == 0:
+            mask = None
+        else:
+            import torch.nn.functional as functional
+
+            mask = functional.interpolate(
+                anomalous_mask.unsqueeze(0).unsqueeze(0),
+                size=tuple(next(iter(maps.values())).shape[-2:]),
+                mode="nearest",
+            ).to(dtype=torch.float32, device="cpu")
+        return TeacherOutput(
+            sample_id=sample.stable_sample_id,
+            image_label=sample.image_label,
+            anomalous_mask=mask,
+            maps=maps,
+            map_dimension_semantics=semantics,
+            descriptor_source_identities=frozenset(maps),
+            artifact_kind=self.artifact_kind,
+        )
+
+
+def reconstruct_persisted_descriptors(record: Mapping[str, Any]) -> Mapping[int, Any]:
+    """Reconstruct descriptor inputs from tensor-bearing Option A records."""
+
+    torch = _bind_production_tensor_apis()
+    tensors = _mapping(record.get("tensors"), "tensors")
+    candidate_layers = tuple(int(value) for value in record["candidate_layers"])
+    prediction_depths = tuple(int(value) for value in record["prediction_depths"])
+    expected = expected_lattice(candidate_layers, prediction_depths)
+    maps: dict[MapIdentity, Any] = {}
+    semantics: dict[MapIdentity, tuple[str, ...]] = {}
+    for identity in expected:
+        name = f"causal_map:{identity.checkpoint_depth}:{identity.candidate_layer_id}"
+        meta = tensors.get(name)
+        if not isinstance(meta, Mapping) or "tensor" not in meta:
+            _fail("B2_CACHE_TENSOR_VALUE_MISSING", f"persisted {name} is missing")
+        tensor = meta["tensor"]
+        if not isinstance(tensor, torch.Tensor):
+            _fail("B2_CACHE_TENSOR_VALUE_MISSING", f"persisted {name} is invalid")
+        maps[identity] = tensor
+        semantics[identity] = tuple(meta["dimension_semantics"])
+    shape = tuple(next(iter(maps.values())).shape)
+    validated = validate_teacher_output(
+        TeacherOutput(
+            sample_id=str(record["stable_sample_id"]),
+            image_label=int(record["image_label"]),
+            anomalous_mask=tensors.get("anomalous_mask", {}).get("tensor"),
+            maps=maps,
+            map_dimension_semantics=semantics,
+            descriptor_source_identities=frozenset(maps),
+        ),
+        CacheContract(
+            candidate_layers=candidate_layers,
+            prediction_depths=prediction_depths,
+            backbone_depth=max(candidate_layers),
+            expected_sample_ids=frozenset({str(record["stable_sample_id"])}),
+            map_shape=shape,
+            map_dimension_semantics=("batch", "channel", "height", "width"),
+            production_mode=True,
+        ),
+    )
+    return reconstruct_descriptors(validated)
+
+
 def _tensor_meta_with_value(name: str, tensor: Any) -> dict[str, Any]:
     value = tensor.detach().to(device="cpu", dtype=_bind_production_tensor_apis().float32).contiguous()
     semantics = (
@@ -1865,6 +1997,15 @@ def _tensor_meta_with_value(name: str, tensor: Any) -> dict[str, Any]:
         "digest": canonical_tensor_digest(name, value, semantics),
         "tensor": value,
     }
+
+
+def forbid_target_domain_access(path: Path | str) -> None:
+    """Fail closed if a path looks like target-domain / VisA access."""
+
+    text = str(path).replace("\\", "/").lower()
+    parts = set(PurePosixPath(text).parts)
+    if "visa" in parts or "target" in parts or "/visa/" in f"/{text}/":
+        _fail("B2_CACHE_TARGET_ACCESS_FORBIDDEN", f"forbidden target access: {path}")
 
 
 def build_scientific_record(
@@ -1923,3 +2064,141 @@ def build_scientific_record(
         "execution_profile_name": config.execution_profile_name,
         "execution_profile_sha256": config.execution_profile_sha256,
     }
+
+
+def generate_production_teacher_cache(
+    *,
+    run_dir: Path,
+    repo_root: Path,
+    mvtec_root: Path,
+    config: TeacherCacheConfig,
+    plan: Sequence[PlannedSample],
+    provenance: OuterProvenance,
+    teacher: Any,
+) -> Mapping[str, Any]:
+    """Generate exactly the planned source-domain cache records, atomically."""
+
+    require_production_teacher(teacher)
+    if len(plan) != config.total_selected_samples:
+        _fail("B2_CACHE_COVERAGE_MISMATCH", "generation plan is incomplete")
+    forbid_target_domain_access(mvtec_root)
+    from rad.data.adapters.mvtec import MVTecAdapter
+    from rad.data.adapters.preprocess import build_preprocess, preprocess_image, preprocess_mask
+
+    adapter = MVTecAdapter(mvtec_root)
+    records = {
+        record.image_path.relative_to(mvtec_root).as_posix(): record
+        for record in adapter.records(
+            "test",
+            categories=sorted({item.category for item in plan}),
+        )
+    }
+    descriptor = descriptor_contract(config, repo_root)
+    base = dict(build_intended_manifest_metadata(config=config, plan=plan, provenance=provenance))
+    base.update(
+        {
+            "status": "partial",
+            "descriptor_contract": _thaw_for_json(descriptor),
+            "samples": [],
+            "generation_commit": provenance.head_commit,
+            "tensor_shapes": [],
+            "seed": 111,
+            "config_canonical_sha256": _EXPECTED_CONFIG_CANONICAL_SHA256,
+            "git_sha": provenance.head_commit,
+            "split_scientific_sha256": config.split_scientific_sha256,
+            "checkpoint_sha256": provenance.checkpoint_sha256,
+        }
+    )
+    claim_new_run_directory(run_dir)
+    run_dir.mkdir(parents=True, exist_ok=False)
+    (run_dir / "samples").mkdir(parents=True, exist_ok=False)
+    entries: list[PersistedSampleEntry] = []
+    preprocess = build_preprocess("ViT-L/14@336px", teacher.bundle.image_size)
+    expected_ids = frozenset(item.stable_sample_id for item in plan)
+    for sample in plan:
+        forbid_target_domain_access(sample.image_identity)
+        if sample.mask_identity is not None:
+            forbid_target_domain_access(sample.mask_identity)
+        record = records.get(sample.image_identity)
+        if record is None or record.image_label != sample.image_label:
+            _fail("B2_CACHE_SAMPLE_IDENTITY_INVALID", f"cannot resolve {sample.image_identity}")
+        forbid_target_domain_access(record.image_path)
+        if sample.mask_identity is not None:
+            actual_mask = (
+                record.mask_path.relative_to(mvtec_root).as_posix()
+                if record.mask_path
+                else None
+            )
+            if actual_mask != sample.mask_identity:
+                _fail(
+                    "B2_CACHE_SAMPLE_IDENTITY_INVALID",
+                    f"mask drifted for {sample.stable_sample_id}",
+                )
+            if record.mask_path is not None:
+                forbid_target_domain_access(record.mask_path)
+        image = (
+            preprocess_image(adapter.open_image(record), preprocess)
+            .unsqueeze(0)
+            .to(device="cuda:0", dtype=_bind_production_tensor_apis().float32)
+        )
+        raw_mask = preprocess_mask(adapter.open_mask(record), teacher.bundle.image_size)
+        provisional = CacheContract(
+            candidate_layers=config.candidate_layers,
+            prediction_depths=config.prediction_depths,
+            backbone_depth=max(config.candidate_layers),
+            expected_sample_ids=expected_ids,
+            map_shape=(1, 1, teacher.bundle.image_size, teacher.bundle.image_size),
+            map_dimension_semantics=("batch", "channel", "height", "width"),
+            production_mode=True,
+        )
+        output = teacher.forward(
+            sample=sample,
+            image=image,
+            anomalous_mask=raw_mask,
+            contract=provisional,
+        )
+        first = next(iter(output.maps.values()))
+        contract = CacheContract(
+            candidate_layers=config.candidate_layers,
+            prediction_depths=config.prediction_depths,
+            backbone_depth=max(config.candidate_layers),
+            expected_sample_ids=expected_ids,
+            map_shape=tuple(int(size) for size in first.shape),
+            map_dimension_semantics=("batch", "channel", "height", "width"),
+            production_mode=True,
+        )
+        validated = validate_teacher_output(output, contract)
+        cumulative = build_cumulative_maps(validated)
+        score = compute_final_image_score(cumulative[24])
+        scientific = build_scientific_record(
+            sample=sample,
+            validated=validated,
+            cumulative=cumulative,
+            image_score=score,
+            config=config,
+            descriptor=descriptor,
+        )
+        entry = write_sample_atomic(
+            run_dir / sample_relative_path(sample.stable_sample_id),
+            scientific,
+        )
+        entries.append(entry)
+        base["samples"] = [
+            {
+                "stable_sample_id": item.stable_sample_id,
+                "relative_path": item.relative_path,
+                "record_scientific_sha256": item.record_scientific_sha256,
+                "record_file_sha256": item.record_file_sha256,
+            }
+            for item in entries
+        ]
+        base["tensor_shapes"] = [
+            list(tensor.shape) for tensor in validated.maps.values()
+        ]
+        write_partial_manifest_atomic(run_dir / "partial_manifest.json", base)
+    audit_complete_coverage(run_dir, plan, entries)
+    final = build_final_manifest(partial_manifest=base, entries=entries, plan=plan)
+    from rad.artifacts import atomic_write_json
+
+    atomic_write_json(run_dir / "manifest.json", _thaw_for_json(final))
+    return final
