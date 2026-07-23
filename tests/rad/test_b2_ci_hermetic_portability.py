@@ -54,10 +54,12 @@ def test_tiny_split_cli_defaults_to_controlled_tmp_sources() -> None:
     text = (REPO_ROOT / "tests" / "rad" / "test_b2_tiny_split_cli.py").read_text(
         encoding="utf-8"
     )
-    assert "PRODUCTION_MVTEC_ROOT" not in text
-    assert "/root/autodl-tmp/data/mvtec" not in text
     assert "populate_controlled_mvtec" in text
     assert 'tmp_path / "controlled_mvtec"' in text
+    assert 'source_root or (tmp_path / "controlled_mvtec")' in text
+    # Official V2 anchoring may reference production MVTec, but only behind skipif.
+    assert "test_official_mvtec_dry_run_reproduces_approved_scientific_v2" in text
+    assert 'reason="official Gate-C V2 regression requires production MVTec root"' in text
 
 
 def test_removing_autodl_tmp_from_environment_does_not_break_hermetic_helpers(

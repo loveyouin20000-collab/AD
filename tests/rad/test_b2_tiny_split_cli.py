@@ -28,6 +28,8 @@ LAUNCHER_PATH = REPO_ROOT / "tools" / "run_with_execution_profile.py"
 PROFILE_PATH = REPO_ROOT / "configs" / "execution" / "frozen_deterministic_math.json"
 CONFIG_PATH = REPO_ROOT / "configs" / "phase_b" / "b2_tiny_gate_c.json"
 ARTIFACT_BASE = REPO_ROOT / "artifacts" / "phase_b" / "b2_gate_c"
+# Gated production regression only; portable CPU defaults never use this root.
+PRODUCTION_MVTEC_ROOT = Path("/root/autodl-tmp/data/mvtec")
 EXPECTED_PROFILE_SHA256 = (
     "7af8dba39633743da0380fef9710940cded655f68c9efa8f84f5a52aeddb3c8d"
 )
@@ -551,12 +553,10 @@ def test_valid_dry_run_performs_complete_in_memory_validation_and_writes_nothing
     assert contract["rejected_intermediate_candidate"] == REJECTED_INTERMEDIATE_HASH
     assert contract["canonical_scientific_hash_v2"] == computed
     assert contract["migration"] == HASH_MIGRATION
-    # Production V2 identity remains pinned in the tracked Gate-C fixture / config;
-    # controlled tmp sources intentionally produce a distinct scientific digest.
-    assert EXPECTED_SCIENTIFIC_HASH_V2 == (
-        "91570da1fed6d7859d407196b10403581832ae0ff677a1ea7657ca76b91471f0"
-    )
-    assert EXPECTED_STABLE_IDS  # production release sample set remains documented
+    # Controlled tmp sources intentionally produce a digest distinct from the
+    # approved production V2 identity; that identity is anchored by the gated
+    # official-MVTec regression below (and by tracked configs/fixtures).
+    assert computed != EXPECTED_SCIENTIFIC_HASH_V2
     assert payload["official_manifest"]["runtime_attestation"]["environment"]
     validation = payload["validation"]
     assert set(validation) == {
@@ -598,6 +598,46 @@ def test_valid_dry_run_performs_complete_in_memory_validation_and_writes_nothing
         name.endswith((".tmp", ".temp", ".lock")) or "manifest" in name
         for name in _all_paths(ARTIFACT_BASE / _test_run_id(tmp_path))
     )
+
+
+@pytest.mark.skipif(
+    not PRODUCTION_MVTEC_ROOT.is_dir(),
+    reason="official Gate-C V2 regression requires production MVTec root",
+)
+def test_official_mvtec_dry_run_reproduces_approved_scientific_v2(
+    tmp_path: Path,
+) -> None:
+    """Anchor approved split V2 against the real production MVTec tree.
+
+    Portable CI uses controlled fixtures; this opt-in gate preserves the only
+    end-to-end regression that the official sample set still hashes to
+    EXPECTED_SCIENTIFIC_HASH_V2 / EXPECTED_STABLE_IDS.
+    """
+
+    proc, root, output = _run_cli(
+        tmp_path,
+        source_root=PRODUCTION_MVTEC_ROOT,
+        dry_run=True,
+    )
+    assert proc.returncode == 0, proc.stdout + proc.stderr
+    payload = _result(proc)
+    assert root.resolve() == PRODUCTION_MVTEC_ROOT.resolve()
+    assert payload["canonical_scientific_hash_v2"] == EXPECTED_SCIENTIFIC_HASH_V2
+    selected_ids = {
+        sample["stable_sample_id"]
+        for split in ("training", "calibration", "evaluation")
+        for sample in payload["official_manifest"]["splits"][split]
+    }
+    assert selected_ids == EXPECTED_STABLE_IDS
+    assert payload["official_manifest"]["scientific_hash_contract"] == {
+        "active_version": 2,
+        "legacy_canonical_hash_v1": EXPECTED_LEGACY_HASH_V1,
+        "rejected_intermediate_candidate": REJECTED_INTERMEDIATE_HASH,
+        "canonical_scientific_hash_v2": EXPECTED_SCIENTIFIC_HASH_V2,
+        "migration": HASH_MIGRATION,
+    }
+    assert payload["validation"]["selection"]["selected_count"] == 32
+    assert not (output / _test_run_id(tmp_path)).exists()
 
 
 def test_dry_run_hash_equals_subsequent_official_hash_and_manifest_is_unique(
