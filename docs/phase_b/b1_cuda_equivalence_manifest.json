@@ -1,0 +1,191 @@
+{
+  "accepted": {
+    "task_level_categories": [
+      {
+        "category": "bottle",
+        "dataset": "mvtec"
+      },
+      {
+        "category": "candle",
+        "dataset": "visa"
+      }
+    ]
+  },
+  "checkpoint": {
+    "explicit_cli_required": true,
+    "hidden_fallback_paths": false,
+    "path": "/root/autodl-tmp/AD/runs/baseline/mvtec_to_visa/seed_111_official_bs8/checkpoints/epoch_2.pth",
+    "sha256": "97bd461163efb96e36cddb1c3adf677e4c4fc2daabb2521021689f30e799b4f4"
+  },
+  "cpu_suite": {
+    "failed": 0,
+    "green": true,
+    "passed": 275,
+    "skipped": 15,
+    "summary": "275 passed, 15 skipped in 41.09s"
+  },
+  "detail": "strict_independent_pass",
+  "environment_summary": {
+    "cuda_version": "11.8",
+    "cudnn_version": "8700",
+    "gpu_model": "NVIDIA GeForce RTX 4090 D",
+    "nvidia_driver": "595.71.05",
+    "observed_execution_settings": {
+      "cublas_workspace_config": ":4096:8",
+      "cuda.matmul.allow_tf32": false,
+      "cudnn.allow_tf32": false,
+      "cudnn.benchmark": false,
+      "cudnn.deterministic": true,
+      "flash_sdp_enabled": false,
+      "float32_matmul_precision": "highest",
+      "math_sdp_enabled": true,
+      "mem_efficient_sdp_enabled": false,
+      "mha_fastpath_enabled": null,
+      "use_deterministic_algorithms": true
+    },
+    "python": "3.10.20",
+    "pytorch": "2.0.0+cu118"
+  },
+  "errors": [],
+  "execution_profile": {
+    "configuration_sha256": "824804d6aa227de730e40547b32d363839e2c0d2a4a159698bd8c8d416b7db5b",
+    "identity": "frozen_deterministic_math",
+    "input_list_sha256": "5a8d4b6de84853d32e85f72f9123771630540393ae68d92c3f61228cc1c3a4f6",
+    "path": "configs/execution/frozen_deterministic_math.json",
+    "project_wide_b2_constraint": true,
+    "required_env": {
+      "CUBLAS_WORKSPACE_CONFIG": ":4096:8"
+    },
+    "sha256": "7af8dba39633743da0380fef9710940cded655f68c9efa8f84f5a52aeddb3c8d"
+  },
+  "gates": {
+    "algorithmic_same_chain": {
+      "continuation_live_tensor_preserved": true,
+      "errors": [],
+      "nonstandard_layers_validated": true,
+      "status": "passed",
+      "threshold_max_abs": 1e-05
+    },
+    "detail": "strict_independent_pass",
+    "deterministic_control": {
+      "decision": "A",
+      "deterministic_error": null,
+      "max_feature_abs": {
+        "A1_vs_A2": 0.0,
+        "A1_vs_S1": 0.0,
+        "A2_vs_S2": 0.0,
+        "S1_vs_S2": 0.0
+      },
+      "max_map_abs": {
+        "A1_vs_A2": 0.0,
+        "A1_vs_S1": 9.5367431640625e-07,
+        "A2_vs_S2": 9.5367431640625e-07,
+        "S1_vs_S2": 0.0
+      },
+      "status": "strict_independent_pass"
+    },
+    "operational_noise_envelope": {
+      "cross_excess_p95": 9.5367431640625e-07,
+      "cross_path_p95": 9.5367431640625e-07,
+      "errors": [],
+      "excess_criterion": "cross_excess_p95 <= 1e-5",
+      "excess_pass": true,
+      "ratio_criterion": "cross_path_p95 <= 1.25 * max(self_noise_p95, 1e-12)",
+      "ratio_pass": true,
+      "self_noise_p95": 0.0,
+      "status": "passed"
+    },
+    "task_level_impact": {
+      "errors": [],
+      "metric_differences_pp": {
+        "boundary_f_score_pp": 0.0,
+        "image_ap_pp": 0.0,
+        "image_auroc_pp": 0.0,
+        "image_f1_max_pp": 0.0,
+        "pixel_ap_pp": 6.099564187067585e-08,
+        "pixel_aupro_pp": 6.36885433280554e-08,
+        "pixel_auroc_pp": 2.0320078952806853e-09,
+        "pixel_f1_max_pp": 0.0
+      },
+      "nonfinite_samples": [],
+      "p95_localization_error_diff": 0.0,
+      "provenance_summary": [
+        {
+          "accepted_for_b1_task_gate": true,
+          "canonical_category": "bottle",
+          "dataset": "mvtec",
+          "split_config_hash": "a98e450f3e047e5ab7f4ac3ed44fc322aff5fd57ab49a970a873182d4b5ff9fc",
+          "total_sample_count": 83
+        },
+        {
+          "accepted_for_b1_task_gate": true,
+          "canonical_category": "candle",
+          "dataset": "visa",
+          "split_config_hash": "70b5fd52b6235efb48c175dc50a96f85349311c057723a38ade056e6cb4b09ed",
+          "total_sample_count": 200
+        }
+      ],
+      "sample_count": 283,
+      "status": "passed"
+    }
+  },
+  "git_sha": "b61afa98cbfdae9a7c27a1707f5cc033ca5188a7",
+  "increment": "B1-05",
+  "invalidated_previous_evaluation": {
+    "task_level_categories": [
+      {
+        "category": "sample",
+        "dataset": "mvtec",
+        "reason": "flat image/ asset directory without train/test/ground_truth; not returned by MVTecAdapter",
+        "retained_evidence": "docs/phase_b/b1_cuda_equivalence_manifest.pre_b105_candidate.json"
+      }
+    ]
+  },
+  "legacy_invalid_task_level_note": "Prior docs/phase_b manifests that used mvtec/sample are retained as historical evidence but are invalid for the accepted B1 task-level gate.",
+  "limitations": [
+    "Independent-pass 1e-5 is valid only under frozen_deterministic_math.",
+    "Latency figures are diagnostic sanity checks only, not paper benchmarks.",
+    "Nonstandard layer set [2,4,6,8] validated on tiny synthetic CUDA model only.",
+    "Checkpoint path and SHA-256 are required CLI arguments; no hidden fallback paths.",
+    "mvtec/sample fixture evidence is retained historically but invalid for task gate."
+  ],
+  "phase": "B1",
+  "production_behavior_changes": false,
+  "production_loader": {
+    "error": null,
+    "loader": "rad.data.teacher_inference.load_teacher_bundle",
+    "success": true
+  },
+  "raw_evidence": {
+    "path": "artifacts/phase_b/b1_cuda_equivalence/b1_20260720T160942Z/raw_evidence.json",
+    "sha256": "327b2c7a0949fe32ac4f895e62b2e2fb508e56e8c608caafcff63f13a84dfdc8",
+    "tracked": false
+  },
+  "release_closure": {
+    "backend_matrix_summary": "artifacts/phase_b/b1_release_closure/b105_20260720T153801Z/release_closure_summary.json",
+    "production_default_independently_deterministic": false,
+    "requires_project_wide_freeze": true,
+    "selected_b2_profile": "frozen_deterministic_math",
+    "ten_process_passed": true
+  },
+  "schema_version": 3,
+  "status": "passed",
+  "test_commands": [
+    "conda activate rad-visualad",
+    "export CUBLAS_WORKSPACE_CONFIG=:4096:8",
+    "pytest tests/rad/test_cuda_staged_equivalence.py -q --tb=short",
+    "python tools/qualify_b1_cuda_equivalence.py --checkpoint /root/autodl-tmp/AD/runs/baseline/mvtec_to_visa/seed_111_official_bs8/checkpoints/epoch_2.pth --expected-sha256 97bd461163efb96e36cddb1c3adf677e4c4fc2daabb2521021689f30e799b4f4 --output-dir docs/phase_b",
+    "CUDA_VISIBLE_DEVICES=\"\" pytest tests/rad -q --tb=short"
+  ],
+  "thresholds": {
+    "independent_pass_max_abs": 1e-05,
+    "operational_cross_excess_p95": 1e-05,
+    "operational_cross_ratio": 1.25,
+    "same_chain_max_abs": 1e-05,
+    "task_level_aupro_pp": 0.1,
+    "task_level_boundary_pp": 0.1,
+    "task_level_image_metrics_pp": 0.05,
+    "task_level_pixel_metrics_pp": 0.05
+  },
+  "timestamp_utc": "2026-07-20T16:09:42.311440+00:00"
+}

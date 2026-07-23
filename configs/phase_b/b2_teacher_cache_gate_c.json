@@ -1,0 +1,70 @@
+{
+  "schema_version": 1,
+  "configuration_id": "b2_teacher_cache_gate_c",
+  "artifact_schema_version": 1,
+  "transfer_direction": "mvtec_to_visa",
+  "source_dataset": "mvtec",
+  "forbidden_target_dataset": "visa",
+  "candidate_layers": [6, 12, 18, 24],
+  "prediction_depths": [12, 18, 24],
+  "split": {
+    "specification_id": "b2_tiny_gate_c",
+    "scientific_hash_version": 2,
+    "scientific_sha256": "91570da1fed6d7859d407196b10403581832ae0ff677a1ea7657ca76b91471f0",
+    "legacy_v1_sha256": "0b9371deb6c55f359a14959c8b46ff50205191b1189a48ee380eafaf28c5791a",
+    "membership_counts": {
+      "training": 16,
+      "calibration": 8,
+      "evaluation": 8
+    },
+    "total_selected_samples": 32
+  },
+  "checkpoint": {
+    "path": "/root/autodl-tmp/AD/runs/baseline/mvtec_to_visa/seed_111_official_bs8/checkpoints/epoch_2.pth",
+    "sha256": "97bd461163efb96e36cddb1c3adf677e4c4fc2daabb2521021689f30e799b4f4"
+  },
+  "execution_profile": {
+    "name": "frozen_deterministic_math",
+    "path": "configs/execution/frozen_deterministic_math.json",
+    "sha256": "7af8dba39633743da0380fef9710940cded655f68c9efa8f84f5a52aeddb3c8d"
+  },
+  "b1_base": {
+    "tag": "b1-strict-independent-v1",
+    "commit": "3a751b2784a50eb0a08ed49e1db2df0b53608ccc"
+  },
+  "b2_base": {
+    "tag": "b2-tiny-split-v1",
+    "commit": "18bac047227754c975b23b46842458a5b41d5e2a"
+  },
+  "contracts": {
+    "cache_tensor_contract_version": 1,
+    "descriptor_contract_version": 1,
+    "descriptor_implementation_sha256": "6846ad263d342649a0383c4f762f7820053428bf74a05ece8c02e1dcc641b615",
+    "descriptor_source_tensor_kind": "causal_anomaly_maps",
+    "record_hash_schema_version": 1
+  },
+  "resume_policy": {
+    "enabled": true,
+    "require_exact_plan": true,
+    "require_exact_outer_provenance": true,
+    "verify_file_sha256": true,
+    "verify_record_scientific_sha256": true,
+    "replace_invalid_records": false
+  },
+  "fail_closed_requirements": [
+    "validated_launcher_bootstrap_required",
+    "immutable_runtime_attestation_required",
+    "execution_profile_hash_required",
+    "split_manifest_required",
+    "split_v2_identity_required",
+    "selected_id_set_and_membership_exact",
+    "source_only_target_access_forbidden",
+    "checkpoint_exists_and_hash_matches",
+    "b2_tag_resolves_to_pinned_commit",
+    "head_descends_from_b2_base",
+    "official_worktree_clean",
+    "anomalous_mask_identity_required",
+    "duplicate_and_extra_samples_rejected",
+    "candidate_layers_configuration_driven"
+  ]
+}

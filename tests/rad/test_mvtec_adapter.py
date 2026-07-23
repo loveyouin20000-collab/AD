@@ -48,6 +48,28 @@ def test_mvtec_records_are_deterministic_and_stable(tmp_path: Path) -> None:
     ]
 
 
+def test_mvtec_category_filter_preserves_default_behavior_and_limits_enumeration(
+    tmp_path: Path,
+) -> None:
+    _build_mvtec_fixture(tmp_path)
+    adapter = MVTecAdapter(tmp_path)
+    assert adapter.records("test", categories=None) == adapter.records("test")
+    bottle = adapter.records("test", categories=("bottle",))
+    assert [record.category for record in bottle] == ["bottle", "bottle", "bottle"]
+
+
+def test_mvtec_category_filter_does_not_touch_unrequested_broken_category(
+    tmp_path: Path,
+) -> None:
+    _build_mvtec_fixture(tmp_path)
+    _write_rgb(tmp_path / "cable" / "test" / "broken" / "001.png")
+    adapter = MVTecAdapter(tmp_path)
+    with pytest.raises(DatasetIntegrityError, match="mask"):
+        adapter.records("test")
+    bottle = adapter.records("test", categories=("bottle",))
+    assert {record.category for record in bottle} == {"bottle"}
+
+
 def test_mvtec_normal_mask_is_none_and_anomaly_mask_resolves(tmp_path: Path) -> None:
     _build_mvtec_fixture(tmp_path)
     adapter = MVTecAdapter(tmp_path)

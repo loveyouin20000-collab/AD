@@ -1,0 +1,31 @@
+{
+  "schema_version": 1,
+  "profile_id": "frozen_deterministic_math",
+  "applies_to": ["B1", "B2", "paper_experiments"],
+  "required_environment": {
+    "CUBLAS_WORKSPACE_CONFIG": ":4096:8"
+  },
+  "torch": {
+    "seed": 111,
+    "use_deterministic_algorithms": true,
+    "cuda.matmul.allow_tf32": false,
+    "cudnn.allow_tf32": false,
+    "cudnn.benchmark": false,
+    "cudnn.deterministic": true,
+    "float32_matmul_precision": "highest",
+    "enable_flash_sdp": false,
+    "enable_mem_efficient_sdp": false,
+    "enable_math_sdp": true,
+    "mha_fastpath_enabled": false
+  },
+  "model": {
+    "dtype": "float32",
+    "amp": false,
+    "eval_mode": true,
+    "no_grad": true
+  },
+  "notes": [
+    "Selected by B1-05 backend matrix: production_default_attention is not independently deterministic.",
+    "strict_independent_pass is valid only while this profile remains the project-wide B2/paper constraint."
+  ]
+}

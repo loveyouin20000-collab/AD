@@ -38,6 +38,9 @@ artifacts/checkpoints/
 # Calibration outputs (temperatures, policy profiles, Pareto)
 artifacts/calibration/
 
+# Phase B1 CUDA equivalence raw evidence (untracked)
+artifacts/phase_b/
+
 # Model weights
 weight/
 
