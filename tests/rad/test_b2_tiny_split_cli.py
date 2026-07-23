@@ -30,6 +30,17 @@ CONFIG_PATH = REPO_ROOT / "configs" / "phase_b" / "b2_tiny_gate_c.json"
 ARTIFACT_BASE = REPO_ROOT / "artifacts" / "phase_b" / "b2_gate_c"
 # Gated production regression only; portable CPU defaults never use this root.
 PRODUCTION_MVTEC_ROOT = Path("/root/autodl-tmp/data/mvtec")
+
+
+def _production_mvtec_available() -> bool:
+    """True only when the official MVTec root is readable (never raise on CI)."""
+
+    try:
+        return PRODUCTION_MVTEC_ROOT.is_dir()
+    except OSError:
+        return False
+
+
 EXPECTED_PROFILE_SHA256 = (
     "7af8dba39633743da0380fef9710940cded655f68c9efa8f84f5a52aeddb3c8d"
 )
@@ -601,7 +612,7 @@ def test_valid_dry_run_performs_complete_in_memory_validation_and_writes_nothing
 
 
 @pytest.mark.skipif(
-    not PRODUCTION_MVTEC_ROOT.is_dir(),
+    not _production_mvtec_available(),
     reason="official Gate-C V2 regression requires production MVTec root",
 )
 def test_official_mvtec_dry_run_reproduces_approved_scientific_v2(
