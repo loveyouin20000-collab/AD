@@ -14,12 +14,18 @@ import pytest
 import torch
 
 from rad.phase_b import b2_teacher_cache as subject
+from tests.rad.b2_hermetic import (
+    EXPECTED_CHECKPOINT_SHA256,
+    write_b2_split_fixture,
+    write_hermetic_checkpoint,
+)
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 CLI_PATH = REPO_ROOT / "tools" / "create_b2_teacher_cache.py"
 LAUNCHER_PATH = REPO_ROOT / "tools" / "run_with_execution_profile.py"
 PROFILE_PATH = REPO_ROOT / "configs" / "execution" / "frozen_deterministic_math.json"
 CONFIG_PATH = REPO_ROOT / "configs" / "phase_b" / "b2_teacher_cache_gate_c.json"
+# Live CUDA parity only: production artifacts are not required for portable CPU CI.
 OFFICIAL_SPLIT = Path(
     "/root/autodl-tmp/AD-phase-b2-gate-c/artifacts/phase_b/b2_gate_c/"
     "b2c-20260721-v2-final-18bac04/split_manifest.json"
@@ -30,9 +36,6 @@ OFFICIAL_CHECKPOINT = Path(
 )
 EXPECTED_PROFILE_SHA256 = (
     "7af8dba39633743da0380fef9710940cded655f68c9efa8f84f5a52aeddb3c8d"
-)
-EXPECTED_CHECKPOINT_SHA256 = (
-    "97bd461163efb96e36cddb1c3adf677e4c4fc2daabb2521021689f30e799b4f4"
 )
 MVTEC_ROOT = Path("/root/autodl-tmp/data/mvtec")
 CUDA_REQUIRED = not torch.cuda.is_available()
@@ -180,7 +183,7 @@ def test_target_access_guard_rejects_visa_paths() -> None:
 
 def test_incomplete_finalization_fails_closed(tmp_path: Path) -> None:
     config = subject.load_teacher_cache_config(CONFIG_PATH)
-    manifest = json.loads(OFFICIAL_SPLIT.read_text(encoding="utf-8"))
+    manifest = json.loads(write_b2_split_fixture(tmp_path / "split.json").read_text(encoding="utf-8"))
     plan = subject.build_generation_plan(manifest, config)
     entries = [
         subject.PersistedSampleEntry(
@@ -298,6 +301,8 @@ def test_cli_outside_launcher_fails_closed(tmp_path: Path) -> None:
     root = tmp_path / "output_root"
     root.mkdir()
     run_dir = root / "run"
+    split = write_b2_split_fixture(tmp_path / "split.json")
+    checkpoint, _ = write_hermetic_checkpoint(tmp_path / "ckpt.pth")
     args = [
         sys.executable,
         str(CLI_PATH),
@@ -310,9 +315,9 @@ def test_cli_outside_launcher_fails_closed(tmp_path: Path) -> None:
         "--output-root",
         str(root),
         "--split-manifest",
-        str(OFFICIAL_SPLIT),
+        str(split),
         "--checkpoint",
-        str(OFFICIAL_CHECKPOINT),
+        str(checkpoint),
         "--expected-checkpoint-sha256",
         EXPECTED_CHECKPOINT_SHA256,
     ]
@@ -334,21 +339,28 @@ def test_cli_wrong_checkpoint_hash_fails_closed(tmp_path: Path) -> None:
     root = tmp_path / "output_root"
     root.mkdir()
     run_dir = root / "run"
+    split = write_b2_split_fixture(tmp_path / "split.json")
+    checkpoint, _ = write_hermetic_checkpoint(tmp_path / "ckpt.pth")
     harness = """
-import json, runpy, sys
+import runpy, subprocess, sys
+from dataclasses import replace
 from pathlib import Path
 from rad.runtime.execution_profile import apply_execution_profile
+import rad.phase_b.b2_teacher_cache as cache_mod
+from tests.rad import b2_hermetic as hermetic
 attestation = apply_execution_profile()
 module = runpy.run_path(sys.argv[1], run_name='cli')
 module['main'].__globals__['_apply_profile'] = lambda _repo: attestation
-real = module['_derive_repository_identity']
-def force_clean(repo, *, require_clean=True):
-    identity = dict(real(repo, require_clean=False))
-    identity['worktree_clean'] = True
-    identity['head_is_descendant'] = True
-    return identity
-module['main'].__globals__['_derive_repository_identity'] = force_clean
-raise SystemExit(module['main'](sys.argv[2:]))
+ckpt = Path(sys.argv[2]).resolve()
+real_load = cache_mod.load_teacher_cache_config
+cache_mod.load_teacher_cache_config = lambda path: replace(real_load(path), checkpoint_path=ckpt)
+head = subprocess.check_output(['git','-C',str(Path(sys.argv[1]).resolve().parents[1]),'rev-parse','HEAD'], text=True).strip()
+module['main'].__globals__['_derive_repository_identity'] = (
+    lambda repo, *, require_clean=True: hermetic.synthetic_teacher_cache_identity(
+        head_commit=head, worktree_clean=True, head_is_descendant=True
+    )
+)
+raise SystemExit(module['main'](sys.argv[3:]))
 """
     proc = subprocess.run(
         [
@@ -363,6 +375,7 @@ raise SystemExit(module['main'](sys.argv[2:]))
             "-c",
             harness,
             str(CLI_PATH),
+            str(checkpoint),
             "--config",
             str(CONFIG_PATH),
             "--seed",
@@ -372,9 +385,9 @@ raise SystemExit(module['main'](sys.argv[2:]))
             "--output-root",
             str(root),
             "--split-manifest",
-            str(OFFICIAL_SPLIT),
+            str(split),
             "--checkpoint",
-            str(OFFICIAL_CHECKPOINT),
+            str(checkpoint),
             "--expected-checkpoint-sha256",
             "0" * 64,
             "--dry-run",
@@ -395,23 +408,38 @@ def test_cli_wrong_split_v2_fails_closed(tmp_path: Path) -> None:
     root.mkdir()
     run_dir = root / "run"
     split = tmp_path / "split.json"
-    payload = json.loads(OFFICIAL_SPLIT.read_text(encoding="utf-8"))
+    payload = json.loads(write_b2_split_fixture(tmp_path / "base_split.json").read_text(encoding="utf-8"))
     payload["scientific_hash_contract"]["canonical_scientific_hash_v2"] = "a" * 64
     split.write_text(json.dumps(payload), encoding="utf-8")
+    checkpoint, _ = write_hermetic_checkpoint(tmp_path / "ckpt.pth")
     harness = """
-import runpy, sys
+import runpy, subprocess, sys
+from dataclasses import replace
+from pathlib import Path
 from rad.runtime.execution_profile import apply_execution_profile
+import rad.phase_b.b2_teacher_cache as cache_mod
+from tests.rad import b2_hermetic as hermetic
 attestation = apply_execution_profile()
 module = runpy.run_path(sys.argv[1], run_name='cli')
 module['main'].__globals__['_apply_profile'] = lambda _repo: attestation
-real = module['_derive_repository_identity']
-def force_clean(repo, *, require_clean=True):
-    identity = dict(real(repo, require_clean=False))
-    identity['worktree_clean'] = True
-    identity['head_is_descendant'] = True
-    return identity
-module['main'].__globals__['_derive_repository_identity'] = force_clean
-raise SystemExit(module['main'](sys.argv[2:]))
+ckpt = Path(sys.argv[2]).resolve()
+real_load = cache_mod.load_teacher_cache_config
+real_validate = cache_mod.validate_checkpoint_bytes
+cache_mod.load_teacher_cache_config = lambda path: replace(real_load(path), checkpoint_path=ckpt)
+def hermetic_validate(path, expected):
+    if Path(path).resolve() != ckpt:
+        return real_validate(path, expected)
+    if expected != hermetic.EXPECTED_CHECKPOINT_SHA256:
+        raise cache_mod.TeacherCacheError('B2_CACHE_CHECKPOINT_HASH_MISMATCH', 'hash')
+    return expected
+cache_mod.validate_checkpoint_bytes = hermetic_validate
+head = subprocess.check_output(['git','-C',str(Path(sys.argv[1]).resolve().parents[1]),'rev-parse','HEAD'], text=True).strip()
+module['main'].__globals__['_derive_repository_identity'] = (
+    lambda repo, *, require_clean=True: hermetic.synthetic_teacher_cache_identity(
+        head_commit=head, worktree_clean=True, head_is_descendant=True
+    )
+)
+raise SystemExit(module['main'](sys.argv[3:]))
 """
     proc = subprocess.run(
         [
@@ -426,6 +454,7 @@ raise SystemExit(module['main'](sys.argv[2:]))
             "-c",
             harness,
             str(CLI_PATH),
+            str(checkpoint),
             "--config",
             str(CONFIG_PATH),
             "--seed",
@@ -437,7 +466,7 @@ raise SystemExit(module['main'](sys.argv[2:]))
             "--split-manifest",
             str(split),
             "--checkpoint",
-            str(OFFICIAL_CHECKPOINT),
+            str(checkpoint),
             "--expected-checkpoint-sha256",
             EXPECTED_CHECKPOINT_SHA256,
             "--dry-run",
