@@ -1208,7 +1208,8 @@ def _canonicalize_tensor_meta(name: str, meta: Mapping[str, Any]) -> dict[str, A
         "dimension_semantics",
         "digest",
     }
-    if set(meta) != required:
+    allowed = required | {"tensor"}
+    if set(meta) != required and set(meta) != allowed:
         _fail(
             "B2_CACHE_RECORD_HASH_SCHEMA_INVALID",
             f"tensor {name} fields are not exact",
@@ -1243,6 +1244,23 @@ def _canonicalize_tensor_meta(name: str, meta: Mapping[str, Any]) -> dict[str, A
             "B2_CACHE_RECORD_HASH_SCHEMA_INVALID",
             f"tensor {name} metadata is invalid",
         )
+    if "tensor" in meta:
+        tensor = meta["tensor"]
+        _validate_float32_tensor(
+            tensor,
+            expected_shape=tuple(int(size) for size in shape),
+            role=f"persisted tensor {name}",
+        )
+        computed = canonical_tensor_digest(
+            name,
+            tensor,
+            tuple(str(item) for item in semantics),
+        )
+        if computed != digest:
+            _fail(
+                "B2_CACHE_TENSOR_DIGEST_MISMATCH",
+                f"persisted tensor {name} does not match its digest",
+            )
     return {
         "logical_name": name,
         "dtype": dtype_name,
@@ -1392,6 +1410,32 @@ def claim_new_run_directory(run_dir: Path) -> None:
         _fail("B2_CACHE_RUN_EXISTS", str(exc))
 
 
+def _persistable_scientific_record(record: Mapping[str, Any]) -> dict[str, Any]:
+    """Keep the hashed whitelist while retaining optional tensor bytes for Option A."""
+
+    content = _thaw_for_json(scientific_record_content(record))
+    source_tensors = _mapping(record["tensors"], "tensors")
+    persisted_tensors: dict[str, Any] = {}
+    for name, meta in content["tensors"].items():
+        persisted = dict(meta)
+        source = source_tensors[name]
+        if isinstance(source, Mapping) and "tensor" in source:
+            persisted["tensor"] = source["tensor"]
+        persisted_tensors[name] = persisted
+    content["tensors"] = persisted_tensors
+    return content
+
+
+def _verify_persisted_tensor_values(record: Mapping[str, Any]) -> None:
+    """Verify every persisted tensor against its digest after a `.pt` reload."""
+
+    tensors = _mapping(record.get("tensors"), "tensors")
+    for name, meta in tensors.items():
+        if not isinstance(meta, Mapping) or "tensor" not in meta:
+            continue
+        _canonicalize_tensor_meta(str(name), meta)
+
+
 def write_sample_atomic(
     path: Path,
     scientific_record: Mapping[str, Any],
@@ -1401,6 +1445,7 @@ def write_sample_atomic(
     torch = _bind_production_tensor_apis()
     destination = Path(path)
     content = dict(scientific_record_content(scientific_record))
+    persisted_record = _persistable_scientific_record(scientific_record)
     scientific_digest = _canonical_sha256(content)
     stable_id = content["stable_sample_id"]
     if not _is_sha256(stable_id):
@@ -1418,7 +1463,7 @@ def write_sample_atomic(
         )
     destination.parent.mkdir(parents=True, exist_ok=True)
     payload = {
-        "scientific_record": content,
+        "scientific_record": persisted_record,
         "record_scientific_sha256": scientific_digest,
     }
     fd, tmp_name = tempfile.mkstemp(
@@ -1463,6 +1508,7 @@ def write_sample_atomic(
             "B2_CACHE_RESUME_SCIENTIFIC_HASH_MISMATCH",
             "reloaded scientific record failed rehash",
         )
+    _verify_persisted_tensor_values(loaded["scientific_record"])
     return PersistedSampleEntry(
         stable_sample_id=stable_id,
         relative_path=relative,
@@ -1790,4 +1836,90 @@ def build_final_manifest(
         }
         for entry in entries
     ]
+    payload["sample_coverage_sha256"] = _canonical_sha256(
+        {"planned_stable_sample_ids": list(planned_ids)}
+    )
+    payload["cache_scientific_sha256"] = _canonical_sha256(
+        {
+            "planned_stable_sample_ids": list(planned_ids),
+            "record_scientific_sha256_by_id": {
+                entry.stable_sample_id: entry.record_scientific_sha256
+                for entry in entries
+            },
+        }
+    )
     return MappingProxyType(payload)
+
+def _tensor_meta_with_value(name: str, tensor: Any) -> dict[str, Any]:
+    value = tensor.detach().to(device="cpu", dtype=_bind_production_tensor_apis().float32).contiguous()
+    semantics = (
+        ("scalar",)
+        if value.ndim == 1
+        else ("batch", "channel", "height", "width")
+    )
+    return {
+        "logical_name": name,
+        "dtype": "float32",
+        "shape": list(value.shape),
+        "dimension_semantics": list(semantics),
+        "digest": canonical_tensor_digest(name, value, semantics),
+        "tensor": value,
+    }
+
+
+def build_scientific_record(
+    *,
+    sample: PlannedSample,
+    validated: ValidatedTeacherOutput,
+    cumulative: Mapping[int, Any],
+    image_score: Any,
+    config: TeacherCacheConfig,
+    descriptor: Mapping[str, Any],
+) -> dict[str, Any]:
+    tensors: dict[str, Any] = {}
+    for identity in sorted(validated.maps):
+        name = f"causal_map:{identity.checkpoint_depth}:{identity.candidate_layer_id}"
+        tensors[name] = _tensor_meta_with_value(name, validated.maps[identity])
+    for depth, tensor in cumulative.items():
+        name = f"cumulative_map:{depth}"
+        tensors[name] = _tensor_meta_with_value(name, tensor)
+    tensors["full_depth_map"] = _tensor_meta_with_value(
+        "full_depth_map", cumulative[max(cumulative)]
+    )
+    if validated.anomalous_mask is not None:
+        tensors["anomalous_mask"] = _tensor_meta_with_value(
+            "anomalous_mask", validated.anomalous_mask
+        )
+    tensors["image_score"] = _tensor_meta_with_value("image_score", image_score)
+    return {
+        "record_schema_version": 1,
+        "record_hash_schema_version": config.record_hash_schema_version,
+        "stable_sample_id": sample.stable_sample_id,
+        "membership": sample.membership,
+        "category": sample.category,
+        "image_label": sample.image_label,
+        "anomaly_type": sample.anomaly_type,
+        "image_identity": sample.image_identity,
+        "mask_identity": sample.mask_identity,
+        "candidate_layers": list(config.candidate_layers),
+        "prediction_depths": list(config.prediction_depths),
+        "causal_map_lattice": [
+            {
+                "checkpoint_depth": item.checkpoint_depth,
+                "candidate_layer_id": item.candidate_layer_id,
+            }
+            for item in sorted(validated.maps)
+        ],
+        "cache_tensor_contract_version": config.cache_tensor_contract_version,
+        "tensors": tensors,
+        "descriptor_contract_version": descriptor["descriptor_contract_version"],
+        "descriptor_feature_names": list(descriptor["feature_names"]),
+        "descriptor_source_tensor_kind": descriptor["descriptor_source_tensor_kind"],
+        "descriptor_implementation_sha256": descriptor["descriptor_implementation_sha256"],
+        "extractor_configuration_sha256": descriptor["extractor_configuration_sha256"],
+        "split_scientific_hash_version": config.split_scientific_hash_version,
+        "split_scientific_sha256": config.split_scientific_sha256,
+        "checkpoint_sha256": config.checkpoint_sha256,
+        "execution_profile_name": config.execution_profile_name,
+        "execution_profile_sha256": config.execution_profile_sha256,
+    }
