@@ -3,11 +3,11 @@
 **Status:** `passed`
 **Detail:** `strict_independent_pass`
 **Strict status:** `strict_independent_pass`
-**Git SHA:** `fcff2d4419f64bfea43874b48579c6dde60625f7`
-**Timestamp (UTC):** `2026-07-27T08:16:51.818944+00:00`
+**Git SHA:** `f9024250c7cd16398906837361cd39de625e05f7`
+**Timestamp (UTC):** `2026-07-27T17:57:19.230254+00:00`
 **Execution profile:** `frozen_deterministic_math`
 **Profile SHA-256:** `7af8dba39633743da0380fef9710940cded655f68c9efa8f84f5a52aeddb3c8d`
-**Raw evidence:** `artifacts/phase_b/b1_cuda_equivalence/b1_20260727T081651Z/raw_evidence.json` (sha256=`0d9a3772de411ec9ce79d29c1d412c0b80736fdec3088d5e432bd6c194f70fac`)
+**Raw evidence:** `artifacts/phase_b/b1_cuda_equivalence/b1_20260727T175719Z/raw_evidence.json` (sha256=`21744d3453b99509fd3a70419b7432b52fc592fa4fa7a0a2ccd4b9a90259c484`)
 **Ten-process:** `True`
 
 ## Layer coverage

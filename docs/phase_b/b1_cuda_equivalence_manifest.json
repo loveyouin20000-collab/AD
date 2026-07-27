@@ -20,9 +20,9 @@
   "cpu_suite": {
     "failed": 0,
     "green": true,
-    "passed": 727,
+    "passed": 759,
     "skipped": 16,
-    "summary": "727 passed, 16 skipped, 16 warnings in 198.03s (0:03:18)"
+    "summary": "759 passed, 16 skipped, 16 warnings in 188.62s (0:03:08)"
   },
   "detail": "strict_independent_pass",
   "environment_summary": {
@@ -190,7 +190,7 @@
     "--output-dir",
     "docs/phase_b"
   ],
-  "git_sha": "fcff2d4419f64bfea43874b48579c6dde60625f7",
+  "git_sha": "f9024250c7cd16398906837361cd39de625e05f7",
   "increment": "B1-05",
   "invalidated_previous_evaluation": {
     "task_level_categories": [
@@ -239,18 +239,19 @@
   },
   "raw_evidence": {
     "disposition": "ignored_raw_hash_pinned",
-    "path": "artifacts/phase_b/b1_cuda_equivalence/b1_20260727T081651Z/raw_evidence.json",
+    "path": "artifacts/phase_b/b1_cuda_equivalence/b1_20260727T175719Z/raw_evidence.json",
     "schema_version": 1,
-    "sha256": "0d9a3772de411ec9ce79d29c1d412c0b80736fdec3088d5e432bd6c194f70fac",
+    "sha256": "21744d3453b99509fd3a70419b7432b52fc592fa4fa7a0a2ccd4b9a90259c484",
     "tracked": false
   },
   "release_closure": {
     "backend_matrix_summary": null,
     "production_default_independently_deterministic": null,
     "raw_evidence": {
-      "path": "artifacts/phase_b/b1_release_closure/b105_20260727T075102Z/release_closure_raw.json",
-      "sha256": "e07f43329a8c184cf0fd2896d8211bbf9f6ef1cf3dd6ad8115acd9351815ae88"
+      "path": "artifacts/phase_b/b1_release_closure/b105_20260727T173332Z/release_closure_raw.json",
+      "sha256": "9e0dc7c8a72c39c1d8f25e7b38ff93bfb7151152458c97bd6929df0d4dbd8dff"
     },
+    "release_closure_available": true,
     "requires_project_wide_freeze": true,
     "selected_b2_profile": "frozen_deterministic_math",
     "ten_process_cross_path_max": 9.5367431640625e-07,
@@ -306,5 +307,5 @@
     "task_level_image_metrics_pp": 0.05,
     "task_level_pixel_metrics_pp": 0.05
   },
-  "timestamp_utc": "2026-07-27T08:16:51.818944+00:00"
+  "timestamp_utc": "2026-07-27T17:57:19.230254+00:00"
 }
