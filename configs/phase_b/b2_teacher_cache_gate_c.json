@@ -20,7 +20,7 @@
     "total_selected_samples": 32
   },
   "checkpoint": {
-    "path": "/root/autodl-tmp/AD/runs/baseline/mvtec_to_visa/seed_111_official_bs8/checkpoints/epoch_2.pth",
+    "path": "runs/baseline/mvtec_to_visa/seed_111_official_bs8/checkpoints/epoch_2.pth",
     "sha256": "97bd461163efb96e36cddb1c3adf677e4c4fc2daabb2521021689f30e799b4f4"
   },
   "execution_profile": {

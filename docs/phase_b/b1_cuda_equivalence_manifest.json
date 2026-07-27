@@ -137,7 +137,12 @@
         "category": "sample",
         "dataset": "mvtec",
         "reason": "flat image/ asset directory without train/test/ground_truth; not returned by MVTecAdapter",
-        "retained_evidence": "docs/phase_b/b1_cuda_equivalence_manifest.pre_b105_candidate.json"
+        "retained_evidence": {
+          "disposition": "removed_superseded_candidate",
+          "former_path": "docs/phase_b/b1_cuda_equivalence_manifest.pre_b105_candidate.json",
+          "note": "Superseded raw candidate with repeated measurement dumps; final B1-05 concise manifest/report retains decision-critical gates, hashes, and accepted task categories.",
+          "sha256": "e09aa34c36718f95dd3d311bcc87192fb5948462aeb9c9318bbf6e7cfd793223"
+        }
       }
     ]
   },
@@ -147,7 +152,7 @@
     "Latency figures are diagnostic sanity checks only, not paper benchmarks.",
     "Nonstandard layer set [2,4,6,8] validated on tiny synthetic CUDA model only.",
     "Checkpoint path and SHA-256 are required CLI arguments; no hidden fallback paths.",
-    "mvtec/sample fixture evidence is retained historically but invalid for task gate."
+    "mvtec/sample predecessor evidence removed from tree; SHA-256 retained in invalidated_previous_evaluation.retained_evidence."
   ],
   "phase": "B1",
   "production_behavior_changes": false,

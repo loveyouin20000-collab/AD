@@ -41,6 +41,14 @@ artifacts/calibration/
 # Phase B1 CUDA equivalence raw evidence (untracked)
 artifacts/phase_b/
 
+# Generated baseline/split/stats outputs (keep docs/baseline_acceptance for audit)
+artifacts/baseline/
+artifacts/splits/
+artifacts/stats/
+
+# Accidental changelog probe file
+test.txt
+
 # Model weights
 weight/
 

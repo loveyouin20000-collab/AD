@@ -17,7 +17,6 @@ APPROVED_SEED = 111
 EXPECTED_B2_TAG = "b2-tiny-split-v1"
 EXPECTED_B2_COMMIT = "18bac047227754c975b23b46842458a5b41d5e2a"
 EXPECTED_CONTRACT_TAG = "b2-teacher-cache-contract-v1"
-MVTEC_ROOT = Path("/root/autodl-tmp/data/mvtec")
 
 
 class B2TeacherCacheCLIError(RuntimeError):
@@ -43,6 +42,11 @@ def _parser() -> argparse.ArgumentParser:
     parser.add_argument("--split-manifest", required=True)
     parser.add_argument("--checkpoint", required=True)
     parser.add_argument("--expected-checkpoint-sha256", required=True)
+    parser.add_argument(
+        "--mvtec-root",
+        default=None,
+        help="MVTec source root for production generation (required unless --dry-run).",
+    )
     parser.add_argument("--dry-run", action="store_true")
     parser.add_argument("--resume", action="store_true")
     return parser
@@ -283,10 +287,21 @@ def _execute(args: argparse.Namespace, attestation: Any, repo: Path) -> dict[str
 
     teacher = _resolve_production_teacher(checkpoint, config.candidate_layers)
     require_production_teacher(teacher)
+
+    mvtec_root_text = getattr(args, "mvtec_root", None)
+    if not mvtec_root_text:
+        _fail(
+            "B2_CACHE_MVTEC_ROOT_REQUIRED",
+            "production generation requires --mvtec-root (no machine-local default)",
+        )
+    mvtec_root = Path(mvtec_root_text)
+    if not mvtec_root.is_dir():
+        _fail("B2_CACHE_MVTEC_ROOT_MISSING", f"MVTec root does not exist: {mvtec_root}")
+
     final = generate_production_teacher_cache(
         run_dir=output_dir,
         repo_root=repo,
-        mvtec_root=MVTEC_ROOT,
+        mvtec_root=mvtec_root,
         config=config,
         plan=plan,
         provenance=provenance,

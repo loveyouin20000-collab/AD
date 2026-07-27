@@ -47,4 +47,8 @@ Independent CUDA forwards under the default attention backend exhibit a runtime 
 
 - Invalid predecessor: `mvtec/sample` (flat `image/` assets; not returned by `MVTecAdapter`).
 - Accepted categories: `mvtec/bottle` (83 test) + `visa/candle` (200 test) via production adapters.
+- Superseded candidate raw evidence removed from the tree before main integration:
+  former path `docs/phase_b/b1_cuda_equivalence_manifest.pre_b105_candidate.json`,
+  SHA-256 `e09aa34c36718f95dd3d311bcc87192fb5948462aeb9c9318bbf6e7cfd793223`
+  (disposition recorded in the final concise manifest).
 
