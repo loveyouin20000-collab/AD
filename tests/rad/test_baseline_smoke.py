@@ -8,14 +8,33 @@ REPO_ROOT = Path(__file__).resolve().parents[2]
 PYTHON = sys.executable
 
 
-def _run_baseline_cli(args: list[str]) -> subprocess.CompletedProcess[str]:
+def _run_baseline_cli(
+    args: list[str], *, check: bool = True
+) -> subprocess.CompletedProcess[str]:
     return subprocess.run(
         [PYTHON, "tools/reproduce_baseline.py", *args],
         cwd=str(REPO_ROOT),
-        check=True,
+        check=check,
         capture_output=True,
         text=True,
     )
+
+
+def test_baseline_dry_run_fails_closed_without_explicit_data_paths(tmp_path: Path):
+    result = _run_baseline_cli(
+        [
+            "--config",
+            "configs/rad/baseline_mvtec_to_visa.yaml",
+            "--output-dir",
+            str(tmp_path / "baseline_missing_paths"),
+            "--dry-run",
+        ],
+        check=False,
+    )
+    assert result.returncode != 0
+    combined = (result.stderr + result.stdout).lower()
+    assert "train data path is required" in combined
+    assert "train-data-path" in combined or "train.data_path" in combined
 
 
 def test_baseline_dry_run_resolves_paths_and_command(tmp_path: Path):

@@ -36,7 +36,7 @@ FORBIDDEN_PORTABILITY_FRAGMENTS = (
     "AD-phase-",
 )
 ACTIVE_OPERATIONAL_RAD_CONFIGS = tuple(
-    sorted((REPO_ROOT / "configs" / "rad").glob("*.yaml"))
+    sorted((REPO_ROOT / "configs" / "rad").rglob("*.yaml"))
 )
 CLI_DATA_PATH_CONTRACTS = (
     {
@@ -146,17 +146,22 @@ def test_teacher_cache_cli_has_no_autodl_mvtec_default() -> None:
     assert "--mvtec-root" in text
 
 
-@pytest.mark.parametrize("config_path", ACTIVE_OPERATIONAL_RAD_CONFIGS)
+@pytest.mark.parametrize(
+    "config_path",
+    ACTIVE_OPERATIONAL_RAD_CONFIGS,
+    ids=lambda p: str(p.relative_to(REPO_ROOT / "configs" / "rad")),
+)
 def test_active_rad_configs_avoid_machine_local_operational_values(
     config_path: Path,
 ) -> None:
     import yaml
 
+    rel = config_path.relative_to(REPO_ROOT)
     payload = yaml.safe_load(config_path.read_text(encoding="utf-8"))
     for field_path, value in _iter_operational_yaml_values(payload):
         for fragment in FORBIDDEN_PORTABILITY_FRAGMENTS:
             assert fragment not in value, (
-                f"{config_path.name}:{field_path} contains forbidden fragment "
+                f"{rel}:{field_path} contains forbidden fragment "
                 f"{fragment!r}: {value!r}"
             )
 

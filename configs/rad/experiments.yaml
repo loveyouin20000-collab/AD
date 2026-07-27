@@ -36,7 +36,7 @@ matrix:
   seed: 111
   device: '{device}'
   command: python tools/reproduce_baseline.py --config configs/rad/baseline_mvtec_to_visa.yaml --seed
-    {seed} --device {device} --output-dir {output_dir}
+    {seed} --output-dir {output_dir} --train-data-path data/mvtec --test-data-path data/Visa
   config:
     method:
       name: original_visualad
