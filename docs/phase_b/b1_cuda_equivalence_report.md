@@ -2,10 +2,19 @@
 
 **Status:** `passed`
 **Detail:** `strict_independent_pass`
-**Git SHA:** `b61afa98cbfdae9a7c27a1707f5cc033ca5188a7`
-**Timestamp (UTC):** `2026-07-20T16:09:42.311440+00:00`
+**Strict status:** `strict_independent_pass`
+**Git SHA:** `fcff2d4419f64bfea43874b48579c6dde60625f7`
+**Timestamp (UTC):** `2026-07-27T08:16:51.818944+00:00`
 **Execution profile:** `frozen_deterministic_math`
-**Raw evidence:** `artifacts/phase_b/b1_cuda_equivalence/b1_20260720T160942Z/raw_evidence.json`
+**Profile SHA-256:** `7af8dba39633743da0380fef9710940cded655f68c9efa8f84f5a52aeddb3c8d`
+**Raw evidence:** `artifacts/phase_b/b1_cuda_equivalence/b1_20260727T081651Z/raw_evidence.json` (sha256=`0d9a3772de411ec9ce79d29c1d412c0b80736fdec3088d5e432bd6c194f70fac`)
+**Ten-process:** `True`
+
+## Layer coverage
+
+- Official candidate layers tested: `[6, 12, 18, 24]`
+- Synthetic candidate layers tested: `[2, 4, 6, 8]`
+- Nonstandard official run validated: `False`
 
 ## Why earlier ~1e-4 appeared
 
@@ -36,19 +45,10 @@ Independent CUDA forwards under the default attention backend exhibit a runtime 
 - pixel_aupro_pp: `0.0000` pp
 - boundary_f_score_pp: `0.0000` pp
 
-## Backend scope (B1-05)
+## Limitations
 
-- Profile 1 `frozen_deterministic_math`: official/staged self-noise = 0; cross-path max = 4.77e-07.
-- Profile 2 `production_default_attention`: official self max = 4.72e-05; staged self max = 6.96e-05; cross-path max = 6.63e-05 (does not materially exceed self-noise).
-- Selected B2 profile: `frozen_deterministic_math` (hashed at `configs/execution/frozen_deterministic_math.json`).
-- Ten fresh processes under the selected profile: identical official hashes, identical staged hashes, cross-path max = 9.54e-07.
-
-## Dataset provenance
-
-- Invalid predecessor: `mvtec/sample` (flat `image/` assets; not returned by `MVTecAdapter`).
-- Accepted categories: `mvtec/bottle` (83 test) + `visa/candle` (200 test) via production adapters.
-- Superseded candidate raw evidence removed from the tree before main integration:
-  former path `docs/phase_b/b1_cuda_equivalence_manifest.pre_b105_candidate.json`,
-  SHA-256 `e09aa34c36718f95dd3d311bcc87192fb5948462aeb9c9318bbf6e7cfd793223`
-  (disposition recorded in the final concise manifest).
-
+- Independent-pass 1e-5 is valid only under frozen_deterministic_math.
+- Latency figures are diagnostic sanity checks only, not paper benchmarks.
+- Nonstandard layer set [2,4,6,8] validated on tiny synthetic CUDA model only.
+- Checkpoint path and SHA-256 are required CLI arguments; no hidden fallback paths.
+- mvtec/sample fixture evidence is retained historically but invalid for task gate.

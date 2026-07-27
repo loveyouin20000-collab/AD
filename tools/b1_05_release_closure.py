@@ -92,6 +92,7 @@ def finalize_strict_status(
     cross_path_max: float,
     ten_process_passed: bool,
     observed_profile: dict[str, Any],
+    control_availability: dict[str, bool] | None = None,
 ) -> dict[str, Any]:
     status = evaluate_b1_strict_status(
         B1StrictInputs(
@@ -107,6 +108,7 @@ def finalize_strict_status(
                 synthetic_candidate_layers_tested=(2, 4, 6, 8),
                 nonstandard_official_run_validated=False,
             ),
+            control_availability=control_availability,
         )
     )
     return {
@@ -258,6 +260,7 @@ def main() -> int:
         cross_path_max=float(ten["cross_path_max"]),
         ten_process_passed=bool(ten["passed"]),
         observed_profile=observed_attestation,
+        control_availability=observed.get("control_availability"),
     )
     payload = {
         "run_id": run_id,

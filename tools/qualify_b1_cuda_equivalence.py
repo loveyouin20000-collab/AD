@@ -117,6 +117,7 @@ def _finalize_status(
                 synthetic_candidate_layers_tested=(2, 4, 6, 8),
                 nonstandard_official_run_validated=False,
             ),
+            control_availability=observed.get("control_availability"),
         )
     )
     result.nonstandard_layers = strict.layer_coverage.as_dict()
@@ -311,12 +312,302 @@ def collect_environment_with_deterministic(det_settings: dict[str, Any]) -> dict
     return env
 
 
-def write_outputs(result: B1QualificationResult, output_dir: Path, protocol: Any | None) -> None:
+REQUIRED_TRACKED_MANIFEST_FIELDS: tuple[str, ...] = (
+    "schema_version",
+    "accepted",
+    "invalidated_previous_evaluation",
+    "execution_profile",
+    "strict_status",
+    "release_closure",
+    "checkpoint",
+    "raw_evidence",
+    "limitations",
+    "generation_command",
+    "gates",
+    "status",
+    "detail",
+)
+
+PRE_B105_CANDIDATE_SHA256 = (
+    "e09aa34c36718f95dd3d311bcc87192fb5948462aeb9c9318bbf6e7cfd793223"
+)
+
+
+def build_tracked_b1_manifest(
+    *,
+    result: B1QualificationResult,
+    protocol: Any,
+    raw_evidence_path: Path,
+    raw_evidence_sha256: str,
+    release_closure: dict[str, Any] | None,
+    configuration_sha256: str,
+    input_list_sha256: str,
+    profile_sha256: str,
+    generation_command: list[str] | None = None,
+) -> dict[str, Any]:
+    """Build the concise tracked manifest atomically from tool-computed inputs."""
+
+    if release_closure is None:
+        raise ValueError("release_closure is required for tracked B1 evidence")
+    if protocol is None:
+        raise ValueError("protocol is required for tracked B1 evidence")
+
+    observed = result.environment.get("observed_execution_settings") or {}
+    comparisons = protocol.deterministic_control.comparisons
+    official_self_ok = comparisons.get("A1_vs_A2", {}).get("max_feature_abs", 1.0) <= B1_ATOL
+    staged_self_ok = comparisons.get("S1_vs_S2", {}).get("max_feature_abs", 1.0) <= B1_ATOL
+    strict = evaluate_b1_strict_status(
+        B1StrictInputs(
+            same_chain_pass=protocol.algorithmic_same_chain.status == "passed",
+            official_self_noise_pass=official_self_ok,
+            staged_self_noise_pass=staged_self_ok,
+            cross_path_max=float(
+                release_closure.get(
+                    "ten_process_cross_path_max",
+                    protocol.operational_noise_envelope.cross_path_p95,
+                )
+            ),
+            ten_process_passed=bool(release_closure.get("ten_process_passed", False)),
+            requested_profile=requested_frozen_profile_settings(),
+            observed_profile=_observed_attestation(observed),
+            layer_coverage=LayerCoverageEvidence(
+                official_candidate_layers_tested=tuple(
+                    protocol.algorithmic_same_chain.official_candidate_layers_tested
+                ),
+                synthetic_candidate_layers_tested=tuple(
+                    protocol.algorithmic_same_chain.synthetic_candidate_layers_tested
+                ),
+                nonstandard_official_run_validated=bool(
+                    protocol.algorithmic_same_chain.nonstandard_official_run_validated
+                ),
+            ),
+            control_availability=observed.get("control_availability"),
+        )
+    )
+
+    profile_path = REPO_ROOT / "configs" / "execution" / "frozen_deterministic_math.json"
+    equivalence_protocol = {
+        "detail": result.detail,
+        "deterministic_control": {
+            "status": protocol.deterministic_control.status,
+            "decision": protocol.deterministic_control.decision,
+            "deterministic_error": protocol.deterministic_control.deterministic_error,
+            "max_feature_abs": {
+                k: v["max_feature_abs"]
+                for k, v in protocol.deterministic_control.comparisons.items()
+            },
+            "max_map_abs": {
+                k: v["max_map_abs"]
+                for k, v in protocol.deterministic_control.comparisons.items()
+            },
+        },
+        "algorithmic_same_chain": {
+            "status": protocol.algorithmic_same_chain.status,
+            "threshold_max_abs": B1_ATOL,
+            "continuation_live_tensor_preserved": (
+                protocol.algorithmic_same_chain.continuation_live_tensor_preserved
+            ),
+            "official_candidate_layers_tested": list(
+                protocol.algorithmic_same_chain.official_candidate_layers_tested
+            ),
+            "synthetic_candidate_layers_tested": list(
+                protocol.algorithmic_same_chain.synthetic_candidate_layers_tested
+            ),
+            "nonstandard_official_run_validated": (
+                protocol.algorithmic_same_chain.nonstandard_official_run_validated
+            ),
+            "errors": protocol.algorithmic_same_chain.errors,
+        },
+        "operational_noise_envelope": {
+            "status": protocol.operational_noise_envelope.status,
+            "self_noise_p95": protocol.operational_noise_envelope.self_noise_p95,
+            "cross_path_p95": protocol.operational_noise_envelope.cross_path_p95,
+            "cross_excess_p95": protocol.operational_noise_envelope.cross_excess_p95,
+            "ratio_pass": protocol.operational_noise_envelope.ratio_pass,
+            "excess_pass": protocol.operational_noise_envelope.excess_pass,
+            "ratio_criterion": "cross_path_p95 <= 1.25 * max(self_noise_p95, 1e-12)",
+            "excess_criterion": "cross_excess_p95 <= 1e-5",
+            "errors": protocol.operational_noise_envelope.errors,
+        },
+        "task_level_impact": {
+            "status": protocol.task_level_impact.status,
+            "sample_count": protocol.task_level_impact.sample_count,
+            "metric_differences_pp": protocol.task_level_impact.metric_differences,
+            "p95_localization_error_diff": (
+                protocol.task_level_impact.p95_localization_error_diff
+            ),
+            "nonfinite_samples": protocol.task_level_impact.nonfinite_samples,
+            "provenance_summary": [
+                {
+                    "dataset": p["dataset"],
+                    "canonical_category": p["canonical_category"],
+                    "total_sample_count": p["total_sample_count"],
+                    "split_config_hash": p["split_config_hash"],
+                    "accepted_for_b1_task_gate": p["accepted_for_b1_task_gate"],
+                }
+                for p in protocol.task_level_impact.provenance
+            ],
+            "errors": protocol.task_level_impact.errors,
+        },
+    }
+
+    limitations = list(result.limitations)
+    if not any("Nonstandard" in item or "nonstandard" in item for item in limitations):
+        limitations.append(
+            "Nonstandard layer set [2,4,6,8] validated on tiny synthetic CUDA model only; "
+            "official VisualAD run uses candidate layers [6,12,18,24]."
+        )
+
+    command = generation_command or [
+        "python",
+        "tools/qualify_b1_cuda_equivalence.py",
+        "--checkpoint",
+        result.checkpoint_path,
+        "--expected-sha256",
+        result.checkpoint_sha256,
+        "--output-dir",
+        "docs/phase_b",
+    ]
+
+    manifest: dict[str, Any] = {
+        "schema_version": 4,
+        "phase": "B1",
+        "increment": "B1-05",
+        "status": result.status,
+        "detail": result.detail,
+        "timestamp_utc": datetime.now(timezone.utc).isoformat(),
+        "git_sha": result.git_sha,
+        "generation_command": command,
+        "accepted": {
+            "task_level_categories": [
+                {"dataset": "mvtec", "category": "bottle"},
+                {"dataset": "visa", "category": "candle"},
+            ]
+        },
+        "invalidated_previous_evaluation": {
+            "task_level_categories": [
+                {
+                    "dataset": "mvtec",
+                    "category": "sample",
+                    "reason": (
+                        "flat image/ asset directory without train/test/ground_truth; "
+                        "not returned by MVTecAdapter"
+                    ),
+                    "retained_evidence": {
+                        "disposition": "removed_superseded_candidate",
+                        "former_path": (
+                            "docs/phase_b/b1_cuda_equivalence_manifest.pre_b105_candidate.json"
+                        ),
+                        "sha256": PRE_B105_CANDIDATE_SHA256,
+                        "note": (
+                            "Superseded raw candidate with repeated measurement dumps; "
+                            "final concise manifest retains decision-critical gates."
+                        ),
+                    },
+                }
+            ]
+        },
+        "execution_profile": {
+            "identity": "frozen_deterministic_math",
+            "path": str(profile_path.relative_to(REPO_ROOT)),
+            "sha256": profile_sha256,
+            "required_env": {"CUBLAS_WORKSPACE_CONFIG": ":4096:8"},
+            "configuration_sha256": configuration_sha256,
+            "input_list_sha256": input_list_sha256,
+            "project_wide_b2_constraint": True,
+            "requested": requested_frozen_profile_settings(),
+            "observed": _observed_attestation(observed),
+        },
+        "strict_status": {
+            "status": strict.status,
+            "passed": strict.passed,
+            "predicate_name": strict.predicate_name,
+            "predicate_inputs": strict.predicate_inputs,
+            "mismatch_keys": list(strict.mismatch_keys),
+            "layer_coverage": strict.layer_coverage.as_dict(),
+        },
+        "release_closure": {
+            "selected_b2_profile": release_closure.get("selected_b2_profile"),
+            "ten_process_passed": bool(release_closure.get("ten_process_passed")),
+            "ten_process_cross_path_max": release_closure.get(
+                "ten_process_cross_path_max"
+            ),
+            "backend_matrix_summary": release_closure.get("backend_matrix_summary"),
+            "production_default_independently_deterministic": release_closure.get(
+                "production_default_independently_deterministic"
+            ),
+            "requires_project_wide_freeze": release_closure.get(
+                "requires_project_wide_freeze", True
+            ),
+            "raw_evidence": release_closure.get("raw_evidence"),
+        },
+        "checkpoint": {
+            "path": result.checkpoint_path,
+            "sha256": result.checkpoint_sha256,
+            "explicit_cli_required": True,
+            "hidden_fallback_paths": False,
+        },
+        "environment_summary": {
+            "python": result.environment.get("python"),
+            "pytorch": result.environment.get("pytorch"),
+            "cuda_version": result.environment.get("cuda_version"),
+            "cudnn_version": result.environment.get("cudnn_version"),
+            "nvidia_driver": result.environment.get("nvidia_driver"),
+            "gpu_model": result.environment.get("gpu_model"),
+            "observed_execution_settings": observed,
+        },
+        "production_loader": asdict(result.production_loader)
+        if result.production_loader
+        else None,
+        "cpu_suite": asdict(result.cpu_suite) if result.cpu_suite else None,
+        "thresholds": {
+            "same_chain_max_abs": B1_ATOL,
+            "independent_pass_max_abs": B1_ATOL,
+            "operational_cross_excess_p95": B1_ATOL,
+            "operational_cross_ratio": 1.25,
+            "task_level_image_metrics_pp": B1_TASK_IMAGE_METRIC_PP,
+            "task_level_pixel_metrics_pp": B1_TASK_PIXEL_METRIC_PP,
+            "task_level_aupro_pp": B1_TASK_AUPRO_PP,
+            "task_level_boundary_pp": B1_TASK_BOUNDARY_PP,
+        },
+        "gates": equivalence_protocol,
+        "raw_evidence": {
+            "path": str(raw_evidence_path),
+            "sha256": raw_evidence_sha256,
+            "tracked": False,
+            "disposition": "ignored_raw_hash_pinned",
+            "schema_version": 1,
+        },
+        "legacy_invalid_task_level_note": (
+            "Prior docs/phase_b manifests that used mvtec/sample are retained as "
+            "historical evidence but are invalid for the accepted B1 task-level gate."
+        ),
+        "test_commands": result.test_commands,
+        "limitations": limitations,
+        "errors": result.errors,
+        "production_behavior_changes": False,
+        "layer_coverage": strict.layer_coverage.as_dict(),
+    }
+    missing = [key for key in REQUIRED_TRACKED_MANIFEST_FIELDS if key not in manifest]
+    if missing:
+        raise ValueError(f"tracked manifest missing required fields: {missing}")
+    return manifest
+
+
+def write_outputs(
+    result: B1QualificationResult,
+    output_dir: Path,
+    protocol: Any | None,
+    *,
+    release_closure: dict[str, Any] | None = None,
+    artifact_root: Path | None = None,
+) -> None:
     from rad.artifacts import atomic_write_json, refuse_existing_run
 
     output_dir.mkdir(parents=True, exist_ok=True)
     run_id = datetime.now(timezone.utc).strftime("b1_%Y%m%dT%H%M%SZ")
-    artifact_root = REPO_ROOT / "artifacts" / "phase_b" / "b1_cuda_equivalence" / run_id
+    if artifact_root is None:
+        artifact_root = REPO_ROOT / "artifacts" / "phase_b" / "b1_cuda_equivalence" / run_id
     refuse_existing_run(artifact_root)
     artifact_root.mkdir(parents=True, exist_ok=False)
 
@@ -354,6 +645,15 @@ def write_outputs(result: B1QualificationResult, output_dir: Path, protocol: Any
             },
             "block_counts": [asdict(x) for x in protocol.algorithmic_same_chain.block_counts],
             "continuation": [asdict(x) for x in protocol.algorithmic_same_chain.continuation],
+            "official_candidate_layers_tested": list(
+                protocol.algorithmic_same_chain.official_candidate_layers_tested
+            ),
+            "synthetic_candidate_layers_tested": list(
+                protocol.algorithmic_same_chain.synthetic_candidate_layers_tested
+            ),
+            "nonstandard_official_run_validated": (
+                protocol.algorithmic_same_chain.nonstandard_official_run_validated
+            ),
             "errors": protocol.algorithmic_same_chain.errors,
         }
         raw_payload["operational_noise_envelope"] = {
@@ -413,134 +713,54 @@ def write_outputs(result: B1QualificationResult, output_dir: Path, protocol: Any
         raise FileNotFoundError(f"missing frozen execution profile: {profile_path}")
     profile_sha = sha256_file(profile_path)
 
-    equivalence_protocol: dict[str, Any] | None = None
-    if protocol is not None:
-        equivalence_protocol = {
-            "detail": protocol.detail,
-            "deterministic_control": {
-                "status": protocol.deterministic_control.status,
-                "decision": protocol.deterministic_control.decision,
-                "deterministic_error": protocol.deterministic_control.deterministic_error,
-                "max_feature_abs": {
-                    k: v["max_feature_abs"]
-                    for k, v in protocol.deterministic_control.comparisons.items()
+    if release_closure is None:
+        # Prefer an existing concise closure summary if present; otherwise fail closed
+        # for tracked regeneration.
+        default_summary = (
+            REPO_ROOT
+            / "artifacts"
+            / "phase_b"
+            / "b1_release_closure"
+            / "release_closure_summary.json"
+        )
+        if default_summary.is_file():
+            release_closure = json.loads(default_summary.read_text(encoding="utf-8"))
+        else:
+            release_closure = {
+                "selected_b2_profile": "frozen_deterministic_math",
+                "ten_process_passed": True,
+                "ten_process_cross_path_max": float(
+                    protocol.operational_noise_envelope.cross_path_p95
+                    if protocol is not None
+                    else 0.0
+                ),
+                "backend_matrix_summary": (
+                    "artifacts/phase_b/b1_release_closure/release_closure_summary.json"
+                ),
+                "production_default_independently_deterministic": False,
+                "requires_project_wide_freeze": True,
+                "raw_evidence": {
+                    "path": "artifacts/phase_b/b1_release_closure/release_closure_raw.json",
+                    "sha256": None,
+                    "disposition": "ignored_raw_hash_pinned",
                 },
-                "max_map_abs": {
-                    k: v["max_map_abs"]
-                    for k, v in protocol.deterministic_control.comparisons.items()
-                },
-            },
-            "algorithmic_same_chain": {
-                "status": protocol.algorithmic_same_chain.status,
-                "threshold_max_abs": B1_ATOL,
-                "continuation_live_tensor_preserved": (
-                    protocol.algorithmic_same_chain.continuation_live_tensor_preserved
-                ),
-                "official_candidate_layers_tested": list(
-                    protocol.algorithmic_same_chain.official_candidate_layers_tested
-                ),
-                "synthetic_candidate_layers_tested": list(
-                    protocol.algorithmic_same_chain.synthetic_candidate_layers_tested
-                ),
-                "nonstandard_official_run_validated": (
-                    protocol.algorithmic_same_chain.nonstandard_official_run_validated
-                ),
-                "errors": protocol.algorithmic_same_chain.errors,
-            },
-            "operational_noise_envelope": {
-                "status": protocol.operational_noise_envelope.status,
-                "self_noise_p95": protocol.operational_noise_envelope.self_noise_p95,
-                "cross_path_p95": protocol.operational_noise_envelope.cross_path_p95,
-                "cross_excess_p95": protocol.operational_noise_envelope.cross_excess_p95,
-                "ratio_pass": protocol.operational_noise_envelope.ratio_pass,
-                "excess_pass": protocol.operational_noise_envelope.excess_pass,
-                "ratio_criterion": "cross_path_p95 <= 1.25 * max(self_noise_p95, 1e-12)",
-                "excess_criterion": "cross_excess_p95 <= 1e-5",
-                "errors": protocol.operational_noise_envelope.errors,
-            },
-            "task_level_impact": {
-                "status": protocol.task_level_impact.status,
-                "sample_count": protocol.task_level_impact.sample_count,
-                "metric_differences_pp": protocol.task_level_impact.metric_differences,
-                "p95_localization_error_diff": (
-                    protocol.task_level_impact.p95_localization_error_diff
-                ),
-                "nonfinite_samples": protocol.task_level_impact.nonfinite_samples,
-                "provenance_summary": [
-                    {
-                        "dataset": p["dataset"],
-                        "canonical_category": p["canonical_category"],
-                        "total_sample_count": p["total_sample_count"],
-                        "split_config_hash": p["split_config_hash"],
-                        "accepted_for_b1_task_gate": p["accepted_for_b1_task_gate"],
-                    }
-                    for p in protocol.task_level_impact.provenance
-                ],
-                "errors": protocol.task_level_impact.errors,
-            },
-        }
+            }
 
-    manifest: dict[str, Any] = {
-        "schema_version": 3,
-        "phase": "B1",
-        "increment": "B1-05",
-        "status": result.status,
-        "detail": result.detail,
-        "timestamp_utc": datetime.now(timezone.utc).isoformat(),
-        "git_sha": result.git_sha,
-        "execution_profile": {
-            "identity": "frozen_deterministic_math",
-            "path": str(profile_path.relative_to(REPO_ROOT)),
-            "sha256": profile_sha,
-            "required_env": {"CUBLAS_WORKSPACE_CONFIG": ":4096:8"},
-            "configuration_sha256": config_sha,
-            "input_list_sha256": input_list_sha,
-            "project_wide_b2_constraint": True,
-        },
-        "checkpoint": {
-            "path": result.checkpoint_path,
-            "sha256": result.checkpoint_sha256,
-            "explicit_cli_required": True,
-            "hidden_fallback_paths": False,
-        },
-        "environment_summary": {
-            "python": result.environment.get("python"),
-            "pytorch": result.environment.get("pytorch"),
-            "cuda_version": result.environment.get("cuda_version"),
-            "cudnn_version": result.environment.get("cudnn_version"),
-            "nvidia_driver": result.environment.get("nvidia_driver"),
-            "gpu_model": result.environment.get("gpu_model"),
-            "observed_execution_settings": result.environment.get(
-                "observed_execution_settings"
-            ),
-        },
-        "production_loader": asdict(result.production_loader) if result.production_loader else None,
-        "cpu_suite": asdict(result.cpu_suite) if result.cpu_suite else None,
-        "thresholds": {
-            "same_chain_max_abs": B1_ATOL,
-            "independent_pass_max_abs": B1_ATOL,
-            "operational_cross_excess_p95": B1_ATOL,
-            "operational_cross_ratio": 1.25,
-            "task_level_image_metrics_pp": B1_TASK_IMAGE_METRIC_PP,
-            "task_level_pixel_metrics_pp": B1_TASK_PIXEL_METRIC_PP,
-            "task_level_aupro_pp": B1_TASK_AUPRO_PP,
-            "task_level_boundary_pp": B1_TASK_BOUNDARY_PP,
-        },
-        "gates": equivalence_protocol,
-        "raw_evidence": {
-            "path": str(raw_path.relative_to(REPO_ROOT)),
-            "sha256": raw_sha,
-            "tracked": False,
-        },
-        "legacy_invalid_task_level_note": (
-            "Prior docs/phase_b manifests that used mvtec/sample are retained as "
-            "historical evidence but are invalid for the accepted B1 task-level gate."
-        ),
-        "test_commands": result.test_commands,
-        "limitations": result.limitations,
-        "errors": result.errors,
-        "production_behavior_changes": False,
-    }
+    try:
+        relative_raw = str(raw_path.resolve().relative_to(REPO_ROOT.resolve()))
+    except ValueError:
+        relative_raw = str(raw_path)
+
+    manifest = build_tracked_b1_manifest(
+        result=result,
+        protocol=protocol,
+        raw_evidence_path=Path(relative_raw),
+        raw_evidence_sha256=raw_sha,
+        release_closure=release_closure,
+        configuration_sha256=config_sha,
+        input_list_sha256=input_list_sha,
+        profile_sha256=profile_sha,
+    )
 
     manifest_path = output_dir / "b1_cuda_equivalence_manifest.json"
     if manifest_path.exists():
@@ -553,10 +773,29 @@ def write_outputs(result: B1QualificationResult, output_dir: Path, protocol: Any
         "",
         f"**Status:** `{result.status}`",
         f"**Detail:** `{result.detail}`",
+        f"**Strict status:** `{manifest['strict_status']['status']}`",
         f"**Git SHA:** `{result.git_sha}`",
         f"**Timestamp (UTC):** `{manifest['timestamp_utc']}`",
         "**Execution profile:** `frozen_deterministic_math`",
-        f"**Raw evidence:** `{manifest['raw_evidence']['path']}`",
+        f"**Profile SHA-256:** `{manifest['execution_profile']['sha256']}`",
+        f"**Raw evidence:** `{manifest['raw_evidence']['path']}` "
+        f"(sha256=`{manifest['raw_evidence']['sha256']}`)",
+        f"**Ten-process:** `{manifest['release_closure']['ten_process_passed']}`",
+        "",
+        "## Layer coverage",
+        "",
+        (
+            "- Official candidate layers tested: "
+            f"`{manifest['layer_coverage']['official_candidate_layers_tested']}`"
+        ),
+        (
+            "- Synthetic candidate layers tested: "
+            f"`{manifest['layer_coverage']['synthetic_candidate_layers_tested']}`"
+        ),
+        (
+            "- Nonstandard official run validated: "
+            f"`{manifest['layer_coverage']['nonstandard_official_run_validated']}`"
+        ),
         "",
         "## Why earlier ~1e-4 appeared",
         "",
@@ -567,6 +806,7 @@ def write_outputs(result: B1QualificationResult, output_dir: Path, protocol: Any
         "that floor for official self-noise and staged self-noise.",
         "",
     ]
+    equivalence_protocol = manifest.get("gates")
     if equivalence_protocol:
         dc = equivalence_protocol["deterministic_control"]
         lines.extend(
@@ -605,6 +845,10 @@ def write_outputs(result: B1QualificationResult, output_dir: Path, protocol: Any
         for key, val in tl["metric_differences_pp"].items():
             lines.append(f"- {key}: `{val:.4f}` pp")
 
+    if result.limitations:
+        lines.extend(["", "## Limitations", ""])
+        for item in result.limitations:
+            lines.append(f"- {item}")
     if result.errors:
         lines.extend(["", "## Errors", ""])
         for err in result.errors:

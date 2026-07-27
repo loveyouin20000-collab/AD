@@ -109,6 +109,16 @@ def test_unavailable_observation_is_not_a_confirmed_match() -> None:
     observed = dict(requested)
     observed["mha_fastpath_enabled"] = None
     assert profile_attestation_matches(requested, observed) is False
+    # When the platform explicitly lacks the control and the request is disable,
+    # the disable request is vacuously satisfied.
+    assert (
+        profile_attestation_matches(
+            requested,
+            observed,
+            control_availability={"mha_fastpath_enabled": False},
+        )
+        is True
+    )
     result = evaluate_b1_strict_status(
         _base_inputs(requested_profile=requested, observed_profile=observed)
     )

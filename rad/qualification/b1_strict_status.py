@@ -2,8 +2,9 @@
 
 from __future__ import annotations
 
+from collections.abc import Mapping
 from dataclasses import dataclass, field
-from typing import Any, Mapping
+from typing import Any
 
 from rad.qualification.b1_cuda_equivalence import B1_ATOL
 
@@ -52,6 +53,7 @@ class B1StrictInputs:
     requested_profile: Mapping[str, Any]
     observed_profile: Mapping[str, Any]
     layer_coverage: LayerCoverageEvidence
+    control_availability: Mapping[str, bool] | None = None
 
 
 @dataclass(frozen=True)
@@ -74,18 +76,14 @@ def requested_frozen_profile_settings() -> dict[str, Any]:
     return dict(FROZEN_PROFILE_REQUESTED)
 
 
-def profile_attestation_matches(
-    requested: Mapping[str, Any],
-    observed: Mapping[str, Any],
-) -> bool:
-    return not profile_mismatch_keys(requested, observed)
-
-
 def profile_mismatch_keys(
     requested: Mapping[str, Any],
     observed: Mapping[str, Any],
+    *,
+    control_availability: Mapping[str, bool] | None = None,
 ) -> tuple[str, ...]:
     mismatches: list[str] = []
+    availability = control_availability or {}
     for key in STRICT_CRITICAL_SETTINGS:
         if key not in requested:
             mismatches.append(key)
@@ -95,11 +93,38 @@ def profile_mismatch_keys(
             continue
         observed_value = observed[key]
         if observed_value is None:
+            # Unavailable getters are never a confirmed match. The only exception is
+            # a requested disable (False) for a control that the platform does not
+            # expose at all — then the request is vacuously satisfied.
+            if availability.get(key) is False and requested[key] is False:
+                continue
             mismatches.append(key)
             continue
         if observed_value != requested[key]:
             mismatches.append(key)
     return tuple(mismatches)
+
+
+def profile_attestation_matches(
+    requested: Mapping[str, Any],
+    observed: Mapping[str, Any],
+    *,
+    control_availability: Mapping[str, bool] | None = None,
+) -> bool:
+    return not profile_mismatch_keys(
+        requested,
+        observed,
+        control_availability=control_availability,
+    )
+
+
+def control_availability_from_observation(observed: Mapping[str, Any]) -> dict[str, bool]:
+    """Infer whether each strict-critical control could be observed."""
+
+    availability: dict[str, bool] = {}
+    for key in STRICT_CRITICAL_SETTINGS:
+        availability[key] = observed.get(key) is not None
+    return availability
 
 
 def evaluate_b1_strict_status(inputs: B1StrictInputs) -> B1StrictStatus:
@@ -114,7 +139,11 @@ def evaluate_b1_strict_status(inputs: B1StrictInputs) -> B1StrictStatus:
     AND requested_profile_matches_effective_profile
     """
 
-    mismatches = profile_mismatch_keys(inputs.requested_profile, inputs.observed_profile)
+    mismatches = profile_mismatch_keys(
+        inputs.requested_profile,
+        inputs.observed_profile,
+        control_availability=inputs.control_availability,
+    )
     cross_ok = float(inputs.cross_path_max) <= float(B1_ATOL)
     predicate_inputs = {
         "same_chain_pass": bool(inputs.same_chain_pass),
