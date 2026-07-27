@@ -193,7 +193,7 @@ def test_affected_clis_use_portable_defaults_or_require_explicit_paths(
             omit_fields = tuple(contract.get("omit_fields", ()))
             for field_path, value in _iter_operational_yaml_values(payload):
                 if field_path in omit_fields:
-                    assert False, (
+                    raise AssertionError(
                         f"{default_config.name} must omit {field_path} "
                         f"for CLI override (found {value!r})"
                     )

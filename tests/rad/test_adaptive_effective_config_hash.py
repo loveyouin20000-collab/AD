@@ -3,8 +3,6 @@ from __future__ import annotations
 import textwrap
 from pathlib import Path
 
-import yaml
-
 from rad.evaluation.effective_config import (
     adaptive_config_identity,
     canonical_config_sha256,
