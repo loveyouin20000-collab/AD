@@ -23,6 +23,12 @@ from rad.qualification.b1_cuda_equivalence import (  # noqa: E402
     run_backend_profile_matrix,
     sha256_file,
 )
+from rad.qualification.b1_strict_status import (  # noqa: E402
+    B1StrictInputs,
+    LayerCoverageEvidence,
+    evaluate_b1_strict_status,
+    requested_frozen_profile_settings,
+)
 
 
 def _decide_backend(matrix: dict[str, Any]) -> dict[str, Any]:
@@ -76,6 +82,41 @@ def _decide_backend(matrix: dict[str, Any]) -> dict[str, Any]:
         decision["pass_detail_candidate"] = None
         decision["blocked_reason"] = "no independently deterministic backend profile"
     return decision
+
+
+def finalize_strict_status(
+    *,
+    same_chain_pass: bool,
+    official_self_noise_pass: bool,
+    staged_self_noise_pass: bool,
+    cross_path_max: float,
+    ten_process_passed: bool,
+    observed_profile: dict[str, Any],
+) -> dict[str, Any]:
+    status = evaluate_b1_strict_status(
+        B1StrictInputs(
+            same_chain_pass=same_chain_pass,
+            official_self_noise_pass=official_self_noise_pass,
+            staged_self_noise_pass=staged_self_noise_pass,
+            cross_path_max=cross_path_max,
+            ten_process_passed=ten_process_passed,
+            requested_profile=requested_frozen_profile_settings(),
+            observed_profile=observed_profile,
+            layer_coverage=LayerCoverageEvidence(
+                official_candidate_layers_tested=(6, 12, 18, 24),
+                synthetic_candidate_layers_tested=(2, 4, 6, 8),
+                nonstandard_official_run_validated=False,
+            ),
+        )
+    )
+    return {
+        "status": status.status,
+        "passed": status.passed,
+        "predicate_name": status.predicate_name,
+        "predicate_inputs": status.predicate_inputs,
+        "mismatch_keys": list(status.mismatch_keys),
+        "layer_coverage": status.layer_coverage.as_dict(),
+    }
 
 
 def run_ten_process(
@@ -188,6 +229,36 @@ def main() -> int:
         profile=selected,
         input_path=sample_paths[0],
     )
+    from rad.qualification.b1_cuda_equivalence import (  # noqa: E402
+        apply_execution_profile,
+        observe_effective_execution_settings,
+    )
+
+    apply_execution_profile(selected)
+    observed = observe_effective_execution_settings()
+    # Map observed SDP getter names onto the frozen-profile attestation keys.
+    observed_attestation = {
+        "CUBLAS_WORKSPACE_CONFIG": observed.get("cublas_workspace_config"),
+        "use_deterministic_algorithms": observed.get("use_deterministic_algorithms"),
+        "cuda.matmul.allow_tf32": observed.get("cuda.matmul.allow_tf32"),
+        "cudnn.allow_tf32": observed.get("cudnn.allow_tf32"),
+        "cudnn.benchmark": observed.get("cudnn.benchmark"),
+        "cudnn.deterministic": observed.get("cudnn.deterministic"),
+        "float32_matmul_precision": observed.get("float32_matmul_precision"),
+        "flash_sdp_enabled": observed.get("flash_sdp_enabled"),
+        "mem_efficient_sdp_enabled": observed.get("mem_efficient_sdp_enabled"),
+        "math_sdp_enabled": observed.get("math_sdp_enabled"),
+        "mha_fastpath_enabled": observed.get("mha_fastpath_enabled"),
+    }
+    frozen = decision["frozen_deterministic_math"]
+    strict = finalize_strict_status(
+        same_chain_pass=True,
+        official_self_noise_pass=frozen["official_self_max"] == 0.0,
+        staged_self_noise_pass=frozen["staged_self_max"] == 0.0,
+        cross_path_max=float(ten["cross_path_max"]),
+        ten_process_passed=bool(ten["passed"]),
+        observed_profile=observed_attestation,
+    )
     payload = {
         "run_id": run_id,
         "timestamp_utc": datetime.now(timezone.utc).isoformat(),
@@ -195,6 +266,8 @@ def main() -> int:
         "backend_decision": decision,
         "ten_process": ten,
         "selected_b2_profile": selected,
+        "strict_status": strict,
+        "observed_execution_settings": observed,
     }
     raw = out / "release_closure_raw.json"
     atomic_write_json(raw, payload)
@@ -204,6 +277,7 @@ def main() -> int:
         "backend_decision": decision,
         "ten_process_passed": ten["passed"],
         "ten_process_cross_path_max": ten["cross_path_max"],
+        "strict_status": strict,
         "raw_evidence": {
             "path": str(raw.resolve().relative_to(REPO_ROOT.resolve())),
             "sha256": sha256_file(raw),
@@ -211,7 +285,7 @@ def main() -> int:
     }
     atomic_write_json(out / "release_closure_summary.json", summary)
     print(json.dumps(summary, indent=2, sort_keys=True))
-    return 0 if ten["passed"] else 1
+    return 0 if strict["passed"] else 1
 
 
 if __name__ == "__main__":

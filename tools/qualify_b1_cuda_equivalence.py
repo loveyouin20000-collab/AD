@@ -42,11 +42,18 @@ from rad.qualification.b1_cuda_equivalence import (  # noqa: E402
     load_preprocessed_image,
     load_teacher_production,
     measure_staged_depth_latencies,
+    observe_effective_execution_settings,
     run_cpu_regression_suite,
     run_equivalence_protocol,
     set_seed,
     sha256_file,
     validate_checkpoint,
+)
+from rad.qualification.b1_strict_status import (  # noqa: E402
+    B1StrictInputs,
+    LayerCoverageEvidence,
+    evaluate_b1_strict_status,
+    requested_frozen_profile_settings,
 )
 
 
@@ -54,9 +61,28 @@ def _tensor_diff_dict(diff: Any) -> dict[str, Any]:
     return asdict(diff)
 
 
+def _observed_attestation(observed: dict[str, Any]) -> dict[str, Any]:
+    return {
+        "CUBLAS_WORKSPACE_CONFIG": observed.get("cublas_workspace_config"),
+        "use_deterministic_algorithms": observed.get("use_deterministic_algorithms"),
+        "cuda.matmul.allow_tf32": observed.get("cuda.matmul.allow_tf32"),
+        "cudnn.allow_tf32": observed.get("cudnn.allow_tf32"),
+        "cudnn.benchmark": observed.get("cudnn.benchmark"),
+        "cudnn.deterministic": observed.get("cudnn.deterministic"),
+        "float32_matmul_precision": observed.get("float32_matmul_precision"),
+        "flash_sdp_enabled": observed.get("flash_sdp_enabled"),
+        "mem_efficient_sdp_enabled": observed.get("mem_efficient_sdp_enabled"),
+        "math_sdp_enabled": observed.get("math_sdp_enabled"),
+        "mha_fastpath_enabled": observed.get("mha_fastpath_enabled"),
+    }
+
+
 def _finalize_status(
     result: B1QualificationResult,
     protocol: Any,
+    *,
+    ten_process_passed: bool = True,
+    cross_path_max: float | None = None,
 ) -> None:
     cpu_ok = (
         result.cpu_suite is not None
@@ -69,17 +95,52 @@ def _finalize_status(
     gate2 = protocol.operational_noise_envelope.status == "passed"
     task_ok = protocol.task_level_impact.status == "passed"
 
+    observed = result.environment.get("observed_execution_settings") or {}
+    comparisons = protocol.deterministic_control.comparisons
+    official_self_ok = comparisons.get("A1_vs_A2", {}).get("max_feature_abs", 1.0) <= B1_ATOL
+    staged_self_ok = comparisons.get("S1_vs_S2", {}).get("max_feature_abs", 1.0) <= B1_ATOL
+    if cross_path_max is None:
+        # Prefer protocol envelope cross-path when closure ten-process is unavailable.
+        cross_path_max = float(protocol.operational_noise_envelope.cross_path_p95)
+
+    strict = evaluate_b1_strict_status(
+        B1StrictInputs(
+            same_chain_pass=gate1,
+            official_self_noise_pass=official_self_ok,
+            staged_self_noise_pass=staged_self_ok,
+            cross_path_max=float(cross_path_max),
+            ten_process_passed=bool(ten_process_passed),
+            requested_profile=requested_frozen_profile_settings(),
+            observed_profile=_observed_attestation(observed),
+            layer_coverage=LayerCoverageEvidence(
+                official_candidate_layers_tested=tuple(DEFAULT_CANDIDATE_LAYERS),
+                synthetic_candidate_layers_tested=(2, 4, 6, 8),
+                nonstandard_official_run_validated=False,
+            ),
+        )
+    )
+    result.nonstandard_layers = strict.layer_coverage.as_dict()
+    result.detail = strict.status
+
+    if strict.status == "blocked_profile_mismatch":
+        result.status = "blocked"
+        result.errors.append(
+            "requested/effective execution profile mismatch: "
+            + ",".join(strict.mismatch_keys)
+        )
+        return
+
     if protocol.deterministic_control.decision == "B" and not (
         gate1 and gate2 and task_ok
     ):
         result.status = "blocked"
-        result.detail = protocol.detail
-        result.errors.append("deterministic operation unavailable and dual protocol inconclusive")
+        result.errors.append(
+            "deterministic operation unavailable and dual protocol inconclusive"
+        )
         return
 
-    if gate1 and gate2 and task_ok and loader_ok and cpu_ok:
+    if gate1 and gate2 and task_ok and loader_ok and cpu_ok and strict.passed:
         result.status = "passed"
-        result.detail = protocol.detail
         return
 
     if not gate1:
@@ -92,9 +153,10 @@ def _finalize_status(
         result.errors.append("production loader failed")
     if not cpu_ok and result.cpu_suite is not None:
         result.errors.append(f"CPU suite not green: {result.cpu_suite.summary}")
+    if not strict.passed:
+        result.errors.append(f"strict predicate failed: {strict.status}")
 
     result.status = "failed"
-    result.detail = protocol.detail
 
 
 def run_qualification(
@@ -220,21 +282,18 @@ def run_qualification(
     for label, ms in measure_staged_depth_latencies(visual, probe, device).items():
         result.latency.append(LatencyRecord(label=label, milliseconds=ms))
 
-    result.nonstandard_layers = {
-        "layers": [2, 4, 6, 8],
-        "validated_in": "tests/rad/test_cuda_staged_equivalence.py::test_nonstandard_candidate_layers_synthetic_cuda",
-        "note": "Tiny synthetic CUDA model; not a VisualAD paper configuration.",
-    }
+    result.nonstandard_layers = LayerCoverageEvidence(
+        official_candidate_layers_tested=tuple(DEFAULT_CANDIDATE_LAYERS),
+        synthetic_candidate_layers_tested=(2, 4, 6, 8),
+        nonstandard_official_run_validated=False,
+    ).as_dict()
 
     if not skip_cpu_suite:
         cpu = run_cpu_regression_suite()
         result.cpu_suite = cpu
 
     # Re-record observed settings after the frozen profile has been fully applied.
-    from rad.qualification.b1_cuda_equivalence import (
-        apply_attention_backend_overrides,
-        observe_effective_execution_settings,
-    )
+    from rad.qualification.b1_cuda_equivalence import apply_attention_backend_overrides
 
     apply_attention_backend_overrides()
     result.environment["observed_execution_settings"] = observe_effective_execution_settings()
@@ -377,8 +436,14 @@ def write_outputs(result: B1QualificationResult, output_dir: Path, protocol: Any
                 "continuation_live_tensor_preserved": (
                     protocol.algorithmic_same_chain.continuation_live_tensor_preserved
                 ),
-                "nonstandard_layers_validated": (
-                    protocol.algorithmic_same_chain.nonstandard_layers_validated
+                "official_candidate_layers_tested": list(
+                    protocol.algorithmic_same_chain.official_candidate_layers_tested
+                ),
+                "synthetic_candidate_layers_tested": list(
+                    protocol.algorithmic_same_chain.synthetic_candidate_layers_tested
+                ),
+                "nonstandard_official_run_validated": (
+                    protocol.algorithmic_same_chain.nonstandard_official_run_validated
                 ),
                 "errors": protocol.algorithmic_same_chain.errors,
             },

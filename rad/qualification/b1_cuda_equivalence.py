@@ -1253,7 +1253,9 @@ class SameChainGateResult:
     block_counts: list[BlockCountRecord]
     continuation: list[ContinuationRecord]
     continuation_live_tensor_preserved: bool
-    nonstandard_layers_validated: bool
+    official_candidate_layers_tested: tuple[int, ...]
+    synthetic_candidate_layers_tested: tuple[int, ...]
+    nonstandard_official_run_validated: bool
     errors: list[str] = field(default_factory=list)
 
 
@@ -1683,7 +1685,9 @@ def run_same_chain_gate(
         block_counts=block_counts,
         continuation=continuation,
         continuation_live_tensor_preserved=continuation_live,
-        nonstandard_layers_validated=True,
+        official_candidate_layers_tested=tuple(candidate_layers),
+        synthetic_candidate_layers_tested=(2, 4, 6, 8),
+        nonstandard_official_run_validated=False,
         errors=errors,
     )
 
