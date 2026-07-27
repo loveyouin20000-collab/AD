@@ -42,6 +42,12 @@ def _run(args: list[str], *, cwd: Path | None = None) -> subprocess.CompletedPro
     )
 
 
+def _target_data_args(tmp_path: Path) -> list[str]:
+    target_data = tmp_path / "visa"
+    target_data.mkdir(exist_ok=True)
+    return ["--target-data-path", str(target_data)]
+
+
 def test_zero_shot_contract_policy_loaded_before_target_and_digest_stable(
     tmp_path: Path,
 ) -> None:
@@ -103,6 +109,7 @@ def test_zero_shot_non_dry_run_rejects_test_policy_fixture(tmp_path: Path) -> No
             str(out),
             "--calibration-policy",
             str(TEST_POLICY_FIXTURE),
+            *_target_data_args(tmp_path),
         ]
     )
     assert_policy_fixture_rejected_for_real_run(proc)
@@ -130,6 +137,7 @@ def test_dynamic_policy_fixture_dry_run_ok_non_dry_run_rejected(tmp_path: Path) 
             str(out),
             "--calibration-policy",
             str(policy_path),
+            *_target_data_args(tmp_path),
             "--dry-run",
         ]
     )
@@ -147,6 +155,7 @@ def test_dynamic_policy_fixture_dry_run_ok_non_dry_run_rejected(tmp_path: Path) 
             str(out),
             "--calibration-policy",
             str(policy_path),
+            *_target_data_args(tmp_path),
         ]
     )
     assert_real_run_rejects_test_fixture(eval_proc)
@@ -169,6 +178,7 @@ def test_zero_shot_dry_run_writes_nothing(tmp_path: Path) -> None:
             str(out),
             "--calibration-policy",
             str(policy_path),
+            *_target_data_args(tmp_path),
             "--dry-run",
         ]
     )
@@ -190,6 +200,7 @@ def test_zero_shot_non_dry_run_missing_policy_fails(tmp_path: Path) -> None:
             str(out),
             "--calibration-policy",
             str(missing_policy),
+            *_target_data_args(tmp_path),
         ]
     )
     assert_missing_policy_artifact_integrity(proc)
@@ -212,6 +223,7 @@ def test_zero_shot_cli_policy_path_precedence_over_config(tmp_path: Path) -> Non
             str(out),
             "--calibration-policy",
             str(explicit_policy),
+            *_target_data_args(tmp_path),
             "--dry-run",
         ]
     )

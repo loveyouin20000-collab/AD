@@ -20,10 +20,18 @@ def _run_baseline_cli(args: list[str]) -> subprocess.CompletedProcess[str]:
 
 def test_baseline_dry_run_resolves_paths_and_command(tmp_path: Path):
     output_dir = tmp_path / "baseline_smoke_out"
+    train_data = tmp_path / "mvtec"
+    test_data = tmp_path / "visa"
+    train_data.mkdir()
+    test_data.mkdir()
     result = _run_baseline_cli(
         [
             "--config",
             "configs/rad/baseline_mvtec_to_visa.yaml",
+            "--train-data-path",
+            str(train_data),
+            "--test-data-path",
+            str(test_data),
             "--output-dir",
             str(output_dir),
             "--dry-run",
@@ -35,10 +43,18 @@ def test_baseline_dry_run_resolves_paths_and_command(tmp_path: Path):
 def test_baseline_checkpoint_dry_run_skips_train(tmp_path: Path):
     checkpoint = "weight/train_on_mvtec/CLIP.pth"
     output_dir = tmp_path / "baseline_ckpt_out"
+    train_data = tmp_path / "mvtec"
+    test_data = tmp_path / "visa"
+    train_data.mkdir()
+    test_data.mkdir()
     result = _run_baseline_cli(
         [
             "--config",
             "configs/rad/baseline_mvtec_to_visa.yaml",
+            "--train-data-path",
+            str(train_data),
+            "--test-data-path",
+            str(test_data),
             "--checkpoint",
             checkpoint,
             "--output-dir",

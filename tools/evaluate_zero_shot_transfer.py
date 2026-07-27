@@ -132,10 +132,15 @@ def main() -> int:
         or transfer.get("target_dataset")
         or (cfg.zero_shot.target_datasets[0] if cfg.zero_shot.target_datasets else "visa")
     )
-    target_path = _resolve(
-        args.target_data_path
-        or transfer.get("target_data_path", "/root/autodl-tmp/data/Visa")
-    )
+    configured_target_path = transfer.get("target_data_path")
+    if args.target_data_path is not None:
+        target_path = _resolve(args.target_data_path)
+    elif configured_target_path:
+        target_path = _resolve(configured_target_path)
+    else:
+        raise ArtifactIntegrityError(
+            "target data path is required via transfer.target_data_path or --target-data-path"
+        )
     backbone_name = str(raw.get("teacher", {}).get("backbone", "ViT-L/14@336px"))
     image_size = int(raw.get("image_size", 518))
 

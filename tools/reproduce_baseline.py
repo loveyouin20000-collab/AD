@@ -49,7 +49,7 @@ LOG_COLUMN_TO_METRIC_KEY = {
 @dataclass(frozen=True)
 class DatasetSpec:
     dataset: str
-    data_path: Path
+    data_path: Path | None = None
 
 
 @dataclass(frozen=True)
@@ -78,11 +78,19 @@ class BaselineConfig:
             image_size=int(raw["image_size"]),
             train=DatasetSpec(
                 dataset=str(raw["train"]["dataset"]),
-                data_path=Path(raw["train"]["data_path"]),
+                data_path=(
+                    Path(raw["train"]["data_path"])
+                    if raw["train"].get("data_path") is not None
+                    else None
+                ),
             ),
             test=DatasetSpec(
                 dataset=str(raw["test"]["dataset"]),
-                data_path=Path(raw["test"]["data_path"]),
+                data_path=(
+                    Path(raw["test"]["data_path"])
+                    if raw["test"].get("data_path") is not None
+                    else None
+                ),
             ),
             output_dir=Path(raw["output_dir"]),
         )
@@ -119,6 +127,10 @@ def package_versions() -> dict[str, str]:
 
 
 def build_train_command(cfg: BaselineConfig, checkpoint_dir: Path) -> list[str]:
+    if cfg.train.data_path is None:
+        raise DatasetIntegrityError(
+            "train data path is required via config train.data_path or --train-data-path"
+        )
     features = [str(x) for x in cfg.features_list]
     return [
         sys.executable,
@@ -151,6 +163,10 @@ def build_test_command(
     checkpoint_path: Path,
     result_dir: Path,
 ) -> list[str]:
+    if cfg.test.data_path is None:
+        raise DatasetIntegrityError(
+            "test data path is required via config test.data_path or --test-data-path"
+        )
     return [
         sys.executable,
         str(REPO_ROOT / "test.py"),
@@ -187,11 +203,15 @@ def manifest_path(output_dir: Path) -> Path:
 
 
 def validate_dataset_paths(cfg: BaselineConfig) -> None:
-    missing = [
-        p
-        for p in (cfg.train.data_path, cfg.test.data_path)
-        if not p.exists()
-    ]
+    missing: list[Path | str] = []
+    if cfg.train.data_path is None:
+        missing.append("train")
+    elif not cfg.train.data_path.exists():
+        missing.append(cfg.train.data_path)
+    if cfg.test.data_path is None:
+        missing.append("test")
+    elif not cfg.test.data_path.exists():
+        missing.append(cfg.test.data_path)
     if missing:
         joined = ", ".join(str(p) for p in missing)
         raise DatasetIntegrityError(f"dataset path(s) not found: {joined}")
@@ -289,10 +309,31 @@ def run_baseline(
     *,
     seed: int | None = None,
     output_dir: Path | None = None,
+    train_data_path: Path | None = None,
+    test_data_path: Path | None = None,
     dry_run: bool = False,
     checkpoint: Path | None = None,
 ) -> int:
     cfg = BaselineConfig.from_yaml(config_path)
+    if train_data_path is not None or test_data_path is not None:
+        cfg = BaselineConfig(
+            seed=cfg.seed,
+            device=cfg.device,
+            backbone=cfg.backbone,
+            features_list=cfg.features_list,
+            epoch=cfg.epoch,
+            batch_size=cfg.batch_size,
+            image_size=cfg.image_size,
+            train=DatasetSpec(
+                dataset=cfg.train.dataset,
+                data_path=train_data_path or cfg.train.data_path,
+            ),
+            test=DatasetSpec(
+                dataset=cfg.test.dataset,
+                data_path=test_data_path or cfg.test.data_path,
+            ),
+            output_dir=cfg.output_dir,
+        )
     if seed is not None:
         cfg = BaselineConfig(
             seed=seed,
@@ -407,6 +448,18 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         help="skip training and evaluate this checkpoint (official teacher freeze)",
     )
     parser.add_argument(
+        "--train-data-path",
+        type=Path,
+        default=None,
+        help="override train.data_path from config",
+    )
+    parser.add_argument(
+        "--test-data-path",
+        type=Path,
+        default=None,
+        help="override test.data_path from config",
+    )
+    parser.add_argument(
         "--dry-run",
         action="store_true",
         help="print resolved commands without running train/test",
@@ -421,6 +474,8 @@ def main(argv: list[str] | None = None) -> int:
             Path(args.config),
             seed=args.seed,
             output_dir=args.output_dir,
+            train_data_path=args.train_data_path,
+            test_data_path=args.test_data_path,
             dry_run=args.dry_run,
             checkpoint=args.checkpoint,
         )
