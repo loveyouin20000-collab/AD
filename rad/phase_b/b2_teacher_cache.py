@@ -36,7 +36,7 @@ _EXPECTED_CHECKPOINT_SHA256 = (
 _EXPECTED_B1_COMMIT = "3a751b2784a50eb0a08ed49e1db2df0b53608ccc"
 _EXPECTED_B2_COMMIT = "18bac047227754c975b23b46842458a5b41d5e2a"
 _EXPECTED_CONFIG_CANONICAL_SHA256 = (
-    "db610feab90db8c123a32259066d189ddea6406617208485caecc3fbc4cb519a"
+    "40e239425914fc5b23fb541a04374a7ad3248b2e707db6f71e95f84e07abc2f0"
 )
 _EXPECTED_DESCRIPTOR_IMPLEMENTATION_SHA256 = (
     "6846ad263d342649a0383c4f762f7820053428bf74a05ece8c02e1dcc641b615"
@@ -1428,12 +1428,18 @@ def _persistable_scientific_record(record: Mapping[str, Any]) -> dict[str, Any]:
 
 
 def _verify_persisted_tensor_values(record: Mapping[str, Any]) -> None:
-    """Verify every persisted tensor against its digest after a `.pt` reload."""
+    """Verify every persisted scientific tensor includes validated tensor values."""
 
     tensors = _mapping(record.get("tensors"), "tensors")
-    for name, meta in tensors.items():
+    if not tensors:
+        _fail("B2_CACHE_RESUME_TENSOR_MISSING", "scientific record has no tensors")
+    for name in sorted(tensors):
+        meta = tensors[name]
         if not isinstance(meta, Mapping) or "tensor" not in meta:
-            continue
+            _fail(
+                "B2_CACHE_RESUME_TENSOR_MISSING",
+                f"persisted tensor {name!r} is digest-only",
+            )
         _canonicalize_tensor_meta(str(name), meta)
 
 
@@ -1759,6 +1765,7 @@ def validate_resume_state(
                 "B2_CACHE_RESUME_PROVENANCE_DRIFT",
                 f"embedded sample identity drifted for {stable_id}",
             )
+        _verify_persisted_tensor_values(loaded["scientific_record"])
         entries.append(
             PersistedSampleEntry(
                 stable_sample_id=stable_id,
@@ -1798,6 +1805,7 @@ def build_final_manifest(
     partial_manifest: Mapping[str, Any],
     entries: Sequence[PersistedSampleEntry],
     plan: Sequence[PlannedSample],
+    run_dir: Path | None = None,
 ) -> Mapping[str, Any]:
     """Build a passed final manifest from verified immutable sample entries."""
 
@@ -1815,6 +1823,7 @@ def build_final_manifest(
             "B2_CACHE_COVERAGE_MISMATCH",
             "final manifest entries must match plan order exactly",
         )
+    torch = _bind_production_tensor_apis()
     for entry in entries:
         if entry.relative_path != sample_relative_path(entry.stable_sample_id):
             _fail(
@@ -1825,6 +1834,31 @@ def build_final_manifest(
             entry.record_file_sha256
         ):
             _fail("B2_CACHE_COVERAGE_MISMATCH", "final entry hashes are invalid")
+        if run_dir is not None:
+            artifact = Path(run_dir) / entry.relative_path
+            if not artifact.is_file():
+                _fail(
+                    "B2_CACHE_RESUME_FILE_HASH_MISMATCH",
+                    f"sample artifact missing: {artifact}",
+                )
+            file_digest = _sha256_file(artifact)
+            if file_digest != entry.record_file_sha256:
+                _fail(
+                    "B2_CACHE_RESUME_FILE_HASH_MISMATCH",
+                    f"sample file hash drifted for {entry.stable_sample_id}",
+                )
+            loaded = torch.load(artifact, map_location="cpu", weights_only=True)
+            if not isinstance(loaded, Mapping) or set(loaded) != {
+                "scientific_record",
+                "record_scientific_sha256",
+            }:
+                _fail("B2_CACHE_PT_PAYLOAD_INVALID", "Option A payload keys are not exact")
+            if loaded["record_scientific_sha256"] != entry.record_scientific_sha256:
+                _fail(
+                    "B2_CACHE_RESUME_SCIENTIFIC_HASH_MISMATCH",
+                    f"scientific hash drifted for {entry.stable_sample_id}",
+                )
+            _verify_persisted_tensor_values(loaded["scientific_record"])
     payload = _thaw_for_json(partial_manifest)
     payload["status"] = "passed"
     payload["planned_stable_sample_ids"] = list(planned_ids)
@@ -2197,7 +2231,9 @@ def generate_production_teacher_cache(
         ]
         write_partial_manifest_atomic(run_dir / "partial_manifest.json", base)
     audit_complete_coverage(run_dir, plan, entries)
-    final = build_final_manifest(partial_manifest=base, entries=entries, plan=plan)
+    final = build_final_manifest(
+        partial_manifest=base, entries=entries, plan=plan, run_dir=run_dir
+    )
     from rad.artifacts import atomic_write_json
 
     atomic_write_json(run_dir / "manifest.json", _thaw_for_json(final))

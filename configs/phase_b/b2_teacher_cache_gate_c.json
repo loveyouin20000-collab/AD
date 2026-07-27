@@ -44,7 +44,7 @@
     "record_hash_schema_version": 1
   },
   "resume_policy": {
-    "enabled": true,
+    "enabled": false,
     "require_exact_plan": true,
     "require_exact_outer_provenance": true,
     "verify_file_sha256": true,
