@@ -84,13 +84,72 @@ def _decide_backend(matrix: dict[str, Any]) -> dict[str, Any]:
     return decision
 
 
+def attest_same_chain_from_gate1(
+    gate1_manifest: Path | None,
+    *,
+    checkpoint_sha256: str,
+    profile_sha256: str,
+    candidate_layers: tuple[int, ...],
+) -> dict[str, Any]:
+    """Derive same_chain_pass from accepted Gate 1 qualification evidence."""
+
+    if gate1_manifest is None or not Path(gate1_manifest).is_file():
+        return {
+            "same_chain_pass": None,
+            "reason": "gate1_manifest_missing",
+            "gate1_manifest": None if gate1_manifest is None else str(gate1_manifest),
+        }
+    payload = json.loads(Path(gate1_manifest).read_text(encoding="utf-8"))
+    observed_ckpt = (
+        payload.get("checkpoint", {}) or {}
+    ).get("sha256")
+    observed_profile = (
+        payload.get("execution_profile", {}) or {}
+    ).get("sha256")
+    same_chain = (payload.get("gates", {}) or {}).get("algorithmic_same_chain", {}) or {}
+    observed_layers = tuple(same_chain.get("official_candidate_layers_tested") or ())
+    mismatches: list[str] = []
+    if observed_ckpt != checkpoint_sha256:
+        mismatches.append("checkpoint_sha256")
+    if observed_profile != profile_sha256:
+        mismatches.append("execution_profile_sha256")
+    if observed_layers != tuple(candidate_layers):
+        mismatches.append("candidate_layers")
+    if mismatches:
+        return {
+            "same_chain_pass": False,
+            "reason": "gate1_identity_mismatch",
+            "mismatches": mismatches,
+            "gate1_manifest": str(gate1_manifest),
+            "observed": {
+                "checkpoint_sha256": observed_ckpt,
+                "execution_profile_sha256": observed_profile,
+                "candidate_layers": list(observed_layers),
+                "status": same_chain.get("status"),
+            },
+        }
+    status = same_chain.get("status")
+    if status == "passed":
+        return {
+            "same_chain_pass": True,
+            "reason": "gate1_passed_identity_matched",
+            "gate1_manifest": str(gate1_manifest),
+        }
+    return {
+        "same_chain_pass": False,
+        "reason": "gate1_not_passed",
+        "gate1_status": status,
+        "gate1_manifest": str(gate1_manifest),
+    }
+
+
 def finalize_strict_status(
     *,
-    same_chain_pass: bool,
-    official_self_noise_pass: bool,
-    staged_self_noise_pass: bool,
+    same_chain_pass: bool | None,
+    official_self_noise_pass: bool | None,
+    staged_self_noise_pass: bool | None,
     cross_path_max: float,
-    ten_process_passed: bool,
+    ten_process_passed: bool | None,
     observed_profile: dict[str, Any],
     control_availability: dict[str, bool] | None = None,
 ) -> dict[str, Any]:
@@ -180,6 +239,12 @@ def main() -> int:
     parser.add_argument("--checkpoint", type=Path, required=True)
     parser.add_argument("--expected-sha256", required=True)
     parser.add_argument("--output-dir", type=Path, required=True)
+    parser.add_argument(
+        "--gate1-manifest",
+        type=Path,
+        default=None,
+        help="Accepted B1 qualification manifest providing Gate 1 same-chain evidence",
+    )
     parser.add_argument("--dry-run", action="store_true")
     args = parser.parse_args()
 
@@ -213,12 +278,21 @@ def main() -> int:
     )
     decision = _decide_backend(matrix)
     selected = decision.get("selected_b2_profile")
+    profile_path = REPO_ROOT / "configs" / "execution" / "frozen_deterministic_math.json"
+    profile_sha = sha256_file(profile_path)
+    gate1_attestation = attest_same_chain_from_gate1(
+        args.gate1_manifest,
+        checkpoint_sha256=args.expected_sha256,
+        profile_sha256=profile_sha,
+        candidate_layers=(6, 12, 18, 24),
+    )
     if not selected:
         summary = {
             "run_id": run_id,
             "selected_b2_profile": None,
             "backend_decision": decision,
             "ten_process_passed": False,
+            "same_chain_attestation": gate1_attestation,
             "status": "blocked",
         }
         atomic_write_json(out / "release_closure_summary.json", summary)
@@ -254,7 +328,7 @@ def main() -> int:
     }
     frozen = decision["frozen_deterministic_math"]
     strict = finalize_strict_status(
-        same_chain_pass=True,
+        same_chain_pass=gate1_attestation["same_chain_pass"],
         official_self_noise_pass=frozen["official_self_max"] == 0.0,
         staged_self_noise_pass=frozen["staged_self_max"] == 0.0,
         cross_path_max=float(ten["cross_path_max"]),
@@ -269,6 +343,7 @@ def main() -> int:
         "backend_decision": decision,
         "ten_process": ten,
         "selected_b2_profile": selected,
+        "same_chain_attestation": gate1_attestation,
         "strict_status": strict,
         "observed_execution_settings": observed,
     }
@@ -280,6 +355,7 @@ def main() -> int:
         "backend_decision": decision,
         "ten_process_passed": ten["passed"],
         "ten_process_cross_path_max": ten["cross_path_max"],
+        "same_chain_attestation": gate1_attestation,
         "strict_status": strict,
         "raw_evidence": {
             "path": str(raw.resolve().relative_to(REPO_ROOT.resolve())),
@@ -287,6 +363,9 @@ def main() -> int:
         },
     }
     atomic_write_json(out / "release_closure_summary.json", summary)
+    # Also publish a stable pointer for qualification writers.
+    stable = args.output_dir / "release_closure_summary.json"
+    atomic_write_json(stable, summary)
     print(json.dumps(summary, indent=2, sort_keys=True))
     return 0 if strict["passed"] else 1
 

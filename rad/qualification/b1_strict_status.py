@@ -45,11 +45,12 @@ class LayerCoverageEvidence:
 
 @dataclass(frozen=True)
 class B1StrictInputs:
-    same_chain_pass: bool
-    official_self_noise_pass: bool
-    staged_self_noise_pass: bool
+    # Optional booleans: None means evidence unavailable (fail closed).
+    same_chain_pass: bool | None
+    official_self_noise_pass: bool | None
+    staged_self_noise_pass: bool | None
     cross_path_max: float
-    ten_process_passed: bool
+    ten_process_passed: bool | None
     requested_profile: Mapping[str, Any]
     observed_profile: Mapping[str, Any]
     layer_coverage: LayerCoverageEvidence
@@ -145,13 +146,18 @@ def evaluate_b1_strict_status(inputs: B1StrictInputs) -> B1StrictStatus:
         control_availability=inputs.control_availability,
     )
     cross_ok = float(inputs.cross_path_max) <= float(B1_ATOL)
+    # Absence (None) is never treated as True.
+    same_ok = inputs.same_chain_pass is True
+    official_ok = inputs.official_self_noise_pass is True
+    staged_ok = inputs.staged_self_noise_pass is True
+    ten_ok = inputs.ten_process_passed is True
     predicate_inputs = {
-        "same_chain_pass": bool(inputs.same_chain_pass),
-        "official_self_noise_pass": bool(inputs.official_self_noise_pass),
-        "staged_self_noise_pass": bool(inputs.staged_self_noise_pass),
+        "same_chain_pass": inputs.same_chain_pass,
+        "official_self_noise_pass": inputs.official_self_noise_pass,
+        "staged_self_noise_pass": inputs.staged_self_noise_pass,
         "cross_path_max": float(inputs.cross_path_max),
         "cross_path_max_lte_atol": cross_ok,
-        "ten_process_passed": bool(inputs.ten_process_passed),
+        "ten_process_passed": inputs.ten_process_passed,
         "requested_profile_matches_effective_profile": not mismatches,
         "b1_atol": float(B1_ATOL),
     }
@@ -164,13 +170,7 @@ def evaluate_b1_strict_status(inputs: B1StrictInputs) -> B1StrictStatus:
             mismatch_keys=mismatches,
             layer_coverage=inputs.layer_coverage,
         )
-    passed = (
-        bool(inputs.same_chain_pass)
-        and bool(inputs.official_self_noise_pass)
-        and bool(inputs.staged_self_noise_pass)
-        and cross_ok
-        and bool(inputs.ten_process_passed)
-    )
+    passed = same_ok and official_ok and staged_ok and cross_ok and ten_ok
     return B1StrictStatus(
         status=STRICT_PREDICATE_NAME if passed else "failed",
         passed=passed,

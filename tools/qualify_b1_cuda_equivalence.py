@@ -81,9 +81,12 @@ def _finalize_status(
     result: B1QualificationResult,
     protocol: Any,
     *,
-    ten_process_passed: bool = True,
+    ten_process_passed: bool | None = None,
     cross_path_max: float | None = None,
-) -> None:
+    layer_coverage: LayerCoverageEvidence | None = None,
+) -> Any:
+    """Apply canonical strict status. Missing ten-process evidence stays None."""
+
     cpu_ok = (
         result.cpu_suite is not None
         and result.cpu_suite.green
@@ -96,12 +99,36 @@ def _finalize_status(
     task_ok = protocol.task_level_impact.status == "passed"
 
     observed = result.environment.get("observed_execution_settings") or {}
-    comparisons = protocol.deterministic_control.comparisons
+    comparisons = getattr(protocol.deterministic_control, "comparisons", None) or {}
     official_self_ok = comparisons.get("A1_vs_A2", {}).get("max_feature_abs", 1.0) <= B1_ATOL
     staged_self_ok = comparisons.get("S1_vs_S2", {}).get("max_feature_abs", 1.0) <= B1_ATOL
     if cross_path_max is None:
-        # Prefer protocol envelope cross-path when closure ten-process is unavailable.
-        cross_path_max = float(protocol.operational_noise_envelope.cross_path_p95)
+        envelope = getattr(protocol, "operational_noise_envelope", None)
+        if envelope is not None and getattr(envelope, "cross_path_p95", None) is not None:
+            cross_path_max = float(envelope.cross_path_p95)
+        else:
+            cross_path_max = float("inf")
+
+    if layer_coverage is None:
+        same_chain = protocol.algorithmic_same_chain
+        if hasattr(same_chain, "official_candidate_layers_tested"):
+            layer_coverage = LayerCoverageEvidence(
+                official_candidate_layers_tested=tuple(
+                    same_chain.official_candidate_layers_tested
+                ),
+                synthetic_candidate_layers_tested=tuple(
+                    same_chain.synthetic_candidate_layers_tested
+                ),
+                nonstandard_official_run_validated=bool(
+                    same_chain.nonstandard_official_run_validated
+                ),
+            )
+        else:
+            layer_coverage = LayerCoverageEvidence(
+                official_candidate_layers_tested=tuple(DEFAULT_CANDIDATE_LAYERS),
+                synthetic_candidate_layers_tested=(2, 4, 6, 8),
+                nonstandard_official_run_validated=False,
+            )
 
     strict = evaluate_b1_strict_status(
         B1StrictInputs(
@@ -109,14 +136,10 @@ def _finalize_status(
             official_self_noise_pass=official_self_ok,
             staged_self_noise_pass=staged_self_ok,
             cross_path_max=float(cross_path_max),
-            ten_process_passed=bool(ten_process_passed),
+            ten_process_passed=ten_process_passed,
             requested_profile=requested_frozen_profile_settings(),
             observed_profile=_observed_attestation(observed),
-            layer_coverage=LayerCoverageEvidence(
-                official_candidate_layers_tested=tuple(DEFAULT_CANDIDATE_LAYERS),
-                synthetic_candidate_layers_tested=(2, 4, 6, 8),
-                nonstandard_official_run_validated=False,
-            ),
+            layer_coverage=layer_coverage,
             control_availability=observed.get("control_availability"),
         )
     )
@@ -129,27 +152,26 @@ def _finalize_status(
             "requested/effective execution profile mismatch: "
             + ",".join(strict.mismatch_keys)
         )
-        return
+        return strict
 
-    if protocol.deterministic_control.decision == "B" and not (
-        gate1 and gate2 and task_ok
-    ):
+    decision = getattr(protocol.deterministic_control, "decision", None)
+    if decision == "B" and not (gate1 and gate2 and task_ok):
         result.status = "blocked"
         result.errors.append(
             "deterministic operation unavailable and dual protocol inconclusive"
         )
-        return
+        return strict
 
     if gate1 and gate2 and task_ok and loader_ok and cpu_ok and strict.passed:
         result.status = "passed"
-        return
+        return strict
 
     if not gate1:
         result.errors.append("Gate 1 algorithmic same-chain failed")
     if not gate2:
-        result.errors.extend(protocol.operational_noise_envelope.errors)
+        result.errors.extend(getattr(protocol.operational_noise_envelope, "errors", []) or [])
     if not task_ok:
-        result.errors.extend(protocol.task_level_impact.errors)
+        result.errors.extend(getattr(protocol.task_level_impact, "errors", []) or [])
     if not loader_ok:
         result.errors.append("production loader failed")
     if not cpu_ok and result.cpu_suite is not None:
@@ -158,6 +180,7 @@ def _finalize_status(
         result.errors.append(f"strict predicate failed: {strict.status}")
 
     result.status = "failed"
+    return strict
 
 
 def run_qualification(
@@ -344,6 +367,7 @@ def build_tracked_b1_manifest(
     input_list_sha256: str,
     profile_sha256: str,
     generation_command: list[str] | None = None,
+    strict_status: Any | None = None,
 ) -> dict[str, Any]:
     """Build the concise tracked manifest atomically from tool-computed inputs."""
 
@@ -353,37 +377,66 @@ def build_tracked_b1_manifest(
         raise ValueError("protocol is required for tracked B1 evidence")
 
     observed = result.environment.get("observed_execution_settings") or {}
-    comparisons = protocol.deterministic_control.comparisons
-    official_self_ok = comparisons.get("A1_vs_A2", {}).get("max_feature_abs", 1.0) <= B1_ATOL
-    staged_self_ok = comparisons.get("S1_vs_S2", {}).get("max_feature_abs", 1.0) <= B1_ATOL
-    strict = evaluate_b1_strict_status(
-        B1StrictInputs(
-            same_chain_pass=protocol.algorithmic_same_chain.status == "passed",
-            official_self_noise_pass=official_self_ok,
-            staged_self_noise_pass=staged_self_ok,
-            cross_path_max=float(
-                release_closure.get(
-                    "ten_process_cross_path_max",
-                    protocol.operational_noise_envelope.cross_path_p95,
-                )
-            ),
-            ten_process_passed=bool(release_closure.get("ten_process_passed", False)),
-            requested_profile=requested_frozen_profile_settings(),
-            observed_profile=_observed_attestation(observed),
-            layer_coverage=LayerCoverageEvidence(
-                official_candidate_layers_tested=tuple(
-                    protocol.algorithmic_same_chain.official_candidate_layers_tested
-                ),
-                synthetic_candidate_layers_tested=tuple(
-                    protocol.algorithmic_same_chain.synthetic_candidate_layers_tested
-                ),
-                nonstandard_official_run_validated=bool(
-                    protocol.algorithmic_same_chain.nonstandard_official_run_validated
-                ),
-            ),
-            control_availability=observed.get("control_availability"),
+    if strict_status is None:
+        comparisons = protocol.deterministic_control.comparisons
+        official_self_ok = (
+            comparisons.get("A1_vs_A2", {}).get("max_feature_abs", 1.0) <= B1_ATOL
         )
+        staged_self_ok = (
+            comparisons.get("S1_vs_S2", {}).get("max_feature_abs", 1.0) <= B1_ATOL
+        )
+        ten_raw = release_closure.get("ten_process_passed", None)
+        ten_process_passed: bool | None
+        if ten_raw is None:
+            ten_process_passed = None
+        else:
+            ten_process_passed = bool(ten_raw)
+        cross_raw = release_closure.get("ten_process_cross_path_max")
+        if cross_raw is None:
+            cross_path_max = float(protocol.operational_noise_envelope.cross_path_p95)
+        else:
+            cross_path_max = float(cross_raw)
+        strict_status = evaluate_b1_strict_status(
+            B1StrictInputs(
+                same_chain_pass=protocol.algorithmic_same_chain.status == "passed",
+                official_self_noise_pass=official_self_ok,
+                staged_self_noise_pass=staged_self_ok,
+                cross_path_max=cross_path_max,
+                ten_process_passed=ten_process_passed,
+                requested_profile=requested_frozen_profile_settings(),
+                observed_profile=_observed_attestation(observed),
+                layer_coverage=LayerCoverageEvidence(
+                    official_candidate_layers_tested=tuple(
+                        protocol.algorithmic_same_chain.official_candidate_layers_tested
+                    ),
+                    synthetic_candidate_layers_tested=tuple(
+                        protocol.algorithmic_same_chain.synthetic_candidate_layers_tested
+                    ),
+                    nonstandard_official_run_validated=bool(
+                        protocol.algorithmic_same_chain.nonstandard_official_run_validated
+                    ),
+                ),
+                control_availability=observed.get("control_availability"),
+            )
+        )
+    strict = strict_status
+    # Top-level status/detail always mirror the canonical strict evaluation plus gates.
+    result.detail = strict.status
+    gate1 = protocol.algorithmic_same_chain.status == "passed"
+    gate2 = protocol.operational_noise_envelope.status == "passed"
+    task_ok = protocol.task_level_impact.status == "passed"
+    loader_ok = result.production_loader is not None and result.production_loader.success
+    cpu_ok = (
+        result.cpu_suite is not None
+        and result.cpu_suite.green
+        and result.cpu_suite.failed == 0
     )
+    if strict.status == "blocked_profile_mismatch":
+        result.status = "blocked"
+    elif strict.passed and gate1 and gate2 and task_ok and loader_ok and cpu_ok:
+        result.status = "passed"
+    else:
+        result.status = "failed"
 
     profile_path = REPO_ROOT / "configs" / "execution" / "frozen_deterministic_math.json"
     equivalence_protocol = {
@@ -527,8 +580,11 @@ def build_tracked_b1_manifest(
             "layer_coverage": strict.layer_coverage.as_dict(),
         },
         "release_closure": {
+            "release_closure_available": bool(
+                release_closure.get("release_closure_available", True)
+            ),
             "selected_b2_profile": release_closure.get("selected_b2_profile"),
-            "ten_process_passed": bool(release_closure.get("ten_process_passed")),
+            "ten_process_passed": release_closure.get("ten_process_passed", None),
             "ten_process_cross_path_max": release_closure.get(
                 "ten_process_cross_path_max"
             ),
@@ -601,6 +657,7 @@ def write_outputs(
     *,
     release_closure: dict[str, Any] | None = None,
     artifact_root: Path | None = None,
+    allow_missing_release_closure: bool = False,
 ) -> None:
     from rad.artifacts import atomic_write_json, refuse_existing_run
 
@@ -714,8 +771,6 @@ def write_outputs(
     profile_sha = sha256_file(profile_path)
 
     if release_closure is None:
-        # Prefer an existing concise closure summary if present; otherwise fail closed
-        # for tracked regeneration.
         default_summary = (
             REPO_ROOT
             / "artifacts"
@@ -723,28 +778,53 @@ def write_outputs(
             / "b1_release_closure"
             / "release_closure_summary.json"
         )
-        if default_summary.is_file():
+        if default_summary.is_file() and not allow_missing_release_closure:
             release_closure = json.loads(default_summary.read_text(encoding="utf-8"))
+            release_closure.setdefault("release_closure_available", True)
         else:
+            # Describe absence honestly — never synthesize a passing ten-process claim.
             release_closure = {
-                "selected_b2_profile": "frozen_deterministic_math",
-                "ten_process_passed": True,
-                "ten_process_cross_path_max": float(
-                    protocol.operational_noise_envelope.cross_path_p95
-                    if protocol is not None
-                    else 0.0
-                ),
-                "backend_matrix_summary": (
-                    "artifacts/phase_b/b1_release_closure/release_closure_summary.json"
-                ),
-                "production_default_independently_deterministic": False,
+                "release_closure_available": False,
+                "selected_b2_profile": None,
+                "ten_process_passed": None,
+                "ten_process_cross_path_max": None,
+                "backend_matrix_summary": None,
+                "production_default_independently_deterministic": None,
                 "requires_project_wide_freeze": True,
-                "raw_evidence": {
-                    "path": "artifacts/phase_b/b1_release_closure/release_closure_raw.json",
-                    "sha256": None,
-                    "disposition": "ignored_raw_hash_pinned",
-                },
+                "raw_evidence": None,
             }
+    else:
+        release_closure = dict(release_closure)
+        release_closure.setdefault(
+            "release_closure_available",
+            release_closure.get("ten_process_passed") is not None,
+        )
+
+    if protocol is None:
+        raise ValueError("protocol is required to write tracked B1 evidence")
+
+    ten_raw = release_closure.get("ten_process_passed", None)
+    ten_process_passed: bool | None
+    if ten_raw is None:
+        ten_process_passed = None
+    else:
+        ten_process_passed = bool(ten_raw)
+    cross_raw = release_closure.get("ten_process_cross_path_max")
+    cross_path_max = float(cross_raw) if cross_raw is not None else None
+
+    # Clear provisional errors from qualification-time finalize (no ten-process yet),
+    # then apply the single authoritative strict evaluation with assembled evidence.
+    result.errors = [
+        err
+        for err in result.errors
+        if not str(err).startswith("strict predicate failed:")
+    ]
+    strict = _finalize_status(
+        result,
+        protocol,
+        ten_process_passed=ten_process_passed,
+        cross_path_max=cross_path_max,
+    )
 
     try:
         relative_raw = str(raw_path.resolve().relative_to(REPO_ROOT.resolve()))
@@ -760,6 +840,7 @@ def write_outputs(
         configuration_sha256=config_sha,
         input_list_sha256=input_list_sha,
         profile_sha256=profile_sha,
+        strict_status=strict,
     )
 
     manifest_path = output_dir / "b1_cuda_equivalence_manifest.json"
@@ -771,8 +852,8 @@ def write_outputs(
     lines = [
         "# Phase B1: Staged-Backbone CUDA Numerical Equivalence (B1-05)",
         "",
-        f"**Status:** `{result.status}`",
-        f"**Detail:** `{result.detail}`",
+        f"**Status:** `{manifest['status']}`",
+        f"**Detail:** `{manifest['detail']}`",
         f"**Strict status:** `{manifest['strict_status']['status']}`",
         f"**Git SHA:** `{result.git_sha}`",
         f"**Timestamp (UTC):** `{manifest['timestamp_utc']}`",
