@@ -1530,6 +1530,7 @@ def verify_persisted_normalization_entry(
     *,
     run_dir: Path | str,
     entry: PersistedNormalizationEntry,
+    config: DescriptorArtifactsConfig | None = None,
 ) -> Mapping[str, Any]:
     root = Path(run_dir)
     path = root / entry.relative_path
@@ -1563,6 +1564,22 @@ def verify_persisted_normalization_entry(
             "B2_DESC_NORMALIZATION_HASH_MISMATCH",
             "normalization scientific hash mismatch after reload",
         )
+    if config is not None:
+        if (
+            int(scientific["normalization_contract_version"])
+            != config.normalization_contract_version
+        ):
+            _fail(
+                "B2_DESC_NORMALIZATION_SCHEMA_INVALID",
+                "normalization contract version drifted",
+            )
+        expected_training = int(config.required_split_counts["training"])
+        ordered_training_ids = scientific["ordered_training_stable_sample_ids"]
+        if len(ordered_training_ids) != expected_training:
+            _fail(
+                "B2_DESC_NORMALIZATION_COUNT_MISMATCH",
+                "normalization training coverage is incomplete",
+            )
     return scientific
 
 
@@ -1978,6 +1995,12 @@ def verify_descriptor_artifact_collection(
         _fail("B2_DESC_PARTIAL_CLAIMING_PASSED", "final manifest status must be passed")
     if manifest.get("teacher_forward_count") != 0:
         _fail("B2_DESC_TEACHER_FORWARD_COUNT_MISMATCH", "teacher_forward_count must equal zero")
+    if (
+        manifest.get("descriptor_contract_version") != config.descriptor_contract_version
+        or manifest.get("normalization_contract_version")
+        != config.normalization_contract_version
+    ):
+        _fail("B2_DESC_MANIFEST_INVALID", "manifest contract versions drifted")
     samples = manifest.get("samples")
     if not isinstance(samples, list):
         _fail("B2_DESC_MANIFEST_INVALID", "passed manifest requires samples list")
@@ -2023,6 +2046,7 @@ def verify_descriptor_artifact_collection(
     normalization_statistics = verify_persisted_normalization_entry(
         run_dir=run_dir,
         entry=normalization_entry,
+        config=config,
     )
     ordered_records = [
         descriptor_records_by_id[str(stable_id)] for stable_id in manifest["planned_stable_sample_ids"]
