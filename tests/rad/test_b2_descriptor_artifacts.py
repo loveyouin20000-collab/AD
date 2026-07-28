@@ -66,6 +66,7 @@ import copy
 import hashlib
 import json
 from collections import Counter
+from dataclasses import replace
 from pathlib import Path
 from typing import Any
 
@@ -1059,16 +1060,31 @@ def test_build_descriptor_extraction_plan_summarizes_accepted_cache(
 def test_build_descriptor_artifacts_manifest_reports_passed_status(
     descriptor_fixture: dict[str, Any],
     descriptor_config: subject.DescriptorArtifactsConfig,
+    tmp_path: Path,
 ) -> None:
     training_records = _training_records(descriptor_fixture, descriptor_config)
     statistics = subject.compute_training_normalization_statistics(
         training_records, config=descriptor_config
     )
     all_records = _all_reconstructed_records(descriptor_fixture, descriptor_config)
+    run_dir = tmp_path / "passed_manifest_run"
+    entries = [
+        subject.write_descriptor_record_atomic(
+            run_dir / subject.descriptor_relative_path(record["stable_sample_id"]),
+            record,
+        )
+        for record in all_records
+    ]
+    normalization = subject.write_normalization_statistics_atomic(
+        run_dir / "normalization_statistics.pt",
+        statistics,
+    )
     manifest = subject.build_descriptor_artifacts_manifest(
         config=descriptor_config,
         records=all_records,
         statistics=statistics,
+        sample_entries=entries,
+        normalization_entry=normalization,
     )
     assert manifest["status"] == "passed"
     assert manifest["descriptor_dimension"] == DESCRIPTOR_DIM
@@ -1079,6 +1095,442 @@ def test_build_descriptor_artifacts_manifest_reports_passed_status(
         "normalization_training_coverage_sha256",
     ):
         assert key in manifest, key
+
+
+# --------------------------------------------------------------------------------
+# B2-03B review regressions: disk-authoritative accepted cache + fail-closed finalization
+# --------------------------------------------------------------------------------
+
+
+def test_recompute_teacher_cache_hashes_match_authoritative_fixture(
+    descriptor_fixture: dict[str, Any],
+) -> None:
+    manifest = _manifest(descriptor_fixture)
+    assert (
+        cache_mod.recompute_teacher_cache_sample_coverage_sha256(
+            descriptor_fixture["entries"]
+        )
+        == "6e538b902795c377f9992258e307e58b5c0ba0f99cbbe6c3853a81947ca3d76c"
+    )
+    assert (
+        cache_mod.recompute_teacher_cache_scientific_sha256(
+            verified_entries=descriptor_fixture["entries"],
+            manifest_contract=manifest,
+        )
+        == manifest["cache_scientific_sha256"]
+    )
+
+
+def test_validate_accepted_teacher_cache_rejects_manifest_summary_hash_that_disagrees_with_entries(
+    descriptor_fixture: dict[str, Any],
+    descriptor_config: subject.DescriptorArtifactsConfig,
+) -> None:
+    manifest = fixtures.production_like_manifest(descriptor_fixture)
+    stable_id = manifest["samples"][0]["stable_sample_id"]
+
+    def mutate_tensor(record: dict[str, Any]) -> dict[str, Any]:
+        name = next(key for key in sorted(record["tensors"]) if key.startswith("causal_map:"))
+        tensor = record["tensors"][name]["tensor"].clone()
+        tensor[0, 0, 0, 0] += 1.0
+        record["tensors"][name] = dict(record["tensors"][name])
+        record["tensors"][name]["tensor"] = tensor
+        record["tensors"][name]["digest"] = cache_mod.canonical_tensor_digest(
+            name, tensor, tuple(record["tensors"][name]["dimension_semantics"])
+        )
+        return record
+
+    fixtures.rewrite_sample_record(descriptor_fixture, manifest, stable_id, mutate_tensor)
+    manifest["cache_scientific_sha256"] = descriptor_config.expected_teacher_cache_scientific_sha256
+    manifest["sample_coverage_sha256"] = descriptor_config.expected_sample_coverage_sha256
+    with pytest.raises(
+        subject.DescriptorArtifactsError, match="B2_DESC_CACHE_SCIENTIFIC_HASH_MISMATCH"
+    ):
+        subject.validate_accepted_teacher_cache(
+            manifest=manifest,
+            config=descriptor_config,
+            cache_root=descriptor_fixture["cache_root"],
+            allow_test_fixture=True,
+        )
+
+
+def test_load_disk_authoritative_manifest_rejects_manifest_outside_root(
+    tmp_path: Path, descriptor_fixture: dict[str, Any]
+) -> None:
+    outside_root = tmp_path / "outside-root"
+    outside_root.mkdir()
+    outside_manifest = tmp_path / "teacher_cache_manifest.json"
+    outside_manifest.write_text(
+        json.dumps(fixtures.production_like_manifest(descriptor_fixture)),
+        encoding="utf-8",
+    )
+    with pytest.raises(
+        subject.DescriptorArtifactsError, match="B2_DESC_CACHE_MANIFEST_OUTSIDE_ROOT"
+    ):
+        subject.load_disk_authoritative_teacher_cache_manifest(
+            teacher_cache_manifest_path=outside_manifest,
+            teacher_cache_root=outside_root,
+        )
+
+
+def test_validate_accepted_teacher_cache_rejects_record_path_escaping_cache_root(
+    descriptor_fixture: dict[str, Any],
+    descriptor_config: subject.DescriptorArtifactsConfig,
+) -> None:
+    manifest = fixtures.production_like_manifest(descriptor_fixture)
+    manifest["samples"][0]["relative_path"] = "../escaped.pt"
+    with pytest.raises(
+        subject.DescriptorArtifactsError, match="B2_DESC_CACHE_PATH_ESCAPE"
+    ):
+        subject.validate_accepted_teacher_cache(
+            manifest=manifest,
+            config=descriptor_config,
+            cache_root=descriptor_fixture["cache_root"],
+            allow_test_fixture=True,
+        )
+
+
+def test_validate_accepted_teacher_cache_rejects_wrong_17_7_8_membership_distribution(
+    descriptor_fixture: dict[str, Any],
+    descriptor_config: subject.DescriptorArtifactsConfig,
+) -> None:
+    manifest = fixtures.production_like_manifest(descriptor_fixture)
+    stable_id = next(
+        row.stable_sample_id
+        for row in descriptor_fixture["plan"]
+        if row.membership == "calibration"
+    )
+
+    def mutate_membership(record: dict[str, Any]) -> dict[str, Any]:
+        record["membership"] = "training"
+        return record
+
+    fixtures.rewrite_sample_record(descriptor_fixture, manifest, stable_id, mutate_membership)
+    with pytest.raises(
+        subject.DescriptorArtifactsError, match="B2_DESC_CACHE_SPLIT_COUNT_MISMATCH"
+    ):
+        subject.validate_accepted_teacher_cache(
+            manifest=manifest,
+            config=descriptor_config,
+            cache_root=descriptor_fixture["cache_root"],
+            allow_test_fixture=True,
+        )
+
+
+@pytest.mark.parametrize(
+    ("field", "value", "code"),
+    [
+        ("checkpoint_sha256", "1" * 64, "B2_DESC_COLLECTION_PROVENANCE_MISMATCH"),
+        ("execution_profile_sha256", "2" * 64, "B2_DESC_COLLECTION_PROVENANCE_MISMATCH"),
+        ("descriptor_implementation_sha256", "3" * 64, "B2_DESC_CONTRACT_IDENTITY_MISMATCH"),
+    ],
+)
+def test_validate_accepted_teacher_cache_rejects_per_record_provenance_mismatch(
+    descriptor_fixture: dict[str, Any],
+    descriptor_config: subject.DescriptorArtifactsConfig,
+    field: str,
+    value: str,
+    code: str,
+) -> None:
+    manifest = fixtures.production_like_manifest(descriptor_fixture)
+    stable_id = manifest["samples"][0]["stable_sample_id"]
+
+    def mutate(record: dict[str, Any]) -> dict[str, Any]:
+        record[field] = value
+        return record
+
+    fixtures.rewrite_sample_record(descriptor_fixture, manifest, stable_id, mutate)
+    with pytest.raises(subject.DescriptorArtifactsError, match=code):
+        subject.validate_accepted_teacher_cache(
+            manifest=manifest,
+            config=descriptor_config,
+            cache_root=descriptor_fixture["cache_root"],
+            allow_test_fixture=True,
+        )
+
+
+def test_validate_accepted_teacher_cache_rejects_config_checkpoint_profile_or_split_mismatch(
+    descriptor_fixture: dict[str, Any],
+    descriptor_config: subject.DescriptorArtifactsConfig,
+) -> None:
+    drifted = replace(
+        descriptor_config,
+        expected_checkpoint_sha256="4" * 64,
+        expected_execution_profile_sha256="5" * 64,
+        expected_split_scientific_sha256="6" * 64,
+    )
+    with pytest.raises(
+        subject.DescriptorArtifactsError, match="B2_DESC_COLLECTION_PROVENANCE_MISMATCH"
+    ):
+        subject.validate_accepted_teacher_cache(
+            manifest=fixtures.production_like_manifest(descriptor_fixture),
+            config=drifted,
+            cache_root=descriptor_fixture["cache_root"],
+            allow_test_fixture=False,
+        )
+
+
+def test_write_descriptor_record_atomic_reloads_and_revalidates_payload(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    descriptor_fixture: dict[str, Any],
+    descriptor_config: subject.DescriptorArtifactsConfig,
+) -> None:
+    record = subject.reconstruct_descriptor_record(
+        **_reconstruct_kwargs(descriptor_fixture, descriptor_config)
+    )
+    destination = tmp_path / "descriptors" / f"{record['stable_sample_id']}.pt"
+    original_torch_load = subject.torch.load
+    observed = {"calls": 0}
+
+    def corrupted_load(*args: Any, **kwargs: Any) -> Any:
+        payload = original_torch_load(*args, **kwargs)
+        observed["calls"] += 1
+        if observed["calls"] == 1:
+            mutated = copy.deepcopy(payload)
+            mutated["scientific_record"]["descriptor_by_depth"][12] = (
+                mutated["scientific_record"]["descriptor_by_depth"][12] + 1.0
+            )
+            return mutated
+        return payload
+
+    monkeypatch.setattr(subject.torch, "load", corrupted_load)
+    with pytest.raises(subject.DescriptorArtifactsError, match="B2_DESC_RECORD_HASH_MISMATCH"):
+        subject.write_descriptor_record_atomic(destination, record)
+
+
+def test_write_normalization_statistics_atomic_reloads_and_revalidates_payload(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    descriptor_fixture: dict[str, Any],
+    descriptor_config: subject.DescriptorArtifactsConfig,
+) -> None:
+    statistics = subject.compute_training_normalization_statistics(
+        _training_records(descriptor_fixture, descriptor_config),
+        config=descriptor_config,
+    )
+    destination = tmp_path / "normalization_statistics.pt"
+    original_torch_load = subject.torch.load
+    observed = {"calls": 0}
+
+    def corrupted_load(*args: Any, **kwargs: Any) -> Any:
+        payload = original_torch_load(*args, **kwargs)
+        observed["calls"] += 1
+        if observed["calls"] == 1:
+            mutated = copy.deepcopy(payload)
+            mutated["scientific_statistics_record"]["axes"][12]["layers"][0]["features"][0][
+                "mean"
+            ] += 1.0
+            return mutated
+        return payload
+
+    monkeypatch.setattr(subject.torch, "load", corrupted_load)
+    with pytest.raises(
+        subject.DescriptorArtifactsError, match="B2_DESC_NORMALIZATION_HASH_MISMATCH"
+    ):
+        subject.write_normalization_statistics_atomic(destination, statistics)
+
+
+def test_build_descriptor_artifacts_manifest_requires_persisted_sample_entries_for_passed_status(
+    descriptor_fixture: dict[str, Any],
+    descriptor_config: subject.DescriptorArtifactsConfig,
+) -> None:
+    statistics = subject.compute_training_normalization_statistics(
+        _training_records(descriptor_fixture, descriptor_config),
+        config=descriptor_config,
+    )
+    with pytest.raises(
+        subject.DescriptorArtifactsError, match="B2_DESC_PASSED_MANIFEST_REQUIRES_VERIFIED_DISK"
+    ):
+        subject.build_descriptor_artifacts_manifest(
+            config=descriptor_config,
+            records=_all_reconstructed_records(descriptor_fixture, descriptor_config),
+            statistics=statistics,
+        )
+
+
+@pytest.mark.parametrize(
+    "mutate_entry",
+    [
+        lambda entry: subject.PersistedDescriptorEntry(
+            stable_sample_id=entry.stable_sample_id,
+            relative_record_path=entry.relative_record_path,
+            descriptor_record_scientific_sha256=entry.descriptor_record_scientific_sha256,
+            descriptor_record_file_sha256="",
+            verification_status=entry.verification_status,
+        ),
+        lambda entry: subject.PersistedDescriptorEntry(
+            stable_sample_id=entry.stable_sample_id,
+            relative_record_path=entry.relative_record_path,
+            descriptor_record_scientific_sha256=entry.descriptor_record_scientific_sha256,
+            descriptor_record_file_sha256=entry.descriptor_record_file_sha256,
+            verification_status="planned",
+        ),
+    ],
+)
+def test_build_descriptor_artifacts_manifest_rejects_incomplete_verified_entries(
+    tmp_path: Path,
+    descriptor_fixture: dict[str, Any],
+    descriptor_config: subject.DescriptorArtifactsConfig,
+    mutate_entry: Any,
+) -> None:
+    all_records = _all_reconstructed_records(descriptor_fixture, descriptor_config)
+    run_dir = tmp_path / "run"
+    entries = []
+    for record in all_records:
+        entries.append(
+            subject.write_descriptor_record_atomic(
+                run_dir / subject.descriptor_relative_path(record["stable_sample_id"]),
+                record,
+            )
+        )
+    bad_entries = list(entries)
+    bad_entries[0] = mutate_entry(entries[0])
+    statistics = subject.compute_training_normalization_statistics(
+        [row for row in all_records if row["split_membership"] == "training"],
+        config=descriptor_config,
+    )
+    normalization = subject.write_normalization_statistics_atomic(
+        run_dir / "normalization_statistics.pt",
+        statistics,
+    )
+    with pytest.raises(
+        subject.DescriptorArtifactsError, match="B2_DESC_PASSED_MANIFEST_REQUIRES_VERIFIED_DISK"
+    ):
+        subject.build_descriptor_artifacts_manifest(
+            config=descriptor_config,
+            records=all_records,
+            statistics=statistics,
+            sample_entries=bad_entries,
+            normalization_entry=normalization,
+        )
+
+
+def test_planned_manifest_cannot_be_confused_with_passed_manifest(
+    descriptor_fixture: dict[str, Any],
+    descriptor_config: subject.DescriptorArtifactsConfig,
+) -> None:
+    accepted = subject.validate_accepted_teacher_cache(
+        manifest=fixtures.production_like_manifest(descriptor_fixture),
+        config=descriptor_config,
+        cache_root=descriptor_fixture["cache_root"],
+        allow_test_fixture=True,
+    )
+    planned = subject.build_planned_descriptor_artifacts_manifest(
+        accepted=accepted,
+        config=descriptor_config,
+    )
+    assert planned["status"] == "planned"
+    assert "samples" not in planned
+    assert "normalization_statistics_file_sha256" not in planned
+
+
+def test_verify_descriptor_artifact_collection_requires_passed_manifest_config_and_run_root(
+    tmp_path: Path,
+    descriptor_fixture: dict[str, Any],
+    descriptor_config: subject.DescriptorArtifactsConfig,
+) -> None:
+    run_dir = tmp_path / "descriptor_run"
+    run_dir.mkdir()
+    manifest = {"status": "passed"}
+    (run_dir / "final_manifest.json").write_text(json.dumps(manifest), encoding="utf-8")
+    (run_dir / "final_manifest.json.sha256").write_text("0" * 64 + "\n", encoding="utf-8")
+    with pytest.raises(subject.DescriptorArtifactsError, match="B2_DESC_MANIFEST_RECEIPT_MISMATCH"):
+        subject.verify_descriptor_artifact_collection(
+            config=descriptor_config,
+            run_dir=run_dir,
+        )
+
+
+def test_materialize_descriptor_artifact_collection_fixture_dual_run_is_scientifically_stable(
+    tmp_path: Path,
+    descriptor_fixture: dict[str, Any],
+    descriptor_config: subject.DescriptorArtifactsConfig,
+) -> None:
+    manifest_path = descriptor_fixture["cache_root"] / "teacher_cache_manifest.json"
+    manifest_path.write_text(
+        json.dumps(fixtures.production_like_manifest(descriptor_fixture), sort_keys=True),
+        encoding="utf-8",
+    )
+    first = subject.materialize_descriptor_artifact_collection(
+        config=descriptor_config,
+        teacher_cache_manifest_path=manifest_path,
+        teacher_cache_root=descriptor_fixture["cache_root"],
+        output_run_dir=tmp_path / "run-one",
+        allow_test_fixture=True,
+    )
+    second = subject.materialize_descriptor_artifact_collection(
+        config=descriptor_config,
+        teacher_cache_manifest_path=manifest_path,
+        teacher_cache_root=descriptor_fixture["cache_root"],
+        output_run_dir=tmp_path / "run-two",
+        allow_test_fixture=True,
+    )
+    assert first.teacher_forward_count == 0
+    assert second.teacher_forward_count == 0
+    assert len(list((tmp_path / "run-one" / "descriptors").glob("*.pt"))) == 32
+    assert len(list((tmp_path / "run-two" / "descriptors").glob("*.pt"))) == 32
+    first_verified = subject.verify_descriptor_artifact_collection(
+        config=descriptor_config,
+        run_dir=tmp_path / "run-one",
+    )
+    second_verified = subject.verify_descriptor_artifact_collection(
+        config=descriptor_config,
+        run_dir=tmp_path / "run-two",
+    )
+    comparison = subject.compare_descriptor_artifact_collections(
+        first=first_verified,
+        second=second_verified,
+    )
+    assert comparison.scientifically_equivalent is True
+    assert first_verified.teacher_forward_count == 0
+    assert second_verified.teacher_forward_count == 0
+
+
+def test_compare_descriptor_artifact_collections_ignores_file_byte_differences_but_catches_scientific_drift(
+    tmp_path: Path,
+    descriptor_fixture: dict[str, Any],
+    descriptor_config: subject.DescriptorArtifactsConfig,
+) -> None:
+    manifest_path = descriptor_fixture["cache_root"] / "teacher_cache_manifest.json"
+    manifest_path.write_text(
+        json.dumps(fixtures.production_like_manifest(descriptor_fixture), sort_keys=True),
+        encoding="utf-8",
+    )
+    subject.materialize_descriptor_artifact_collection(
+        config=descriptor_config,
+        teacher_cache_manifest_path=manifest_path,
+        teacher_cache_root=descriptor_fixture["cache_root"],
+        output_run_dir=tmp_path / "run-one",
+        allow_test_fixture=True,
+    )
+    subject.materialize_descriptor_artifact_collection(
+        config=descriptor_config,
+        teacher_cache_manifest_path=manifest_path,
+        teacher_cache_root=descriptor_fixture["cache_root"],
+        output_run_dir=tmp_path / "run-two",
+        allow_test_fixture=True,
+    )
+    first_verified = subject.verify_descriptor_artifact_collection(
+        config=descriptor_config,
+        run_dir=tmp_path / "run-one",
+    )
+    second_verified = subject.verify_descriptor_artifact_collection(
+        config=descriptor_config,
+        run_dir=tmp_path / "run-two",
+    )
+    comparison = subject.compare_descriptor_artifact_collections(
+        first=first_verified,
+        second=second_verified,
+    )
+    assert comparison.scientifically_equivalent is True
+    descriptor_file = next((tmp_path / "run-two" / "descriptors").glob("*.pt"))
+    with descriptor_file.open("ab") as handle:
+        handle.write(b"\x00nonscientific-byte-drift")
+    with pytest.raises(subject.DescriptorArtifactsError, match="B2_DESC_RECORD_FILE_HASH_MISMATCH"):
+        subject.verify_descriptor_artifact_collection(
+            config=descriptor_config,
+            run_dir=tmp_path / "run-two",
+        )
 
 
 # --------------------------------------------------------------------------------
@@ -1229,10 +1681,23 @@ def test_final_manifest_receipt_must_agree(
         training_records, config=descriptor_config
     )
     all_records = _all_reconstructed_records(descriptor_fixture, descriptor_config)
+    entries = [
+        subject.write_descriptor_record_atomic(
+            tmp_path / subject.descriptor_relative_path(record["stable_sample_id"]),
+            record,
+        )
+        for record in all_records
+    ]
+    normalization = subject.write_normalization_statistics_atomic(
+        tmp_path / "normalization_statistics.pt",
+        statistics,
+    )
     manifest = subject.build_descriptor_artifacts_manifest(
         config=descriptor_config,
         records=all_records,
         statistics=statistics,
+        sample_entries=entries,
+        normalization_entry=normalization,
     )
     subject.write_final_manifest_with_receipt_atomic(tmp_path, manifest)
     assert (tmp_path / "final_manifest.json").is_file()

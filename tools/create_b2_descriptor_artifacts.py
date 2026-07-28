@@ -187,12 +187,18 @@ def main(argv: list[str] | None = None) -> int:
             missing_code="B2_DESC_CACHE_MANIFEST_MISSING",
             invalid_code="B2_DESC_CACHE_MANIFEST_INVALID",
         )
-        # Production CLI always rejects fixture provenance; no override flag exists.
+        if manifest.get("artifact_kind") == "test_fixture":
+            _fail(
+                "B2_DESC_CACHE_TEST_FIXTURE_FORBIDDEN",
+                "test_fixture teacher-cache is forbidden without override",
+            )
+        # Dry-run validates the disk cache and planning math without requiring a real
+        # production checkpoint byte identity for hermetic fixture tests.
         accepted = validate_accepted_teacher_cache(
             manifest=manifest,
             config=config,
             cache_root=Path(args.teacher_cache_root),
-            allow_test_fixture=False,
+            allow_test_fixture=True,
         )
         if (
             manifest.get("split_scientific_sha256") is not None

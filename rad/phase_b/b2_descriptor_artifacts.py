@@ -161,6 +161,14 @@ class AcceptedTeacherCache:
 
 
 @dataclass(frozen=True)
+class DiskAuthoritativeTeacherCacheManifest:
+    manifest: Mapping[str, Any]
+    manifest_path: Path
+    cache_root: Path
+    source_teacher_cache_manifest_file_sha256: str
+
+
+@dataclass(frozen=True)
 class PersistedDescriptorEntry:
     stable_sample_id: str
     relative_record_path: str
@@ -174,6 +182,30 @@ class PersistedNormalizationEntry:
     relative_path: str
     normalization_statistics_scientific_sha256: str
     normalization_statistics_file_sha256: str
+
+
+@dataclass(frozen=True)
+class DescriptorCollectionResult:
+    run_dir: Path
+    manifest: Mapping[str, Any]
+    source_teacher_cache_manifest_file_sha256: str
+    teacher_forward_count: int
+
+
+@dataclass(frozen=True)
+class VerifiedDescriptorCollection:
+    run_dir: Path
+    manifest: Mapping[str, Any]
+    descriptor_records_by_id: Mapping[str, Mapping[str, Any]]
+    normalization_statistics: Mapping[str, Any]
+    teacher_forward_count: int
+
+
+@dataclass(frozen=True)
+class DescriptorCollectionComparison:
+    scientifically_equivalent: bool
+    reasons: tuple[str, ...]
+    file_byte_equal: bool
 
 
 def _is_sha256(value: Any) -> bool:
@@ -198,6 +230,58 @@ def _sha256_file(path: Path) -> str:
                 break
             digest.update(chunk)
     return digest.hexdigest()
+
+
+def _resolve_within_root(root: Path, relative_path: str, *, code: str) -> Path:
+    if (
+        not isinstance(relative_path, str)
+        or not relative_path
+        or Path(relative_path).is_absolute()
+    ):
+        _fail(code, f"path must be a non-empty relative path: {relative_path!r}")
+    resolved_root = root.resolve()
+    resolved = (resolved_root / relative_path).resolve()
+    try:
+        resolved.relative_to(resolved_root)
+    except ValueError:
+        _fail(code, f"path escapes cache root: {relative_path}")
+    return resolved
+
+
+def load_disk_authoritative_teacher_cache_manifest(
+    *,
+    teacher_cache_manifest_path: Path | str,
+    teacher_cache_root: Path | str,
+) -> DiskAuthoritativeTeacherCacheManifest:
+    """Load the declared teacher-cache manifest from disk after root binding."""
+
+    manifest_path = Path(teacher_cache_manifest_path)
+    cache_root = Path(teacher_cache_root)
+    resolved_root = cache_root.resolve()
+    resolved_manifest = manifest_path.resolve()
+    try:
+        resolved_manifest.relative_to(resolved_root)
+    except ValueError:
+        _fail(
+            "B2_DESC_CACHE_MANIFEST_OUTSIDE_ROOT",
+            "teacher-cache manifest must resolve inside teacher-cache root",
+        )
+    try:
+        payload = manifest_path.read_bytes()
+    except OSError as exc:
+        _fail("B2_DESC_CACHE_MANIFEST_INVALID", f"cannot read manifest bytes: {exc}")
+    try:
+        manifest = json.loads(payload.decode("utf-8"))
+    except (UnicodeError, json.JSONDecodeError) as exc:
+        _fail("B2_DESC_CACHE_MANIFEST_INVALID", f"invalid manifest JSON: {exc}")
+    if not isinstance(manifest, Mapping):
+        _fail("B2_DESC_CACHE_MANIFEST_INVALID", "teacher-cache manifest must be an object")
+    return DiskAuthoritativeTeacherCacheManifest(
+        manifest=MappingProxyType(dict(manifest)),
+        manifest_path=resolved_manifest,
+        cache_root=resolved_root,
+        source_teacher_cache_manifest_file_sha256=hashlib.sha256(payload).hexdigest(),
+    )
 
 
 def _require_int(value: Any, field: str) -> int:
@@ -391,17 +475,21 @@ def validate_accepted_teacher_cache(
     )
     plan: list[PlannedDescriptorSample] = []
     entries: list[AcceptedSampleEntry] = []
+    membership_counts = {"training": 0, "calibration": 0, "evaluation": 0}
+    seen_ids: set[str] = set()
+    common_provenance: dict[str, Any] | None = None
     for raw_entry in samples:
         if not isinstance(raw_entry, Mapping):
             _fail("B2_DESC_CACHE_RECORD_HASH_MISMATCH", "sample entry must be an object")
         stable_id = str(raw_entry.get("stable_sample_id", ""))
-        relative = str(
-            raw_entry.get("relative_path")
-            or cache_mod.sample_relative_path(stable_id)
+        relative = str(raw_entry.get("relative_path") or cache_mod.sample_relative_path(stable_id))
+        artifact = _resolve_within_root(
+            root,
+            relative,
+            code="B2_DESC_CACHE_PATH_ESCAPE",
         )
         claimed_file = raw_entry.get("record_file_sha256")
         claimed_record = raw_entry.get("record_scientific_sha256")
-        artifact = root / relative
         if not artifact.is_file():
             _fail(
                 "B2_DESC_CACHE_FILE_HASH_MISMATCH",
@@ -462,6 +550,37 @@ def validate_accepted_teacher_cache(
             )
 
         membership = str(scientific_record["membership"])
+        if membership not in membership_counts:
+            _fail(
+                "B2_DESC_CACHE_SPLIT_COUNT_MISMATCH",
+                f"unknown membership for {stable_id}: {membership!r}",
+            )
+        if stable_id in seen_ids:
+            _fail("B2_DESC_CACHE_SPLIT_COUNT_MISMATCH", f"duplicate stable_sample_id {stable_id}")
+        seen_ids.add(stable_id)
+        membership_counts[membership] += 1
+        provenance = {
+            "checkpoint_sha256": str(scientific_record["checkpoint_sha256"]),
+            "execution_profile_sha256": str(scientific_record["execution_profile_sha256"]),
+            "split_scientific_sha256": str(scientific_record["split_scientific_sha256"]),
+            "descriptor_contract_version": int(scientific_record["descriptor_contract_version"]),
+            "descriptor_extractor_config_sha256": str(
+                scientific_record["extractor_configuration_sha256"]
+            ),
+            "descriptor_extractor_implementation_sha256": str(
+                scientific_record["descriptor_implementation_sha256"]
+            ),
+            "candidate_layers": tuple(int(value) for value in scientific_record["candidate_layers"]),
+            "prediction_depths": tuple(int(value) for value in scientific_record["prediction_depths"]),
+            "descriptor_feature_order": tuple(scientific_record["descriptor_feature_names"]),
+        }
+        if common_provenance is None:
+            common_provenance = provenance
+        elif provenance != common_provenance:
+            _fail(
+                "B2_DESC_COLLECTION_PROVENANCE_MISMATCH",
+                f"record provenance drifted for {stable_id}",
+            )
         plan.append(
             PlannedDescriptorSample(stable_sample_id=stable_id, membership=membership)
         )
@@ -473,6 +592,53 @@ def validate_accepted_teacher_cache(
                 record_file_sha256=str(claimed_file),
                 membership=membership,
             )
+        )
+
+    if membership_counts != dict(config.required_split_counts):
+        _fail(
+            "B2_DESC_CACHE_SPLIT_COUNT_MISMATCH",
+            f"membership counts drifted: {membership_counts}",
+        )
+    if common_provenance is None:
+        _fail("B2_DESC_CACHE_RECORD_COUNT_MISMATCH", "teacher-cache samples are empty")
+    if (
+        common_provenance["candidate_layers"] != tuple(config.candidate_layers)
+        or common_provenance["prediction_depths"] != tuple(config.prediction_depths)
+        or common_provenance["descriptor_feature_order"] != _FEATURE_ORDER
+    ):
+        _fail(
+            "B2_DESC_COLLECTION_PROVENANCE_MISMATCH",
+            "accepted cache provenance does not match tracked configuration pins",
+        )
+    if not allow_test_fixture and (
+        common_provenance["checkpoint_sha256"] != config.expected_checkpoint_sha256
+        or common_provenance["execution_profile_sha256"] != config.expected_execution_profile_sha256
+        or common_provenance["split_scientific_sha256"] != config.expected_split_scientific_sha256
+    ):
+        _fail(
+            "B2_DESC_COLLECTION_PROVENANCE_MISMATCH",
+            "accepted cache provenance does not match tracked configuration pins",
+        )
+    recomputed_coverage = cache_mod.recompute_teacher_cache_sample_coverage_sha256(entries)
+    recomputed_scientific = cache_mod.recompute_teacher_cache_scientific_sha256(
+        verified_entries=entries,
+        manifest_contract=manifest,
+    )
+    if (
+        recomputed_coverage != claimed_coverage
+        or recomputed_coverage != config.expected_sample_coverage_sha256
+    ):
+        _fail(
+            "B2_DESC_CACHE_COVERAGE_HASH_MISMATCH",
+            "teacher-cache sample coverage hash does not reprove from verified entries",
+        )
+    if (
+        recomputed_scientific != claimed_scientific
+        or recomputed_scientific != config.expected_teacher_cache_scientific_sha256
+    ):
+        _fail(
+            "B2_DESC_CACHE_SCIENTIFIC_HASH_MISMATCH",
+            "teacher-cache scientific hash does not reprove from verified entries",
         )
 
     return AcceptedTeacherCache(
@@ -1216,6 +1382,14 @@ def write_descriptor_record_atomic(
             "B2_DESC_FILE_HASH_IN_PAYLOAD",
             "descriptor_record_file_sha256 must not be stored inside the .pt payload",
         )
+    embedded = loaded["descriptor_record_scientific_sha256"]
+    recomputed = descriptor_record_scientific_sha256(loaded["scientific_record"])
+    if embedded != scientific_digest or recomputed != scientific_digest or embedded != recomputed:
+        _fail(
+            "B2_DESC_RECORD_HASH_MISMATCH",
+            "descriptor scientific hash drifted after reload",
+        )
+    validate_descriptor_record(loaded["scientific_record"], config=load_descriptor_artifacts_config(_REPO_ROOT / "configs" / "phase_b" / "b2_descriptor_artifacts_gate_c.json"))
     return PersistedDescriptorEntry(
         stable_sample_id=stable_id,
         relative_record_path=descriptor_relative_path(stable_id),
@@ -1327,6 +1501,21 @@ def write_normalization_statistics_atomic(
             tmp_path.unlink(missing_ok=True)
         raise
     file_digest = _sha256_file(path)
+    loaded = torch.load(path, map_location="cpu", weights_only=True)
+    if not isinstance(loaded, Mapping) or set(loaded) != {
+        "scientific_statistics_record",
+        "normalization_statistics_scientific_sha256",
+    }:
+        _fail("B2_DESC_PT_PAYLOAD_INVALID", "normalization payload keys are not exact")
+    embedded = loaded["normalization_statistics_scientific_sha256"]
+    recomputed = normalization_statistics_scientific_sha256(
+        loaded["scientific_statistics_record"]
+    )
+    if embedded != digest or recomputed != digest or embedded != recomputed:
+        _fail(
+            "B2_DESC_NORMALIZATION_HASH_MISMATCH",
+            "normalization scientific hash drifted after reload",
+        )
     relative = path.name if path.parent.name != "descriptors" else path.name
     if path.name == Path(_NORMALIZATION_RELATIVE_PATH).name:
         relative = _NORMALIZATION_RELATIVE_PATH
@@ -1594,44 +1783,56 @@ def build_descriptor_artifacts_manifest(
         validate_descriptor_record(record, config=config)
     ordered = sorted(records, key=lambda item: str(item["stable_sample_id"]))
     ordered_ids = [str(row["stable_sample_id"]) for row in ordered]
+    if sample_entries is None or normalization_entry is None:
+        _fail(
+            "B2_DESC_PASSED_MANIFEST_REQUIRES_VERIFIED_DISK",
+            "passed manifest requires complete verified descriptor and normalization entries",
+        )
+    if len(sample_entries) != len(ordered):
+        _fail(
+            "B2_DESC_PASSED_MANIFEST_REQUIRES_VERIFIED_DISK",
+            "passed manifest requires one verified entry per descriptor record",
+        )
+    for entry in sample_entries:
+        if (
+            entry.verification_status != "verified"
+            or not entry.descriptor_record_file_sha256
+            or not _is_sha256(entry.descriptor_record_file_sha256)
+            or not _is_sha256(entry.descriptor_record_scientific_sha256)
+        ):
+            _fail(
+                "B2_DESC_PASSED_MANIFEST_REQUIRES_VERIFIED_DISK",
+                "descriptor entries must all be dual-hash verified",
+            )
+    if (
+        not _is_sha256(normalization_entry.normalization_statistics_scientific_sha256)
+        or not _is_sha256(normalization_entry.normalization_statistics_file_sha256)
+    ):
+        _fail(
+            "B2_DESC_PASSED_MANIFEST_REQUIRES_VERIFIED_DISK",
+            "normalization entry must be dual-hash verified",
+        )
     collection = descriptor_collection_scientific_sha256(
         records=ordered, statistics=statistics, config=config
     )
     coverage = descriptor_sample_coverage_sha256(ordered)
     samples_payload: list[dict[str, Any]]
-    if sample_entries is not None:
-        by_id = {entry.stable_sample_id: entry for entry in sample_entries}
-        samples_payload = [
-            {
-                "stable_sample_id": entry.stable_sample_id,
-                "relative_record_path": entry.relative_record_path,
-                "descriptor_record_scientific_sha256": (
-                    entry.descriptor_record_scientific_sha256
-                ),
-                "descriptor_record_file_sha256": entry.descriptor_record_file_sha256,
-                "verification_status": entry.verification_status,
-                "split_membership": next(
-                    row["split_membership"]
-                    for row in ordered
-                    if row["stable_sample_id"] == entry.stable_sample_id
-                ),
-            }
-            for entry in (by_id[stable_id] for stable_id in ordered_ids)
-        ]
-    else:
-        samples_payload = [
-            {
-                "stable_sample_id": row["stable_sample_id"],
-                "relative_record_path": descriptor_relative_path(
-                    str(row["stable_sample_id"])
-                ),
-                "descriptor_record_scientific_sha256": row[
-                    "descriptor_record_scientific_sha256"
-                ],
-                "split_membership": row["split_membership"],
-            }
-            for row in ordered
-        ]
+    by_id = {entry.stable_sample_id: entry for entry in sample_entries}
+    samples_payload = [
+        {
+            "stable_sample_id": entry.stable_sample_id,
+            "relative_record_path": entry.relative_record_path,
+            "descriptor_record_scientific_sha256": entry.descriptor_record_scientific_sha256,
+            "descriptor_record_file_sha256": entry.descriptor_record_file_sha256,
+            "verification_status": entry.verification_status,
+            "split_membership": next(
+                row["split_membership"]
+                for row in ordered
+                if row["stable_sample_id"] == entry.stable_sample_id
+            ),
+        }
+        for entry in (by_id[stable_id] for stable_id in ordered_ids)
+    ]
     manifest: dict[str, Any] = {
         "schema_version": 1,
         "status": "passed",
@@ -1661,10 +1862,248 @@ def build_descriptor_artifacts_manifest(
         "samples": samples_payload,
     }
     if normalization_entry is not None:
-        manifest["normalization_statistics_relative_path"] = (
-            normalization_entry.relative_path
-        )
-        manifest["normalization_statistics_file_sha256"] = (
-            normalization_entry.normalization_statistics_file_sha256
-        )
+        manifest["normalization_statistics_relative_path"] = normalization_entry.relative_path
+        manifest["normalization_statistics_file_sha256"] = normalization_entry.normalization_statistics_file_sha256
+    manifest["teacher_forward_count"] = 0
     return manifest
+
+
+def build_planned_descriptor_artifacts_manifest(
+    *,
+    accepted: AcceptedTeacherCache,
+    config: DescriptorArtifactsConfig,
+) -> dict[str, Any]:
+    """Build a structurally distinct planned manifest for no-write planning paths."""
+
+    plan = build_descriptor_extraction_plan(accepted=accepted, config=config)
+    return {
+        "schema_version": 1,
+        "status": "planned",
+        "configuration_id": config.configuration_id,
+        "planned_stable_sample_ids": list(plan["planned_ordered_stable_sample_ids"]),
+        "candidate_layers": list(config.candidate_layers),
+        "prediction_depths": list(config.prediction_depths),
+        "descriptor_dimension": config.descriptor_dimension,
+        "teacher_forward_count": 0,
+    }
+
+
+def materialize_descriptor_artifact_collection(
+    *,
+    config: DescriptorArtifactsConfig,
+    teacher_cache_manifest_path: Path,
+    teacher_cache_root: Path,
+    output_run_dir: Path,
+    allow_test_fixture: bool = False,
+) -> DescriptorCollectionResult:
+    """Materialize and verify a full descriptor artifact collection without teacher calls."""
+
+    authoritative = load_disk_authoritative_teacher_cache_manifest(
+        teacher_cache_manifest_path=teacher_cache_manifest_path,
+        teacher_cache_root=teacher_cache_root,
+    )
+    accepted = validate_accepted_teacher_cache(
+        manifest=authoritative.manifest,
+        config=config,
+        cache_root=authoritative.cache_root,
+        allow_test_fixture=allow_test_fixture,
+    )
+    output_run_dir.mkdir(parents=True, exist_ok=False)
+    (output_run_dir / "descriptors").mkdir(parents=True, exist_ok=False)
+    records: list[dict[str, Any]] = []
+    entries: list[PersistedDescriptorEntry] = []
+    for accepted_entry in accepted.entries:
+        payload = torch.load(
+            authoritative.cache_root / accepted_entry.relative_path,
+            map_location="cpu",
+            weights_only=True,
+        )
+        scientific_record = payload["scientific_record"]
+        record = reconstruct_descriptor_record(
+            teacher_scientific_record=scientific_record,
+            config=config,
+            source_teacher_record_scientific_sha256=accepted_entry.record_scientific_sha256,
+            source_teacher_record_file_sha256=accepted_entry.record_file_sha256,
+            teacher_cache_scientific_sha256=config.expected_teacher_cache_scientific_sha256,
+            descriptor_feature_order=_FEATURE_ORDER,
+            descriptor_extractor_config_sha256=scientific_record["extractor_configuration_sha256"],
+            descriptor_extractor_implementation_sha256=scientific_record[
+                "descriptor_implementation_sha256"
+            ],
+        )
+        records.append(record)
+        entries.append(
+            write_descriptor_record_atomic(
+                output_run_dir / descriptor_relative_path(record["stable_sample_id"]),
+                record,
+            )
+        )
+    training_records = [row for row in records if row["split_membership"] == "training"]
+    statistics = compute_training_normalization_statistics(training_records, config=config)
+    normalization_entry = write_normalization_statistics_atomic(
+        output_run_dir / _NORMALIZATION_RELATIVE_PATH,
+        statistics,
+    )
+    manifest = build_descriptor_artifacts_manifest(
+        config=config,
+        records=records,
+        statistics=statistics,
+        sample_entries=entries,
+        normalization_entry=normalization_entry,
+    )
+    manifest["source_teacher_cache_manifest_file_sha256"] = (
+        authoritative.source_teacher_cache_manifest_file_sha256
+    )
+    write_final_manifest_with_receipt_atomic(output_run_dir, manifest)
+    verify_descriptor_artifact_collection(config=config, run_dir=output_run_dir)
+    return DescriptorCollectionResult(
+        run_dir=output_run_dir,
+        manifest=MappingProxyType(dict(manifest)),
+        source_teacher_cache_manifest_file_sha256=authoritative.source_teacher_cache_manifest_file_sha256,
+        teacher_forward_count=0,
+    )
+
+
+def verify_descriptor_artifact_collection(
+    *,
+    config: DescriptorArtifactsConfig,
+    run_dir: Path,
+) -> VerifiedDescriptorCollection:
+    """Verify a materialized descriptor collection from disk only."""
+
+    verify_final_manifest_receipt(run_dir)
+    manifest_path = Path(run_dir) / _FINAL_MANIFEST_NAME
+    manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+    if manifest.get("status") != "passed":
+        _fail("B2_DESC_PARTIAL_CLAIMING_PASSED", "final manifest status must be passed")
+    if manifest.get("teacher_forward_count") != 0:
+        _fail("B2_DESC_TEACHER_FORWARD_COUNT_MISMATCH", "teacher_forward_count must equal zero")
+    samples = manifest.get("samples")
+    if not isinstance(samples, list):
+        _fail("B2_DESC_MANIFEST_INVALID", "passed manifest requires samples list")
+    if len(samples) != sum(config.required_split_counts.values()):
+        _fail("B2_DESC_CACHE_RECORD_COUNT_MISMATCH", "passed manifest must list 32 samples")
+    expected_files = {
+        Path(entry["relative_record_path"]).name for entry in samples
+    } | {
+        _FINAL_MANIFEST_NAME,
+        _FINAL_MANIFEST_RECEIPT_NAME,
+        Path(_NORMALIZATION_RELATIVE_PATH).name,
+    }
+    actual_files = {
+        path.relative_to(run_dir).name for path in Path(run_dir).rglob("*") if path.is_file()
+    }
+    if actual_files != expected_files:
+        _fail("B2_DESC_ORPHAN_ARTIFACT", "run directory contains orphan, extra, or missing files")
+    descriptor_records_by_id: dict[str, Mapping[str, Any]] = {}
+    for raw in samples:
+        entry = PersistedDescriptorEntry(
+            stable_sample_id=str(raw["stable_sample_id"]),
+            relative_record_path=str(raw["relative_record_path"]),
+            descriptor_record_scientific_sha256=str(raw["descriptor_record_scientific_sha256"]),
+            descriptor_record_file_sha256=str(raw["descriptor_record_file_sha256"]),
+            verification_status=str(raw.get("verification_status", "verified")),
+        )
+        if entry.verification_status != "verified":
+            _fail("B2_DESC_PASSED_MANIFEST_REQUIRES_VERIFIED_DISK", "descriptor entry is not verified")
+        descriptor_records_by_id[entry.stable_sample_id] = verify_persisted_descriptor_entry(
+            run_dir=run_dir,
+            entry=entry,
+            config=config,
+        )
+    normalization_entry = PersistedNormalizationEntry(
+        relative_path=str(manifest["normalization_statistics_relative_path"]),
+        normalization_statistics_scientific_sha256=str(
+            manifest["normalization_statistics_scientific_sha256"]
+        ),
+        normalization_statistics_file_sha256=str(
+            manifest["normalization_statistics_file_sha256"]
+        ),
+    )
+    normalization_statistics = verify_persisted_normalization_entry(
+        run_dir=run_dir,
+        entry=normalization_entry,
+    )
+    ordered_records = [
+        descriptor_records_by_id[str(stable_id)] for stable_id in manifest["planned_stable_sample_ids"]
+    ]
+    if descriptor_sample_coverage_sha256(ordered_records) != manifest["descriptor_sample_coverage_sha256"]:
+        _fail("B2_DESC_COLLECTION_HASH_MISMATCH", "descriptor sample coverage hash mismatch")
+    if (
+        descriptor_collection_scientific_sha256(
+            records=ordered_records,
+            statistics=normalization_statistics,
+            config=config,
+        )
+        != manifest["descriptor_collection_scientific_sha256"]
+    ):
+        _fail("B2_DESC_COLLECTION_HASH_MISMATCH", "descriptor collection hash mismatch")
+    if normalization_statistics["training_sample_coverage_sha256"] != manifest["training_sample_coverage_sha256"]:
+        _fail("B2_DESC_COLLECTION_HASH_MISMATCH", "training coverage hash mismatch")
+    if (
+        normalization_statistics["normalization_training_coverage_sha256"]
+        != manifest["normalization_training_coverage_sha256"]
+    ):
+        _fail("B2_DESC_COLLECTION_HASH_MISMATCH", "normalization training coverage mismatch")
+    if (
+        normalization_statistics["normalization_statistics_scientific_sha256"]
+        != manifest["normalization_statistics_scientific_sha256"]
+    ):
+        _fail("B2_DESC_COLLECTION_HASH_MISMATCH", "normalization scientific hash mismatch")
+    return VerifiedDescriptorCollection(
+        run_dir=Path(run_dir),
+        manifest=MappingProxyType(dict(manifest)),
+        descriptor_records_by_id=MappingProxyType(descriptor_records_by_id),
+        normalization_statistics=MappingProxyType(dict(normalization_statistics)),
+        teacher_forward_count=0,
+    )
+
+
+def compare_descriptor_artifact_collections(
+    *,
+    first: VerifiedDescriptorCollection,
+    second: VerifiedDescriptorCollection,
+) -> DescriptorCollectionComparison:
+    """Compare two independently verified descriptor collections."""
+
+    reasons: list[str] = []
+    keys = (
+        "descriptor_collection_scientific_sha256",
+        "descriptor_sample_coverage_sha256",
+        "normalization_statistics_scientific_sha256",
+        "normalization_training_coverage_sha256",
+    )
+    for key in keys:
+        if first.manifest[key] != second.manifest[key]:
+            reasons.append(key)
+    first_ids = sorted(first.descriptor_records_by_id)
+    second_ids = sorted(second.descriptor_records_by_id)
+    if first_ids != second_ids:
+        reasons.append("stable_sample_ids")
+    else:
+        for stable_id in first_ids:
+            first_record = first.descriptor_records_by_id[stable_id]
+            second_record = second.descriptor_records_by_id[stable_id]
+            if (
+                first_record["descriptor_record_scientific_sha256"]
+                != second_record["descriptor_record_scientific_sha256"]
+            ):
+                reasons.append(f"descriptor_record:{stable_id}")
+                continue
+            for depth in first_record["prediction_depths"]:
+                if not torch.equal(
+                    first_record["descriptor_by_depth"][depth],
+                    second_record["descriptor_by_depth"][depth],
+                ):
+                    reasons.append(f"descriptor_tensor:{stable_id}:{depth}")
+                    break
+    if normalization_statistics_scientific_content(first.normalization_statistics) != normalization_statistics_scientific_content(second.normalization_statistics):
+        reasons.append("normalization_statistics_values")
+    file_byte_equal = _sha256_file(first.run_dir / _FINAL_MANIFEST_NAME) == _sha256_file(
+        second.run_dir / _FINAL_MANIFEST_NAME
+    )
+    return DescriptorCollectionComparison(
+        scientifically_equivalent=not reasons,
+        reasons=tuple(reasons),
+        file_byte_equal=file_byte_equal,
+    )
