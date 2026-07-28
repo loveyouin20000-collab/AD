@@ -13,7 +13,7 @@ import os
 import tempfile
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 from types import MappingProxyType
 from typing import Any, NoReturn
 
@@ -169,6 +169,15 @@ class DiskAuthoritativeTeacherCacheManifest:
 
 
 @dataclass(frozen=True)
+class ValidatedTeacherCache:
+    manifest: Mapping[str, Any]
+    manifest_path: Path
+    cache_root: Path
+    source_teacher_cache_manifest_file_sha256: str
+    accepted: AcceptedTeacherCache
+
+
+@dataclass(frozen=True)
 class PersistedDescriptorEntry:
     stable_sample_id: str
     relative_record_path: str
@@ -248,6 +257,59 @@ def _resolve_within_root(root: Path, relative_path: str, *, code: str) -> Path:
     return resolved
 
 
+def _normalized_relative_path(relative_path: str, *, code: str) -> str:
+    if not isinstance(relative_path, str) or not relative_path:
+        _fail(code, "path must be a non-empty relative path")
+    raw = PurePosixPath(relative_path)
+    if raw.is_absolute():
+        _fail(code, f"path must be relative: {relative_path}")
+    parts = raw.parts
+    if not parts or any(part in {"", ".."} for part in parts):
+        _fail(code, f"path escapes root or is malformed: {relative_path}")
+    normalized_parts = tuple(part for part in parts if part != ".")
+    if not normalized_parts:
+        _fail(code, f"path must not normalize to the run root: {relative_path}")
+    return PurePosixPath(*normalized_parts).as_posix()
+
+
+def resolve_run_relative_artifact(
+    *,
+    run_dir: Path,
+    relative_path: str,
+    expected_kind: str,
+) -> Path:
+    normalized = _normalized_relative_path(
+        relative_path,
+        code="B2_DESC_RUN_RELATIVE_PATH_INVALID",
+    )
+    resolved_root = Path(run_dir).resolve()
+    candidate = resolved_root / normalized
+    try:
+        resolved = candidate.resolve(strict=True)
+    except OSError as exc:
+        _fail(
+            "B2_DESC_MISSING_ARTIFACT",
+            f"{expected_kind} missing or unreadable at {normalized}: {exc}",
+        )
+    try:
+        resolved.relative_to(resolved_root)
+    except ValueError:
+        _fail(
+            "B2_DESC_RUN_ROOT_ESCAPE",
+            f"{expected_kind} escapes authoritative run_dir: {relative_path}",
+        )
+    if not resolved.is_file():
+        _fail(
+            "B2_DESC_MISSING_ARTIFACT",
+            f"{expected_kind} must be a regular file inside run_dir: {normalized}",
+        )
+    return resolved
+
+
+def _run_relative_path_from_resolved(run_dir: Path, path: Path) -> str:
+    return path.resolve().relative_to(Path(run_dir).resolve()).as_posix()
+
+
 def load_disk_authoritative_teacher_cache_manifest(
     *,
     teacher_cache_manifest_path: Path | str,
@@ -281,6 +343,33 @@ def load_disk_authoritative_teacher_cache_manifest(
         manifest_path=resolved_manifest,
         cache_root=resolved_root,
         source_teacher_cache_manifest_file_sha256=hashlib.sha256(payload).hexdigest(),
+    )
+
+
+def load_and_validate_accepted_teacher_cache_from_disk(
+    *,
+    config: DescriptorArtifactsConfig,
+    teacher_cache_manifest_path: Path,
+    teacher_cache_root: Path,
+) -> ValidatedTeacherCache:
+    authoritative = load_disk_authoritative_teacher_cache_manifest(
+        teacher_cache_manifest_path=teacher_cache_manifest_path,
+        teacher_cache_root=teacher_cache_root,
+    )
+    accepted = validate_accepted_teacher_cache(
+        manifest=authoritative.manifest,
+        config=config,
+        cache_root=authoritative.cache_root,
+        allow_test_fixture=False,
+    )
+    return ValidatedTeacherCache(
+        manifest=authoritative.manifest,
+        manifest_path=authoritative.manifest_path,
+        cache_root=authoritative.cache_root,
+        source_teacher_cache_manifest_file_sha256=(
+            authoritative.source_teacher_cache_manifest_file_sha256
+        ),
+        accepted=accepted,
     )
 
 
@@ -469,6 +558,50 @@ def validate_accepted_teacher_cache(
             "B2_DESC_CACHE_TEST_FIXTURE_FORBIDDEN",
             "test_fixture teacher-cache is forbidden without allow_test_fixture",
         )
+    if (
+        manifest.get("split_scientific_sha256") is not None
+        and manifest.get("split_scientific_sha256") != config.expected_split_scientific_sha256
+    ):
+        _fail(
+            "B2_DESC_COLLECTION_PROVENANCE_MISMATCH",
+            "teacher-cache manifest split identity does not match config",
+        )
+    if (
+        manifest.get("checkpoint_sha256") is not None
+        and manifest.get("checkpoint_sha256") != config.expected_checkpoint_sha256
+    ):
+        _fail(
+            "B2_DESC_COLLECTION_PROVENANCE_MISMATCH",
+            "teacher-cache manifest checkpoint identity does not match config",
+        )
+    if (
+        manifest.get("execution_profile_sha256") is not None
+        and manifest.get("execution_profile_sha256")
+        != config.expected_execution_profile_sha256
+    ):
+        _fail(
+            "B2_DESC_COLLECTION_PROVENANCE_MISMATCH",
+            "teacher-cache manifest execution profile identity does not match config",
+        )
+    descriptor_contract = manifest.get("descriptor_contract")
+    if isinstance(descriptor_contract, Mapping):
+        if (
+            descriptor_contract.get("descriptor_contract_version")
+            != config.descriptor_contract_version
+            or tuple(descriptor_contract.get("feature_names") or ()) != _FEATURE_ORDER
+            or descriptor_contract.get("extractor_configuration_sha256")
+            != _authoritative_extractor_digests(
+                descriptor_contract_version=config.descriptor_contract_version
+            )[1]
+            or descriptor_contract.get("descriptor_implementation_sha256")
+            != _authoritative_extractor_digests(
+                descriptor_contract_version=config.descriptor_contract_version
+            )[0]
+        ):
+            _fail(
+                "B2_DESC_COLLECTION_PROVENANCE_MISMATCH",
+                "teacher-cache manifest descriptor contract drifted",
+            )
 
     expected_impl, expected_cfg = _authoritative_extractor_digests(
         descriptor_contract_version=config.descriptor_contract_version
@@ -521,17 +654,6 @@ def validate_accepted_teacher_cache(
                 "B2_DESC_CACHE_RECORD_HASH_MISMATCH",
                 f"record scientific hash mismatch for {stable_id}",
             )
-        try:
-            cache_mod.reconstruct_persisted_descriptors(scientific_record)
-        except cache_mod.TeacherCacheError as exc:
-            detail = str(exc)
-            if "TENSOR_VALUE_MISSING" in detail or "MAP_" in detail:
-                _fail(
-                    "B2_DESC_DEPTH_MISSING",
-                    f"required causal-map lattice incomplete for {stable_id}: {detail}",
-                )
-            _fail("B2_DESC_DEPTH_MISSING", f"descriptor reconstruction failed: {detail}")
-
         feature_names = scientific_record.get("descriptor_feature_names")
         if tuple(feature_names or ()) != _FEATURE_ORDER:
             _fail(
@@ -548,6 +670,32 @@ def validate_accepted_teacher_cache(
                 "B2_DESC_CONTRACT_IDENTITY_MISMATCH",
                 f"descriptor contract identity drifted for {stable_id}",
             )
+        if (
+            tuple(int(value) for value in scientific_record.get("candidate_layers", ()))
+            != tuple(config.candidate_layers)
+            or tuple(int(value) for value in scientific_record.get("prediction_depths", ()))
+            != tuple(config.prediction_depths)
+            or str(scientific_record.get("checkpoint_sha256"))
+            != config.expected_checkpoint_sha256
+            or str(scientific_record.get("execution_profile_sha256"))
+            != config.expected_execution_profile_sha256
+            or str(scientific_record.get("split_scientific_sha256"))
+            != config.expected_split_scientific_sha256
+        ):
+            _fail(
+                "B2_DESC_COLLECTION_PROVENANCE_MISMATCH",
+                f"teacher-cache record provenance drifted for {stable_id}",
+            )
+        try:
+            cache_mod.reconstruct_persisted_descriptors(scientific_record)
+        except cache_mod.TeacherCacheError as exc:
+            detail = str(exc)
+            if "TENSOR_VALUE_MISSING" in detail or "MAP_" in detail:
+                _fail(
+                    "B2_DESC_DEPTH_MISSING",
+                    f"required causal-map lattice incomplete for {stable_id}: {detail}",
+                )
+            _fail("B2_DESC_DEPTH_MISSING", f"descriptor reconstruction failed: {detail}")
 
         membership = str(scientific_record["membership"])
         if membership not in membership_counts:
@@ -614,6 +762,11 @@ def validate_accepted_teacher_cache(
         common_provenance["checkpoint_sha256"] != config.expected_checkpoint_sha256
         or common_provenance["execution_profile_sha256"] != config.expected_execution_profile_sha256
         or common_provenance["split_scientific_sha256"] != config.expected_split_scientific_sha256
+            or common_provenance["descriptor_contract_version"]
+            != config.descriptor_contract_version
+            or common_provenance["descriptor_extractor_config_sha256"] != expected_cfg
+            or common_provenance["descriptor_extractor_implementation_sha256"]
+            != expected_impl
     ):
         _fail(
             "B2_DESC_COLLECTION_PROVENANCE_MISMATCH",
@@ -646,6 +799,77 @@ def validate_accepted_teacher_cache(
         plan=tuple(plan),
         entries=tuple(entries),
     )
+
+
+def _collection_provenance_from_records(
+    records: Sequence[Mapping[str, Any]],
+    *,
+    config: DescriptorArtifactsConfig,
+) -> Mapping[str, Any]:
+    ordered = sorted(records, key=lambda row: str(row["stable_sample_id"]))
+    if not ordered:
+        _fail("B2_DESC_COLLECTION_EMPTY", "collection requires records")
+    expected_impl, expected_cfg = _authoritative_extractor_digests(
+        descriptor_contract_version=config.descriptor_contract_version
+    )
+    first = ordered[0]
+    provenance = {
+        "teacher_cache_scientific_sha256": str(first["teacher_cache_scientific_sha256"]),
+        "split_scientific_sha256": str(first["split_scientific_sha256"]),
+        "checkpoint_sha256": str(first["checkpoint_sha256"]),
+        "execution_profile_sha256": str(first["execution_profile_sha256"]),
+        "descriptor_contract_version": int(first["descriptor_contract_version"]),
+        "descriptor_extractor_config_sha256": str(
+            first["descriptor_extractor_config_sha256"]
+        ),
+        "descriptor_extractor_implementation_sha256": str(
+            first["descriptor_extractor_implementation_sha256"]
+        ),
+        "candidate_layers": tuple(int(value) for value in first["candidate_layers"]),
+        "prediction_depths": tuple(int(value) for value in first["prediction_depths"]),
+        "descriptor_feature_order": tuple(first["descriptor_feature_order"]),
+    }
+    for record in ordered[1:]:
+        current = {
+            "teacher_cache_scientific_sha256": str(record["teacher_cache_scientific_sha256"]),
+            "split_scientific_sha256": str(record["split_scientific_sha256"]),
+            "checkpoint_sha256": str(record["checkpoint_sha256"]),
+            "execution_profile_sha256": str(record["execution_profile_sha256"]),
+            "descriptor_contract_version": int(record["descriptor_contract_version"]),
+            "descriptor_extractor_config_sha256": str(
+                record["descriptor_extractor_config_sha256"]
+            ),
+            "descriptor_extractor_implementation_sha256": str(
+                record["descriptor_extractor_implementation_sha256"]
+            ),
+            "candidate_layers": tuple(int(value) for value in record["candidate_layers"]),
+            "prediction_depths": tuple(int(value) for value in record["prediction_depths"]),
+            "descriptor_feature_order": tuple(record["descriptor_feature_order"]),
+        }
+        if current != provenance:
+            _fail(
+                "B2_DESC_COLLECTION_PROVENANCE_MISMATCH",
+                f"descriptor record provenance drifted for {record['stable_sample_id']}",
+            )
+    if (
+        provenance["teacher_cache_scientific_sha256"]
+        != config.expected_teacher_cache_scientific_sha256
+        or provenance["split_scientific_sha256"] != config.expected_split_scientific_sha256
+        or provenance["checkpoint_sha256"] != config.expected_checkpoint_sha256
+        or provenance["execution_profile_sha256"]
+        != config.expected_execution_profile_sha256
+        or provenance["descriptor_contract_version"] != config.descriptor_contract_version
+        or provenance["descriptor_extractor_config_sha256"] != expected_cfg
+        or provenance["descriptor_extractor_implementation_sha256"] != expected_impl
+        or provenance["candidate_layers"] != tuple(config.candidate_layers)
+        or provenance["prediction_depths"] != tuple(config.prediction_depths)
+        or provenance["descriptor_feature_order"] != _FEATURE_ORDER
+    ):
+        _fail(
+            "B2_DESC_COLLECTION_PROVENANCE_MISMATCH",
+            "descriptor collection provenance does not match tracked configuration pins",
+        )
+    return MappingProxyType(provenance)
 
 
 def reconstruct_descriptor_record(
@@ -999,9 +1223,7 @@ def descriptor_collection_scientific_content(
     """Explicit whitelist for the 32-sample descriptor collection identity."""
 
     ordered = sorted(records, key=lambda row: str(row["stable_sample_id"]))
-    if not ordered:
-        _fail("B2_DESC_COLLECTION_EMPTY", "collection requires records")
-    first = ordered[0]
+    provenance = _collection_provenance_from_records(ordered, config=config)
     content = {
         "ordered_stable_sample_ids": [str(row["stable_sample_id"]) for row in ordered],
         "split_membership_by_id": {
@@ -1016,15 +1238,17 @@ def descriptor_collection_scientific_content(
         "descriptor_feature_order": list(_FEATURE_ORDER),
         "descriptor_contract_version": int(config.descriptor_contract_version),
         "descriptor_extractor_config_sha256": str(
-            first["descriptor_extractor_config_sha256"]
+            provenance["descriptor_extractor_config_sha256"]
         ),
         "descriptor_extractor_implementation_sha256": str(
-            first["descriptor_extractor_implementation_sha256"]
+            provenance["descriptor_extractor_implementation_sha256"]
         ),
-        "teacher_cache_scientific_sha256": str(first["teacher_cache_scientific_sha256"]),
-        "split_scientific_sha256": str(first["split_scientific_sha256"]),
-        "checkpoint_sha256": str(first["checkpoint_sha256"]),
-        "execution_profile_sha256": str(first["execution_profile_sha256"]),
+        "teacher_cache_scientific_sha256": str(
+            provenance["teacher_cache_scientific_sha256"]
+        ),
+        "split_scientific_sha256": str(provenance["split_scientific_sha256"]),
+        "checkpoint_sha256": str(provenance["checkpoint_sha256"]),
+        "execution_profile_sha256": str(provenance["execution_profile_sha256"]),
         "normalization_statistics_scientific_sha256": str(
             statistics["normalization_statistics_scientific_sha256"]
         ),
@@ -1426,10 +1650,21 @@ def verify_persisted_descriptor_entry(
 ) -> Mapping[str, Any]:
     """Resume/finalization verification for one descriptor artifact."""
 
-    root = Path(run_dir)
-    path = root / entry.relative_record_path
-    if not path.is_file():
-        _fail("B2_DESC_MISSING_ARTIFACT", f"missing descriptor file: {path}")
+    root = Path(run_dir).resolve()
+    normalized_relative = _normalized_relative_path(
+        entry.relative_record_path,
+        code="B2_DESC_RUN_RELATIVE_PATH_INVALID",
+    )
+    if normalized_relative != descriptor_relative_path(entry.stable_sample_id):
+        _fail(
+            "B2_DESC_RUN_RELATIVE_PATH_INVALID",
+            f"descriptor path drifted for {entry.stable_sample_id}",
+        )
+    path = resolve_run_relative_artifact(
+        run_dir=root,
+        relative_path=normalized_relative,
+        expected_kind=f"descriptor record {entry.stable_sample_id}",
+    )
     file_digest = _sha256_file(path)
     if file_digest != entry.descriptor_record_file_sha256:
         _fail(
@@ -1532,10 +1767,21 @@ def verify_persisted_normalization_entry(
     entry: PersistedNormalizationEntry,
     config: DescriptorArtifactsConfig | None = None,
 ) -> Mapping[str, Any]:
-    root = Path(run_dir)
-    path = root / entry.relative_path
-    if not path.is_file():
-        _fail("B2_DESC_MISSING_ARTIFACT", f"missing normalization file: {path}")
+    root = Path(run_dir).resolve()
+    normalized_relative = _normalized_relative_path(
+        entry.relative_path,
+        code="B2_DESC_RUN_RELATIVE_PATH_INVALID",
+    )
+    if normalized_relative != _NORMALIZATION_RELATIVE_PATH:
+        _fail(
+            "B2_DESC_RUN_RELATIVE_PATH_INVALID",
+            "normalization path must equal the tracked run-relative artifact path",
+        )
+    path = resolve_run_relative_artifact(
+        run_dir=root,
+        relative_path=normalized_relative,
+        expected_kind="normalization statistics artifact",
+    )
     file_digest = _sha256_file(path)
     if file_digest != entry.normalization_statistics_file_sha256:
         _fail(
@@ -1625,14 +1871,17 @@ def write_final_manifest_with_receipt_atomic(
 
 
 def verify_final_manifest_receipt(run_dir: Path | str) -> str:
-    root = Path(run_dir)
-    manifest_path = root / _FINAL_MANIFEST_NAME
-    receipt_path = root / _FINAL_MANIFEST_RECEIPT_NAME
-    if not manifest_path.is_file() or not receipt_path.is_file():
-        _fail(
-            "B2_DESC_MANIFEST_RECEIPT_INCOMPLETE",
-            "final manifest and receipt must both exist",
-        )
+    root = Path(run_dir).resolve()
+    manifest_path = resolve_run_relative_artifact(
+        run_dir=root,
+        relative_path=_FINAL_MANIFEST_NAME,
+        expected_kind="final manifest",
+    )
+    receipt_path = resolve_run_relative_artifact(
+        run_dir=root,
+        relative_path=_FINAL_MANIFEST_RECEIPT_NAME,
+        expected_kind="final manifest receipt",
+    )
     actual = _sha256_file(manifest_path)
     claimed = receipt_path.read_text(encoding="utf-8").strip()
     if claimed != actual:
@@ -1911,6 +2160,7 @@ def materialize_descriptor_artifact_collection(
     teacher_cache_manifest_path: Path,
     teacher_cache_root: Path,
     output_run_dir: Path,
+    validated_teacher_cache: ValidatedTeacherCache | None = None,
 ) -> DescriptorCollectionResult:
     """Materialize and verify a full descriptor artifact collection without teacher calls."""
 
@@ -1918,19 +2168,47 @@ def materialize_descriptor_artifact_collection(
         teacher_cache_manifest_path=teacher_cache_manifest_path,
         teacher_cache_root=teacher_cache_root,
     )
-    accepted = validate_accepted_teacher_cache(
+    authoritative_accepted = validate_accepted_teacher_cache(
         manifest=authoritative.manifest,
         config=config,
         cache_root=authoritative.cache_root,
         allow_test_fixture=False,
     )
+    if validated_teacher_cache is None:
+        validated = ValidatedTeacherCache(
+            manifest=authoritative.manifest,
+            manifest_path=authoritative.manifest_path,
+            cache_root=authoritative.cache_root,
+            source_teacher_cache_manifest_file_sha256=(
+                authoritative.source_teacher_cache_manifest_file_sha256
+            ),
+            accepted=authoritative_accepted,
+        )
+    else:
+        if (
+            validated_teacher_cache.manifest_path != authoritative.manifest_path
+            or validated_teacher_cache.cache_root != authoritative.cache_root
+            or validated_teacher_cache.source_teacher_cache_manifest_file_sha256
+            != authoritative.source_teacher_cache_manifest_file_sha256
+            or dict(validated_teacher_cache.manifest) != dict(authoritative.manifest)
+            or validated_teacher_cache.accepted.plan != authoritative_accepted.plan
+            or validated_teacher_cache.accepted.entries != authoritative_accepted.entries
+            or dict(validated_teacher_cache.accepted.manifest)
+            != dict(authoritative_accepted.manifest)
+        ):
+            _fail(
+                "B2_DESC_COLLECTION_PROVENANCE_MISMATCH",
+                "validated teacher-cache object does not match authoritative disk inputs",
+            )
+        validated = validated_teacher_cache
+    accepted = authoritative_accepted
     output_run_dir.mkdir(parents=True, exist_ok=False)
     (output_run_dir / "descriptors").mkdir(parents=True, exist_ok=False)
     records: list[dict[str, Any]] = []
     entries: list[PersistedDescriptorEntry] = []
     for accepted_entry in accepted.entries:
         payload = torch.load(
-            authoritative.cache_root / accepted_entry.relative_path,
+            validated.cache_root / accepted_entry.relative_path,
             map_location="cpu",
             weights_only=True,
         )
@@ -1940,7 +2218,9 @@ def materialize_descriptor_artifact_collection(
             config=config,
             source_teacher_record_scientific_sha256=accepted_entry.record_scientific_sha256,
             source_teacher_record_file_sha256=accepted_entry.record_file_sha256,
-            teacher_cache_scientific_sha256=config.expected_teacher_cache_scientific_sha256,
+            teacher_cache_scientific_sha256=str(
+                validated.manifest["cache_scientific_sha256"]
+            ),
             descriptor_feature_order=_FEATURE_ORDER,
             descriptor_extractor_config_sha256=scientific_record["extractor_configuration_sha256"],
             descriptor_extractor_implementation_sha256=scientific_record[
@@ -1968,14 +2248,14 @@ def materialize_descriptor_artifact_collection(
         normalization_entry=normalization_entry,
     )
     manifest["source_teacher_cache_manifest_file_sha256"] = (
-        authoritative.source_teacher_cache_manifest_file_sha256
+        validated.source_teacher_cache_manifest_file_sha256
     )
     write_final_manifest_with_receipt_atomic(output_run_dir, manifest)
     verify_descriptor_artifact_collection(config=config, run_dir=output_run_dir)
     return DescriptorCollectionResult(
         run_dir=output_run_dir,
         manifest=MappingProxyType(dict(manifest)),
-        source_teacher_cache_manifest_file_sha256=authoritative.source_teacher_cache_manifest_file_sha256,
+        source_teacher_cache_manifest_file_sha256=validated.source_teacher_cache_manifest_file_sha256,
         teacher_forward_count=0,
     )
 
@@ -1987,8 +2267,13 @@ def verify_descriptor_artifact_collection(
 ) -> VerifiedDescriptorCollection:
     """Verify a materialized descriptor collection from disk only."""
 
-    verify_final_manifest_receipt(run_dir)
-    manifest_path = Path(run_dir) / _FINAL_MANIFEST_NAME
+    resolved_run_dir = Path(run_dir).resolve()
+    verify_final_manifest_receipt(resolved_run_dir)
+    manifest_path = resolve_run_relative_artifact(
+        run_dir=resolved_run_dir,
+        relative_path=_FINAL_MANIFEST_NAME,
+        expected_kind="final manifest",
+    )
     manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
     if manifest.get("status") != "passed":
         _fail("B2_DESC_PARTIAL_CLAIMING_PASSED", "final manifest status must be passed")
@@ -2006,18 +2291,13 @@ def verify_descriptor_artifact_collection(
     if len(samples) != sum(config.required_split_counts.values()):
         _fail("B2_DESC_CACHE_RECORD_COUNT_MISMATCH", "passed manifest must list 32 samples")
     expected_files = {
-        Path(entry["relative_record_path"]).name for entry in samples
-    } | {
         _FINAL_MANIFEST_NAME,
         _FINAL_MANIFEST_RECEIPT_NAME,
-        Path(_NORMALIZATION_RELATIVE_PATH).name,
+        _NORMALIZATION_RELATIVE_PATH,
     }
-    actual_files = {
-        path.relative_to(run_dir).name for path in Path(run_dir).rglob("*") if path.is_file()
-    }
-    if actual_files != expected_files:
-        _fail("B2_DESC_ORPHAN_ARTIFACT", "run directory contains orphan, extra, or missing files")
     descriptor_records_by_id: dict[str, Mapping[str, Any]] = {}
+    seen_relative_paths: set[str] = set()
+    seen_targets: set[str] = set()
     for raw in samples:
         entry = PersistedDescriptorEntry(
             stable_sample_id=str(raw["stable_sample_id"]),
@@ -2028,11 +2308,70 @@ def verify_descriptor_artifact_collection(
         )
         if entry.verification_status != "verified":
             _fail("B2_DESC_PASSED_MANIFEST_REQUIRES_VERIFIED_DISK", "descriptor entry is not verified")
+        normalized_relative = _normalized_relative_path(
+            entry.relative_record_path,
+            code="B2_DESC_RUN_RELATIVE_PATH_INVALID",
+        )
+        if normalized_relative in seen_relative_paths:
+            _fail(
+                "B2_DESC_RUN_RELATIVE_PATH_INVALID",
+                f"duplicate manifest path entry: {normalized_relative}",
+            )
+        seen_relative_paths.add(normalized_relative)
+        expected_files.add(normalized_relative)
+        resolved_target = _run_relative_path_from_resolved(
+            resolved_run_dir,
+            resolve_run_relative_artifact(
+                run_dir=resolved_run_dir,
+                relative_path=normalized_relative,
+                expected_kind=f"descriptor record {entry.stable_sample_id}",
+            ),
+        )
+        if resolved_target in seen_targets:
+            _fail(
+                "B2_DESC_RUN_RELATIVE_PATH_INVALID",
+                f"two manifest entries resolve to one artifact: {resolved_target}",
+            )
+        seen_targets.add(resolved_target)
         descriptor_records_by_id[entry.stable_sample_id] = verify_persisted_descriptor_entry(
-            run_dir=run_dir,
+            run_dir=resolved_run_dir,
             entry=entry,
             config=config,
         )
+    normalization_relative = _normalized_relative_path(
+        str(manifest["normalization_statistics_relative_path"]),
+        code="B2_DESC_RUN_RELATIVE_PATH_INVALID",
+    )
+    if normalization_relative in seen_relative_paths:
+        _fail(
+            "B2_DESC_RUN_RELATIVE_PATH_INVALID",
+            f"duplicate manifest path entry: {normalization_relative}",
+        )
+    expected_files.add(normalization_relative)
+    expected_dirs = {
+        str(PurePosixPath(path).parent)
+        for path in expected_files
+        if str(PurePosixPath(path).parent) != "."
+    }
+    actual_files: set[str] = set()
+    actual_dirs: set[str] = set()
+    for current_root, dir_names, file_names in os.walk(
+        resolved_run_dir, topdown=True, followlinks=False
+    ):
+        current_path = Path(current_root)
+        if current_path != resolved_run_dir:
+            actual_dirs.add(current_path.relative_to(resolved_run_dir).as_posix())
+        for name in dir_names:
+            actual_dirs.add((current_path / name).relative_to(resolved_run_dir).as_posix())
+        dir_names[:] = [
+            name for name in dir_names if not (current_path / name).is_symlink()
+        ]
+        for file_name in file_names:
+            actual_files.add(
+                (current_path / file_name).relative_to(resolved_run_dir).as_posix()
+            )
+    if actual_files != expected_files or actual_dirs != expected_dirs:
+        _fail("B2_DESC_ORPHAN_ARTIFACT", "run directory contains orphan, extra, or missing files")
     normalization_entry = PersistedNormalizationEntry(
         relative_path=str(manifest["normalization_statistics_relative_path"]),
         normalization_statistics_scientific_sha256=str(
@@ -2043,13 +2382,25 @@ def verify_descriptor_artifact_collection(
         ),
     )
     normalization_statistics = verify_persisted_normalization_entry(
-        run_dir=run_dir,
+        run_dir=resolved_run_dir,
         entry=normalization_entry,
         config=config,
     )
     ordered_records = [
         descriptor_records_by_id[str(stable_id)] for stable_id in manifest["planned_stable_sample_ids"]
     ]
+    _collection_provenance_from_records(ordered_records, config=config)
+    if (
+        manifest.get("expected_teacher_cache_scientific_sha256")
+        != config.expected_teacher_cache_scientific_sha256
+        or manifest.get("expected_split_scientific_sha256")
+        != config.expected_split_scientific_sha256
+        or manifest.get("expected_checkpoint_sha256") != config.expected_checkpoint_sha256
+        or manifest.get("expected_execution_profile_sha256")
+        != config.expected_execution_profile_sha256
+        or not _is_sha256(manifest.get("source_teacher_cache_manifest_file_sha256", ""))
+    ):
+        _fail("B2_DESC_COLLECTION_PROVENANCE_MISMATCH", "manifest provenance pins drifted")
     if descriptor_sample_coverage_sha256(ordered_records) != manifest["descriptor_sample_coverage_sha256"]:
         _fail("B2_DESC_COLLECTION_HASH_MISMATCH", "descriptor sample coverage hash mismatch")
     if (
@@ -2074,7 +2425,7 @@ def verify_descriptor_artifact_collection(
     ):
         _fail("B2_DESC_COLLECTION_HASH_MISMATCH", "normalization scientific hash mismatch")
     return VerifiedDescriptorCollection(
-        run_dir=Path(run_dir),
+        run_dir=resolved_run_dir,
         manifest=MappingProxyType(dict(manifest)),
         descriptor_records_by_id=MappingProxyType(descriptor_records_by_id),
         normalization_statistics=MappingProxyType(dict(normalization_statistics)),

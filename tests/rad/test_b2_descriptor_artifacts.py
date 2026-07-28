@@ -1987,3 +1987,214 @@ def test_normalization_float64_accumulation_is_documented_in_statistics_dtype(
     assert statistics["statistics_dtype"] == "float64"
     assert statistics["application_output_dtype"] == "float32"
     assert statistics["standard_deviation_ddof"] == 0
+
+
+# --------------------------------------------------------------------------------
+# B2-03A Story 11: authoritative run-root binding and exact run-relative file sets
+# --------------------------------------------------------------------------------
+
+
+def _materialized_collection(
+    tmp_path: Path,
+    descriptor_fixture: dict[str, Any],
+    descriptor_config: subject.DescriptorArtifactsConfig,
+) -> tuple[subject.DescriptorCollectionResult, Path]:
+    manifest_path = descriptor_fixture["cache_root"] / "teacher_cache_manifest.json"
+    manifest_path.write_text(
+        json.dumps(fixtures.production_like_manifest(descriptor_fixture), sort_keys=True),
+        encoding="utf-8",
+    )
+    run_dir = tmp_path / "materialized-run"
+    result = subject.materialize_descriptor_artifact_collection(
+        config=descriptor_config,
+        teacher_cache_manifest_path=manifest_path,
+        teacher_cache_root=descriptor_fixture["cache_root"],
+        output_run_dir=run_dir,
+    )
+    return result, run_dir
+
+
+def test_verify_descriptor_artifact_collection_rejects_descriptor_parent_escape(
+    tmp_path: Path,
+    descriptor_fixture: dict[str, Any],
+    descriptor_config: subject.DescriptorArtifactsConfig,
+) -> None:
+    _, run_dir = _materialized_collection(tmp_path, descriptor_fixture, descriptor_config)
+    outside = tmp_path / "outside.pt"
+    outside.write_bytes(b"outside")
+    manifest_path = run_dir / "final_manifest.json"
+    manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+    manifest["samples"][0]["relative_record_path"] = "../outside.pt"
+    manifest_path.write_text(json.dumps(manifest, sort_keys=True), encoding="utf-8")
+    (run_dir / "final_manifest.json.sha256").write_text(
+        hashlib.sha256(manifest_path.read_bytes()).hexdigest() + "\n",
+        encoding="utf-8",
+    )
+    with pytest.raises(subject.DescriptorArtifactsError, match="B2_DESC_"):
+        subject.verify_descriptor_artifact_collection(config=descriptor_config, run_dir=run_dir)
+
+
+def test_verify_descriptor_artifact_collection_rejects_absolute_descriptor_path(
+    tmp_path: Path,
+    descriptor_fixture: dict[str, Any],
+    descriptor_config: subject.DescriptorArtifactsConfig,
+) -> None:
+    _, run_dir = _materialized_collection(tmp_path, descriptor_fixture, descriptor_config)
+    outside = (tmp_path / "absolute.pt").resolve()
+    outside.write_bytes(b"outside")
+    manifest_path = run_dir / "final_manifest.json"
+    manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+    manifest["samples"][0]["relative_record_path"] = str(outside)
+    manifest_path.write_text(json.dumps(manifest, sort_keys=True), encoding="utf-8")
+    (run_dir / "final_manifest.json.sha256").write_text(
+        hashlib.sha256(manifest_path.read_bytes()).hexdigest() + "\n",
+        encoding="utf-8",
+    )
+    with pytest.raises(subject.DescriptorArtifactsError, match="B2_DESC_"):
+        subject.verify_descriptor_artifact_collection(config=descriptor_config, run_dir=run_dir)
+
+
+def test_verify_descriptor_artifact_collection_rejects_symlink_escape(
+    tmp_path: Path,
+    descriptor_fixture: dict[str, Any],
+    descriptor_config: subject.DescriptorArtifactsConfig,
+) -> None:
+    _, run_dir = _materialized_collection(tmp_path, descriptor_fixture, descriptor_config)
+    samples = json.loads((run_dir / "final_manifest.json").read_text(encoding="utf-8"))["samples"]
+    stable_id = samples[0]["stable_sample_id"]
+    target = tmp_path / "escaped-target.pt"
+    target.write_text("escaped\n", encoding="utf-8")
+    path = run_dir / "descriptors" / f"{stable_id}.pt"
+    path.unlink()
+    path.symlink_to(target)
+    with pytest.raises(subject.DescriptorArtifactsError, match="B2_DESC_"):
+        subject.verify_descriptor_artifact_collection(config=descriptor_config, run_dir=run_dir)
+
+
+def test_verify_descriptor_artifact_collection_rejects_wrong_nested_basename_match(
+    tmp_path: Path,
+    descriptor_fixture: dict[str, Any],
+    descriptor_config: subject.DescriptorArtifactsConfig,
+) -> None:
+    _, run_dir = _materialized_collection(tmp_path, descriptor_fixture, descriptor_config)
+    manifest_path = run_dir / "final_manifest.json"
+    manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+    stable_id = manifest["samples"][0]["stable_sample_id"]
+    original = run_dir / "descriptors" / f"{stable_id}.pt"
+    nested = run_dir / "descriptors" / "wrong" / f"{stable_id}.pt"
+    nested.parent.mkdir(parents=True, exist_ok=True)
+    nested.write_bytes(original.read_bytes())
+    original.unlink()
+    manifest["samples"][0]["relative_record_path"] = f"descriptors/wrong/{stable_id}.pt"
+    manifest_path.write_text(json.dumps(manifest, sort_keys=True), encoding="utf-8")
+    (run_dir / "final_manifest.json.sha256").write_text(
+        hashlib.sha256(manifest_path.read_bytes()).hexdigest() + "\n",
+        encoding="utf-8",
+    )
+    with pytest.raises(subject.DescriptorArtifactsError, match="B2_DESC_"):
+        subject.verify_descriptor_artifact_collection(config=descriptor_config, run_dir=run_dir)
+
+
+def test_verify_descriptor_artifact_collection_rejects_two_records_pointing_to_one_file(
+    tmp_path: Path,
+    descriptor_fixture: dict[str, Any],
+    descriptor_config: subject.DescriptorArtifactsConfig,
+) -> None:
+    _, run_dir = _materialized_collection(tmp_path, descriptor_fixture, descriptor_config)
+    manifest_path = run_dir / "final_manifest.json"
+    manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+    manifest["samples"][1]["relative_record_path"] = manifest["samples"][0]["relative_record_path"]
+    manifest["samples"][1]["descriptor_record_file_sha256"] = manifest["samples"][0][
+        "descriptor_record_file_sha256"
+    ]
+    manifest_path.write_text(json.dumps(manifest, sort_keys=True), encoding="utf-8")
+    (run_dir / "final_manifest.json.sha256").write_text(
+        hashlib.sha256(manifest_path.read_bytes()).hexdigest() + "\n",
+        encoding="utf-8",
+    )
+    with pytest.raises(subject.DescriptorArtifactsError, match="B2_DESC_"):
+        subject.verify_descriptor_artifact_collection(config=descriptor_config, run_dir=run_dir)
+
+
+def test_verify_descriptor_artifact_collection_rejects_normalization_path_outside_root(
+    tmp_path: Path,
+    descriptor_fixture: dict[str, Any],
+    descriptor_config: subject.DescriptorArtifactsConfig,
+) -> None:
+    _, run_dir = _materialized_collection(tmp_path, descriptor_fixture, descriptor_config)
+    outside = tmp_path / "outside-normalization.pt"
+    outside.write_text("outside\n", encoding="utf-8")
+    manifest_path = run_dir / "final_manifest.json"
+    manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+    manifest["normalization_statistics_relative_path"] = "../outside-normalization.pt"
+    manifest_path.write_text(json.dumps(manifest, sort_keys=True), encoding="utf-8")
+    (run_dir / "final_manifest.json.sha256").write_text(
+        hashlib.sha256(manifest_path.read_bytes()).hexdigest() + "\n",
+        encoding="utf-8",
+    )
+    with pytest.raises(subject.DescriptorArtifactsError, match="B2_DESC_"):
+        subject.verify_descriptor_artifact_collection(config=descriptor_config, run_dir=run_dir)
+
+
+def test_verify_descriptor_artifact_collection_rejects_manifest_receipt_outside_root(
+    tmp_path: Path,
+    descriptor_fixture: dict[str, Any],
+    descriptor_config: subject.DescriptorArtifactsConfig,
+) -> None:
+    _, run_dir = _materialized_collection(tmp_path, descriptor_fixture, descriptor_config)
+    outside_receipt = tmp_path / "outside.sha256"
+    outside_receipt.write_text("0" * 64 + "\n", encoding="utf-8")
+    original_receipt = run_dir / "final_manifest.json.sha256"
+    original_receipt.unlink()
+    original_receipt.symlink_to(outside_receipt)
+    with pytest.raises(subject.DescriptorArtifactsError, match="B2_DESC_"):
+        subject.verify_descriptor_artifact_collection(config=descriptor_config, run_dir=run_dir)
+
+
+def test_verify_descriptor_artifact_collection_rejects_unexpected_nested_pt(
+    tmp_path: Path,
+    descriptor_fixture: dict[str, Any],
+    descriptor_config: subject.DescriptorArtifactsConfig,
+) -> None:
+    _, run_dir = _materialized_collection(tmp_path, descriptor_fixture, descriptor_config)
+    nested = run_dir / "descriptors" / "nested" / ("f" * 64 + ".pt")
+    nested.parent.mkdir(parents=True, exist_ok=True)
+    nested.write_text("unexpected\n", encoding="utf-8")
+    with pytest.raises(subject.DescriptorArtifactsError, match="B2_DESC_"):
+        subject.verify_descriptor_artifact_collection(config=descriptor_config, run_dir=run_dir)
+
+
+def test_verify_descriptor_artifact_collection_accepts_exact_valid_run_relative_file_set(
+    tmp_path: Path,
+    descriptor_fixture: dict[str, Any],
+    descriptor_config: subject.DescriptorArtifactsConfig,
+) -> None:
+    result, run_dir = _materialized_collection(tmp_path, descriptor_fixture, descriptor_config)
+    verified = subject.verify_descriptor_artifact_collection(
+        config=descriptor_config,
+        run_dir=run_dir,
+    )
+    assert verified.teacher_forward_count == 0
+    assert verified.manifest["descriptor_collection_scientific_sha256"] == result.manifest[
+        "descriptor_collection_scientific_sha256"
+    ]
+
+
+def test_resolve_run_relative_artifact_normalizes_formatting_deterministically(
+    tmp_path: Path,
+    descriptor_fixture: dict[str, Any],
+    descriptor_config: subject.DescriptorArtifactsConfig,
+) -> None:
+    _, run_dir = _materialized_collection(tmp_path, descriptor_fixture, descriptor_config)
+    stable_id = next(iter(json.loads((run_dir / "final_manifest.json").read_text(encoding="utf-8"))["planned_stable_sample_ids"]))
+    first = subject.resolve_run_relative_artifact(
+        run_dir=run_dir,
+        relative_path=f"descriptors/./{stable_id}.pt",
+        expected_kind="descriptor record",
+    )
+    second = subject.resolve_run_relative_artifact(
+        run_dir=run_dir,
+        relative_path=f"descriptors/{stable_id}.pt",
+        expected_kind="descriptor record",
+    )
+    assert first == second
