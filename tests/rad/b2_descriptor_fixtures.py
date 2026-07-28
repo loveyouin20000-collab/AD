@@ -113,7 +113,6 @@ def build_descriptor_test_fixture(
     config = replace(
         base_config,
         checkpoint_path=checkpoint_path,
-        checkpoint_sha256=checkpoint_sha256,
     )
     plan = cache_mod.build_generation_plan(split_manifest, config)
     descriptor_contract = cache_mod.descriptor_contract(config, REPO_ROOT)
@@ -193,7 +192,7 @@ def build_descriptor_test_fixture(
         "sample_coverage_sha256": manifest["sample_coverage_sha256"],
         "split_manifest": split_manifest,
         "checkpoint_path": checkpoint_path,
-        "checkpoint_sha256": checkpoint_sha256,
+        "checkpoint_sha256": config.checkpoint_sha256,
     }
 
 

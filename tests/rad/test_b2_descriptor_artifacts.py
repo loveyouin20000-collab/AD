@@ -1456,14 +1456,12 @@ def test_materialize_descriptor_artifact_collection_fixture_dual_run_is_scientif
         teacher_cache_manifest_path=manifest_path,
         teacher_cache_root=descriptor_fixture["cache_root"],
         output_run_dir=tmp_path / "run-one",
-        allow_test_fixture=True,
     )
     second = subject.materialize_descriptor_artifact_collection(
         config=descriptor_config,
         teacher_cache_manifest_path=manifest_path,
         teacher_cache_root=descriptor_fixture["cache_root"],
         output_run_dir=tmp_path / "run-two",
-        allow_test_fixture=True,
     )
     assert first.teacher_forward_count == 0
     assert second.teacher_forward_count == 0
@@ -1501,14 +1499,12 @@ def test_compare_descriptor_artifact_collections_ignores_file_byte_differences_b
         teacher_cache_manifest_path=manifest_path,
         teacher_cache_root=descriptor_fixture["cache_root"],
         output_run_dir=tmp_path / "run-one",
-        allow_test_fixture=True,
     )
     subject.materialize_descriptor_artifact_collection(
         config=descriptor_config,
         teacher_cache_manifest_path=manifest_path,
         teacher_cache_root=descriptor_fixture["cache_root"],
         output_run_dir=tmp_path / "run-two",
-        allow_test_fixture=True,
     )
     first_verified = subject.verify_descriptor_artifact_collection(
         config=descriptor_config,

@@ -610,7 +610,7 @@ def validate_accepted_teacher_cache(
             "B2_DESC_COLLECTION_PROVENANCE_MISMATCH",
             "accepted cache provenance does not match tracked configuration pins",
         )
-    if not allow_test_fixture and (
+    if (
         common_provenance["checkpoint_sha256"] != config.expected_checkpoint_sha256
         or common_provenance["execution_profile_sha256"] != config.expected_execution_profile_sha256
         or common_provenance["split_scientific_sha256"] != config.expected_split_scientific_sha256
@@ -1911,7 +1911,6 @@ def materialize_descriptor_artifact_collection(
     teacher_cache_manifest_path: Path,
     teacher_cache_root: Path,
     output_run_dir: Path,
-    allow_test_fixture: bool = False,
 ) -> DescriptorCollectionResult:
     """Materialize and verify a full descriptor artifact collection without teacher calls."""
 
@@ -1923,7 +1922,7 @@ def materialize_descriptor_artifact_collection(
         manifest=authoritative.manifest,
         config=config,
         cache_root=authoritative.cache_root,
-        allow_test_fixture=allow_test_fixture,
+        allow_test_fixture=False,
     )
     output_run_dir.mkdir(parents=True, exist_ok=False)
     (output_run_dir / "descriptors").mkdir(parents=True, exist_ok=False)
