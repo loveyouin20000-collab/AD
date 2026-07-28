@@ -1,0 +1,36 @@
+{
+  "schema_version": 1,
+  "configuration_id": "b2_descriptor_artifacts_gate_c",
+  "expected_main_tag": "b2-main-integration-v1",
+  "expected_main_commit": "51e18ade0231c7488ef582bde1e9694f933e85eb",
+  "expected_teacher_cache_scientific_sha256": "66d23807e868696a9c4a68ad83399d82df3d33e743a97d97eeb98ac60c0b1b0a",
+  "expected_sample_coverage_sha256": "6e538b902795c377f9992258e307e58b5c0ba0f99cbbe6c3853a81947ca3d76c",
+  "expected_split_scientific_sha256": "91570da1fed6d7859d407196b10403581832ae0ff677a1ea7657ca76b91471f0",
+  "expected_checkpoint_sha256": "97bd461163efb96e36cddb1c3adf677e4c4fc2daabb2521021689f30e799b4f4",
+  "expected_execution_profile_sha256": "7af8dba39633743da0380fef9710940cded655f68c9efa8f84f5a52aeddb3c8d",
+  "candidate_layers": [6, 12, 18, 24],
+  "prediction_depths": [12, 18, 24],
+  "descriptor_dimension": 18,
+  "descriptor_contract_version": 1,
+  "normalization_contract_version": 1,
+  "required_split_counts": {
+    "training": 16,
+    "calibration": 8,
+    "evaluation": 8
+  },
+  "primary_dtype": "float32",
+  "fail_closed_requirements": [
+    "accepted_teacher_cache_status_passed",
+    "teacher_cache_scientific_hash_match",
+    "sample_coverage_hash_match",
+    "exact_32_record_coverage",
+    "per_record_scientific_and_file_hash_match",
+    "descriptor_contract_identity_match",
+    "descriptor_feature_order_exact",
+    "source_only_training_normalization",
+    "zero_variance_unit_divisor",
+    "candidate_layers_configuration_driven",
+    "no_teacher_forward_in_descriptor_reconstruction",
+    "main_tag_ancestry_required"
+  ]
+}

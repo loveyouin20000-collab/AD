@@ -1135,7 +1135,7 @@ def _little_endian_contiguous_bytes(tensor: Any) -> bytes:
     array = tensor.detach().to("cpu").contiguous().numpy()
     little = np.asarray(array, dtype=array.dtype.newbyteorder("<"))
     if little.dtype.byteorder == ">":
-        little = little.byteswap().newbyteorder("<")
+        little = little.byteswap().newbyteorder("<")  # type: ignore[attr-defined]
     return np.ascontiguousarray(little).tobytes(order="C")
 
 
@@ -1798,6 +1798,51 @@ def audit_complete_coverage(
                 f"entry path mapping drifted for {entry.stable_sample_id}",
             )
     audit_samples_directory_filenames(run_dir, plan, require_complete=True)
+
+
+def _verified_entry_value(entry: object, field: str) -> str:
+    if isinstance(entry, PersistedSampleEntry):
+        return str(getattr(entry, field))
+    if hasattr(entry, field):
+        return str(getattr(entry, field))
+    if isinstance(entry, Mapping) and field in entry:
+        return str(entry[field])
+    _fail("B2_CACHE_COVERAGE_MISMATCH", f"verified entry missing {field}")
+
+
+def recompute_teacher_cache_sample_coverage_sha256(
+    verified_entries: Sequence[object],
+) -> str:
+    """Recompute the accepted final-manifest sample coverage hash from verified entries."""
+
+    planned_stable_sample_ids = [
+        _verified_entry_value(entry, "stable_sample_id") for entry in verified_entries
+    ]
+    return _canonical_sha256({"planned_stable_sample_ids": planned_stable_sample_ids})
+
+
+def recompute_teacher_cache_scientific_sha256(
+    *,
+    verified_entries: Sequence[object],
+    manifest_contract: Mapping[str, object],
+) -> str:
+    """Recompute the accepted final-manifest scientific hash from verified entries."""
+
+    planned_stable_sample_ids = [
+        _verified_entry_value(entry, "stable_sample_id") for entry in verified_entries
+    ]
+    record_scientific_sha256_by_id = {
+        _verified_entry_value(entry, "stable_sample_id"): _verified_entry_value(
+            entry, "record_scientific_sha256"
+        )
+        for entry in verified_entries
+    }
+    return _canonical_sha256(
+        {
+            "planned_stable_sample_ids": planned_stable_sample_ids,
+            "record_scientific_sha256_by_id": record_scientific_sha256_by_id,
+        }
+    )
 
 
 def build_final_manifest(
