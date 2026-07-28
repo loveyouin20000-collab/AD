@@ -105,11 +105,23 @@ def _validate_main_ancestry(
     if ancestry.returncode != 0:
         detail = ancestry.stderr.strip() or ancestry.stdout.strip() or "git failed"
         _fail("B2_DESC_REPOSITORY_IDENTITY_UNAVAILABLE", detail)
+    porcelain = _git(
+        repo, "status", "--porcelain", "--untracked-files=all", allow_empty=True
+    )
+    if porcelain:
+        _fail("B2_DESC_WORKTREE_DIRTY", "official worktree is dirty")
+    observed_head = _git(repo, "rev-parse", "HEAD")
+    if observed_head != head:
+        _fail(
+            "B2_DESC_REPOSITORY_IDENTITY_MISMATCH",
+            f"observed HEAD {observed_head} differs from captured HEAD {head}",
+        )
     return {
         "expected_main_tag": expected_main_tag,
         "expected_main_commit": expected_main_commit,
         "head_commit": head,
         "head_is_descendant": True,
+        "worktree_clean": True,
     }
 
 

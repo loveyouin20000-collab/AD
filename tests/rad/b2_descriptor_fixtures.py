@@ -16,6 +16,8 @@ from __future__ import annotations
 import copy
 import hashlib
 import json
+import shutil
+import subprocess
 from dataclasses import replace
 from pathlib import Path
 from typing import Any
@@ -32,8 +34,96 @@ TEACHER_CACHE_CONFIG_PATH = (
 DESCRIPTOR_CONFIG_PATH = (
     REPO_ROOT / "configs" / "phase_b" / "b2_descriptor_artifacts_gate_c.json"
 )
+SOURCE_DESCRIPTOR_CLI = REPO_ROOT / "tools" / "create_b2_descriptor_artifacts.py"
+HERMETIC_MAIN_TAG = "b2-hermetic-main-integration-v1"
 MAP_DIMS = ("batch", "channel", "height", "width")
 FIXTURE_MAP_SHAPE = (1, 1, 4, 5)
+
+
+def _git(repo: Path, *args: str) -> str:
+    completed = subprocess.run(
+        ["git", "-C", str(repo), *args],
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+    return completed.stdout.strip()
+
+
+def _git_commit(repo: Path, message: str) -> str:
+    _git(
+        repo,
+        "-c",
+        "user.name=B2 Descriptor Hermetic",
+        "-c",
+        "user.email=b2-descriptor-hermetic@example.invalid",
+        "commit",
+        "-m",
+        message,
+    )
+    return _git(repo, "rev-parse", "HEAD")
+
+
+def build_hermetic_descriptor_identity_repo(
+    tmp_path: Path,
+    *,
+    with_cli_copy: bool = True,
+    with_integration_tag: bool = True,
+    with_descendant: bool = True,
+) -> dict[str, Any]:
+    """Build a temporary Git repository for portable descriptor CLI identity tests.
+
+    The synthetic annotated tag is intentionally *not* ``b2-main-integration-v1``.
+    Tests that need a successful repository identity must also rewrite the temporary
+    descriptor config so ``expected_main_tag`` / ``expected_main_commit`` match this
+    fixture. Production configs keep the real official tag/commit unchanged.
+    """
+
+    repo = tmp_path / "hermetic_descriptor_cli_repo"
+    repo.mkdir(parents=True, exist_ok=False)
+    _git(repo, "init", "-b", "main")
+    (repo / "README").write_text("hermetic-descriptor-base\n", encoding="utf-8")
+    _git(repo, "add", "README")
+    base = _git_commit(repo, "hermetic integration base")
+    tag_name = HERMETIC_MAIN_TAG
+    if with_integration_tag:
+        _git(
+            repo,
+            "-c",
+            "user.name=B2 Descriptor Hermetic",
+            "-c",
+            "user.email=b2-descriptor-hermetic@example.invalid",
+            "tag",
+            "-a",
+            tag_name,
+            "-m",
+            "hermetic B2 main integration stand-in",
+            base,
+        )
+    head = base
+    cli_path = repo / "tools" / "create_b2_descriptor_artifacts.py"
+    if with_cli_copy:
+        cli_path.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copy2(SOURCE_DESCRIPTOR_CLI, cli_path)
+        _git(repo, "add", "tools/create_b2_descriptor_artifacts.py")
+        if with_descendant:
+            head = _git_commit(repo, "hermetic descendant with CLI copy")
+        else:
+            # Keep HEAD at the tagged base; CLI file remains uncommitted only when
+            # callers intentionally request a dirty or non-descendant layout.
+            head = base
+    elif with_descendant:
+        (repo / "history.txt").write_text("descendant\n", encoding="utf-8")
+        _git(repo, "add", "history.txt")
+        head = _git_commit(repo, "hermetic descendant")
+    return {
+        "repo": repo,
+        "cli_path": cli_path,
+        "expected_main_tag": tag_name,
+        "expected_main_commit": base,
+        "head_commit": head,
+        "source_repo": REPO_ROOT,
+    }
 
 
 def _deterministic_value(stable_sample_id: str, identity: cache_mod.MapIdentity) -> float:
@@ -300,6 +390,7 @@ def write_descriptor_config_json(
     if overrides:
         raw.update(overrides)
     path = Path(tmp_path) / filename
+    path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(json.dumps(raw, sort_keys=True, indent=2), encoding="utf-8")
     return path
 

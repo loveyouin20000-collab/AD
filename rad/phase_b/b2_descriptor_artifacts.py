@@ -1548,6 +1548,8 @@ def descriptor_relative_path(stable_sample_id: str) -> str:
 def write_descriptor_record_atomic(
     destination: Path | str,
     record: Mapping[str, Any],
+    *,
+    config: DescriptorArtifactsConfig,
 ) -> PersistedDescriptorEntry:
     """Atomically persist one descriptor record; file hash is computed after write."""
 
@@ -1613,7 +1615,7 @@ def write_descriptor_record_atomic(
             "B2_DESC_RECORD_HASH_MISMATCH",
             "descriptor scientific hash drifted after reload",
         )
-    validate_descriptor_record(loaded["scientific_record"], config=load_descriptor_artifacts_config(_REPO_ROOT / "configs" / "phase_b" / "b2_descriptor_artifacts_gate_c.json"))
+    validate_descriptor_record(loaded["scientific_record"], config=config)
     return PersistedDescriptorEntry(
         stable_sample_id=stable_id,
         relative_record_path=descriptor_relative_path(stable_id),
@@ -2232,6 +2234,7 @@ def materialize_descriptor_artifact_collection(
             write_descriptor_record_atomic(
                 output_run_dir / descriptor_relative_path(record["stable_sample_id"]),
                 record,
+                config=config,
             )
         )
     training_records = [row for row in records if row["split_membership"] == "training"]

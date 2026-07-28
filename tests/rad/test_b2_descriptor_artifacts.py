@@ -911,10 +911,10 @@ def test_write_descriptor_record_atomic_refuses_overwrite(
     record = subject.reconstruct_descriptor_record(**_reconstruct_kwargs(descriptor_fixture, descriptor_config))
     destination = tmp_path / "descriptors" / f"{record['stable_sample_id']}.pt"
     destination.parent.mkdir(parents=True)
-    subject.write_descriptor_record_atomic(destination, record)
+    subject.write_descriptor_record_atomic(destination, record, config=descriptor_config)
     before = destination.read_bytes()
     with pytest.raises(subject.DescriptorArtifactsError, match="B2_DESC_"):
-        subject.write_descriptor_record_atomic(destination, record)
+        subject.write_descriptor_record_atomic(destination, record, config=descriptor_config)
     assert destination.read_bytes() == before
 
 
@@ -929,7 +929,7 @@ def test_audit_descriptor_artifact_integrity_rejects_orphan_and_extra(
     planned_ids = [record["stable_sample_id"] for record in training_records]
     for record in training_records:
         destination = run_dir / "descriptors" / f"{record['stable_sample_id']}.pt"
-        subject.write_descriptor_record_atomic(destination, record)
+        subject.write_descriptor_record_atomic(destination, record, config=descriptor_config)
     manifest = {"status": "passed", "planned_stable_sample_ids": planned_ids}
     subject.audit_descriptor_artifact_integrity(
         run_dir=run_dir, manifest=manifest, planned_ids=planned_ids
@@ -964,7 +964,7 @@ def test_audit_descriptor_artifact_integrity_rejects_missing_record(
     planned_ids = [record["stable_sample_id"] for record in training_records]
     for record in training_records[:-1]:
         destination = run_dir / "descriptors" / f"{record['stable_sample_id']}.pt"
-        subject.write_descriptor_record_atomic(destination, record)
+        subject.write_descriptor_record_atomic(destination, record, config=descriptor_config)
     manifest = {"status": "passed", "planned_stable_sample_ids": planned_ids}
     with pytest.raises(subject.DescriptorArtifactsError, match="B2_DESC_"):
         subject.audit_descriptor_artifact_integrity(
@@ -1021,7 +1021,7 @@ def test_normalization_before_complete_training_coverage_is_forbidden(
     # Only 15 of 16 training descriptor artifacts are actually on disk.
     for record in training_records[:-1]:
         destination = run_dir / "descriptors" / f"{record['stable_sample_id']}.pt"
-        subject.write_descriptor_record_atomic(destination, record)
+        subject.write_descriptor_record_atomic(destination, record, config=descriptor_config)
     manifest = {
         "status": "passed",
         "planned_stable_sample_ids": planned_ids,
@@ -1072,6 +1072,7 @@ def test_build_descriptor_artifacts_manifest_reports_passed_status(
         subject.write_descriptor_record_atomic(
             run_dir / subject.descriptor_relative_path(record["stable_sample_id"]),
             record,
+            config=descriptor_config,
         )
         for record in all_records
     ]
@@ -1295,7 +1296,7 @@ def test_write_descriptor_record_atomic_reloads_and_revalidates_payload(
 
     monkeypatch.setattr(subject.torch, "load", corrupted_load)
     with pytest.raises(subject.DescriptorArtifactsError, match="B2_DESC_RECORD_HASH_MISMATCH"):
-        subject.write_descriptor_record_atomic(destination, record)
+        subject.write_descriptor_record_atomic(destination, record, config=descriptor_config)
 
 
 def test_write_normalization_statistics_atomic_reloads_and_revalidates_payload(
@@ -1381,6 +1382,7 @@ def test_build_descriptor_artifacts_manifest_rejects_incomplete_verified_entries
             subject.write_descriptor_record_atomic(
                 run_dir / subject.descriptor_relative_path(record["stable_sample_id"]),
                 record,
+                config=descriptor_config,
             )
         )
     bad_entries = list(entries)
@@ -1544,7 +1546,7 @@ def test_write_descriptor_record_atomic_separates_file_hash_from_payload(
     )
     destination = tmp_path / "descriptors" / f"{record['stable_sample_id']}.pt"
     destination.parent.mkdir(parents=True)
-    entry = subject.write_descriptor_record_atomic(destination, record)
+    entry = subject.write_descriptor_record_atomic(destination, record, config=descriptor_config)
     assert entry.descriptor_record_file_sha256
     assert entry.descriptor_record_scientific_sha256 == record[
         "descriptor_record_scientific_sha256"
@@ -1568,7 +1570,7 @@ def test_verify_persisted_descriptor_rejects_file_hash_mismatch(
     )
     destination = tmp_path / "descriptors" / f"{record['stable_sample_id']}.pt"
     destination.parent.mkdir(parents=True)
-    entry = subject.write_descriptor_record_atomic(destination, record)
+    entry = subject.write_descriptor_record_atomic(destination, record, config=descriptor_config)
     corrupted = subject.PersistedDescriptorEntry(
         stable_sample_id=entry.stable_sample_id,
         relative_record_path=entry.relative_record_path,
@@ -1594,7 +1596,7 @@ def test_verify_persisted_descriptor_rejects_correct_scientific_wrong_file_bytes
     )
     destination = tmp_path / "descriptors" / f"{record['stable_sample_id']}.pt"
     destination.parent.mkdir(parents=True)
-    entry = subject.write_descriptor_record_atomic(destination, record)
+    entry = subject.write_descriptor_record_atomic(destination, record, config=descriptor_config)
     with destination.open("ab") as handle:
         handle.write(b"\x00tail-corruption")
     with pytest.raises(
@@ -1681,6 +1683,7 @@ def test_final_manifest_receipt_must_agree(
         subject.write_descriptor_record_atomic(
             tmp_path / subject.descriptor_relative_path(record["stable_sample_id"]),
             record,
+            config=descriptor_config,
         )
         for record in all_records
     ]

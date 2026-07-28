@@ -149,3 +149,83 @@ def test_release_tools_fail_closed_without_real_release_identities(
         match="B2_CACHE_(REPOSITORY_IDENTITY_UNAVAILABLE|B2_TAG|CONTRACT_TAG)",
     ):
         teacher_cli._derive_repository_identity(repo, require_clean=False)
+
+
+def test_descriptor_cli_suite_uses_hermetic_identity_repos_only() -> None:
+    text = (REPO_ROOT / "tests" / "rad" / "test_b2_descriptor_artifacts_cli.py").read_text(
+        encoding="utf-8"
+    )
+    assert "build_hermetic_descriptor_identity_repo" in text
+    assert "_install_hermetic_identity" in text
+    assert "b2-hermetic-main-integration-v1" in (
+        REPO_ROOT / "tests" / "rad" / "b2_descriptor_fixtures.py"
+    ).read_text(encoding="utf-8")
+
+
+def test_descriptor_cli_hermetic_path_survives_when_real_checkout_tag_is_hidden(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """CPU suite must succeed even when the real checkout cannot resolve the official tag."""
+
+    from tests.rad import b2_descriptor_fixtures as desc_fixtures
+    from tools import create_b2_descriptor_artifacts as desc_cli
+
+    real_run_git = desc_cli._run_git
+    official_tag = "b2-main-integration-v1"
+
+    def hide_official_tag(repo: Path, *arguments: str):
+        if (
+            Path(repo).resolve() == REPO_ROOT.resolve()
+            and arguments[:1] == ("rev-parse",)
+            and any(official_tag in str(arg) for arg in arguments)
+        ):
+            return subprocess.CompletedProcess(
+                args=["git", "-C", str(repo), *arguments],
+                returncode=128,
+                stdout="",
+                stderr=(
+                    f"fatal: ambiguous argument '{official_tag}^{{commit}}': "
+                    "unknown revision or path not in the working tree.\n"
+                ),
+            )
+        return real_run_git(repo, *arguments)
+
+    monkeypatch.setattr(desc_cli, "_run_git", hide_official_tag)
+
+    # Official production validation against the real checkout must fail closed.
+    with pytest.raises(
+        desc_cli.B2DescriptorArtifactsCLIError,
+        match="B2_DESC_REPOSITORY_IDENTITY_UNAVAILABLE",
+    ):
+        desc_cli._validate_main_ancestry(
+            REPO_ROOT,
+            expected_main_tag=official_tag,
+            expected_main_commit="51e18ade0231c7488ef582bde1e9694f933e85eb",
+        )
+
+    # Hermetic temporary repository path remains independently valid.
+    identity = desc_fixtures.build_hermetic_descriptor_identity_repo(tmp_path)
+    validated = desc_cli._validate_main_ancestry(
+        identity["repo"],
+        expected_main_tag=identity["expected_main_tag"],
+        expected_main_commit=identity["expected_main_commit"],
+    )
+    assert validated["head_is_descendant"] is True
+    assert validated["worktree_clean"] is True
+    assert validated["head_commit"] == identity["head_commit"]
+
+
+def test_cpu_suite_does_not_require_real_b2_main_integration_tag() -> None:
+    probe = subprocess.run(
+        [
+            "git",
+            "-C",
+            str(REPO_ROOT),
+            "rev-parse",
+            "b2-main-integration-v1^{commit}",
+        ],
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+    assert probe.returncode in {0, 128}
