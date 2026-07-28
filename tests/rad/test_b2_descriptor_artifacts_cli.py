@@ -39,6 +39,7 @@ from typing import Any
 
 import pytest
 
+import rad.phase_b.b2_teacher_cache as cache_mod
 from tests.rad import b2_descriptor_fixtures as fixtures
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
@@ -152,7 +153,7 @@ def cache(tmp_path: Path) -> dict[str, Any]:
 @pytest.fixture
 def production_manifest_path(tmp_path: Path, cache: dict[str, Any]) -> Path:
     manifest = fixtures.production_like_manifest(cache)
-    path = tmp_path / "teacher_cache_manifest.json"
+    path = cache["cache_root"] / "teacher_cache_manifest.json"
     path.write_text(json.dumps(manifest, sort_keys=True), encoding="utf-8")
     return path
 
@@ -250,7 +251,7 @@ def test_dry_run_rejects_wrong_cache_hash(
 ) -> None:
     manifest = fixtures.production_like_manifest(cache)
     manifest["cache_scientific_sha256"] = "0" * 64
-    manifest_path = tmp_path / "bad_manifest.json"
+    manifest_path = cache["cache_root"] / "bad_manifest.json"
     manifest_path.write_text(json.dumps(manifest), encoding="utf-8")
 
     args = _default_args(
@@ -272,7 +273,7 @@ def test_dry_run_rejects_status_not_passed(
 ) -> None:
     manifest = fixtures.production_like_manifest(cache)
     manifest["status"] = "partial"
-    manifest_path = tmp_path / "partial_manifest.json"
+    manifest_path = cache["cache_root"] / "partial_manifest.json"
     manifest_path.write_text(json.dumps(manifest), encoding="utf-8")
 
     args = _default_args(
@@ -294,7 +295,7 @@ def test_dry_run_rejects_test_fixture_artifact_kind_without_override_flag(
     # `cache["manifest"]` (unlike `production_like_manifest`) still carries the
     # "artifact_kind": "test_fixture" marker -- the production CLI must reject it
     # unconditionally; there is no flag to bypass this.
-    manifest_path = tmp_path / "fixture_manifest.json"
+    manifest_path = cache["cache_root"] / "fixture_manifest.json"
     manifest_path.write_text(json.dumps(cache["manifest"]), encoding="utf-8")
 
     args = _default_args(
@@ -390,3 +391,122 @@ def test_dry_run_creates_no_manifest_or_descriptor_tensor_files(
     assert not any(output_root.rglob("*.pt"))
     assert not any(output_root.rglob("manifest.json"))
     assert not any(output_root.rglob("*descriptor*"))
+
+
+def test_dry_run_rejects_manifest_path_outside_cache_root(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    cache: dict[str, Any],
+    descriptor_config_path: Path,
+) -> None:
+    manifest_path = tmp_path / "outside-manifest.json"
+    manifest_path.write_text(
+        json.dumps(fixtures.production_like_manifest(cache), sort_keys=True),
+        encoding="utf-8",
+    )
+    isolated_root = tmp_path / "isolated-root"
+    isolated_root.mkdir()
+    args = _cli_args(
+        config=descriptor_config_path,
+        teacher_cache_manifest=manifest_path,
+        teacher_cache_root=isolated_root,
+        output_root=tmp_path / "output-root",
+        output_dir=tmp_path / "output-root" / "planned-run",
+        dry_run=True,
+    )
+    exit_code, stdout, stderr = _run_cli_in_process(args, monkeypatch=monkeypatch)
+    assert exit_code != 0
+    assert "B2_DESC_CACHE_MANIFEST_OUTSIDE_ROOT" in stdout + stderr
+
+
+def test_dry_run_rejects_disk_record_drift_even_if_manifest_claims_valid_hashes(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    cache: dict[str, Any],
+    descriptor_config_path: Path,
+) -> None:
+    manifest = fixtures.production_like_manifest(cache)
+    stable_id = manifest["samples"][0]["stable_sample_id"]
+
+    def mutate_tensor(record: dict[str, Any]) -> dict[str, Any]:
+        name = next(key for key in sorted(record["tensors"]) if key.startswith("causal_map:"))
+        tensor = record["tensors"][name]["tensor"].clone()
+        tensor[0, 0, 0, 0] += 1.0
+        record["tensors"][name] = dict(record["tensors"][name])
+        record["tensors"][name]["tensor"] = tensor
+        record["tensors"][name]["digest"] = cache_mod.canonical_tensor_digest(
+            name, tensor, tuple(record["tensors"][name]["dimension_semantics"])
+        )
+        return record
+
+    fixtures.rewrite_sample_record(cache, manifest, stable_id, mutate_tensor)
+    manifest["cache_scientific_sha256"] = cache["teacher_cache_scientific_sha256"]
+    manifest["sample_coverage_sha256"] = cache["sample_coverage_sha256"]
+    manifest_path = cache["cache_root"] / "drifted-manifest.json"
+    manifest_path.write_text(json.dumps(manifest, sort_keys=True), encoding="utf-8")
+    args = _default_args(
+        tmp_path, cache=cache, manifest_path=manifest_path, config_path=descriptor_config_path
+    )
+    exit_code, stdout, stderr = _run_cli_in_process(args, monkeypatch=monkeypatch)
+    assert exit_code != 0
+    assert "B2_DESC_CACHE_SCIENTIFIC_HASH_MISMATCH" in stdout + stderr
+
+
+def test_production_mode_rejects_test_fixture_manifest_identity(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    cache: dict[str, Any],
+    descriptor_config_path: Path,
+) -> None:
+    manifest_path = cache["cache_root"] / "fixture-manifest.json"
+    manifest_path.write_text(json.dumps(cache["manifest"], sort_keys=True), encoding="utf-8")
+    args = _default_args(
+        tmp_path,
+        cache=cache,
+        manifest_path=manifest_path,
+        config_path=descriptor_config_path,
+        dry_run=False,
+    )
+    exit_code, stdout, stderr = _run_cli_in_process(args, monkeypatch=monkeypatch)
+    assert exit_code != 0
+    assert "B2_DESC_CACHE_TEST_FIXTURE_FORBIDDEN" in stdout + stderr
+
+
+def test_valid_dry_run_and_production_share_same_source_identity(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    cache: dict[str, Any],
+    production_manifest_path: Path,
+    descriptor_config_path: Path,
+) -> None:
+    dry_run_args = _default_args(
+        tmp_path,
+        cache=cache,
+        manifest_path=production_manifest_path,
+        config_path=descriptor_config_path,
+        dry_run=True,
+    )
+    dry_exit, dry_stdout, dry_stderr = _run_cli_in_process(
+        dry_run_args, monkeypatch=monkeypatch
+    )
+    assert dry_exit == 0, dry_stdout + dry_stderr
+    dry_payload = _result_json(dry_stdout, dry_stderr)
+
+    prod_args = _default_args(
+        tmp_path,
+        cache=cache,
+        manifest_path=production_manifest_path,
+        config_path=descriptor_config_path,
+        dry_run=False,
+    )
+    prod_exit, prod_stdout, prod_stderr = _run_cli_in_process(
+        prod_args, monkeypatch=monkeypatch
+    )
+    assert prod_exit == 0, prod_stdout + prod_stderr
+    prod_payload = _result_json(prod_stdout, prod_stderr)
+
+    assert dry_payload["teacher_forward_count"] == 0
+    assert prod_payload["teacher_forward_count"] == 0
+    assert dry_payload["source_teacher_cache_manifest_file_sha256"] == prod_payload[
+        "source_teacher_cache_manifest_file_sha256"
+    ]

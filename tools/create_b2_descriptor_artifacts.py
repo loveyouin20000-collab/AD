@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""B2-03A descriptor-artifacts CLI: dry-run planning only (no real extraction)."""
+"""B2-03A descriptor-artifacts CLI with disk-authoritative validation parity."""
 
 from __future__ import annotations
 
@@ -166,56 +166,32 @@ def main(argv: list[str] | None = None) -> int:
         DescriptorArtifactsError,
         build_descriptor_extraction_plan,
         load_descriptor_artifacts_config,
-        validate_accepted_teacher_cache,
+        load_and_validate_accepted_teacher_cache_from_disk,
+        materialize_descriptor_artifact_collection,
     )
 
     try:
-        if not args.dry_run:
-            _fail(
-                "B2_DESC_EXTRACTION_NOT_IN_SCOPE",
-                "B2-03A only supports --dry-run; real descriptor extraction is deferred",
-            )
-
         config = load_descriptor_artifacts_config(Path(args.config))
         _validate_main_ancestry(
             repo,
             expected_main_tag=config.expected_main_tag,
             expected_main_commit=config.expected_main_commit,
         )
-        manifest = _load_json_object(
-            args.teacher_cache_manifest,
-            missing_code="B2_DESC_CACHE_MANIFEST_MISSING",
-            invalid_code="B2_DESC_CACHE_MANIFEST_INVALID",
-        )
-        if manifest.get("artifact_kind") == "test_fixture":
-            _fail(
-                "B2_DESC_CACHE_TEST_FIXTURE_FORBIDDEN",
-                "test_fixture teacher-cache is forbidden without override",
-            )
-        # Dry-run validates the disk cache and planning math without requiring a real
-        # production checkpoint byte identity for hermetic fixture tests.
-        accepted = validate_accepted_teacher_cache(
-            manifest=manifest,
+        validated = load_and_validate_accepted_teacher_cache_from_disk(
             config=config,
-            cache_root=Path(args.teacher_cache_root),
-            allow_test_fixture=True,
+            teacher_cache_manifest_path=Path(args.teacher_cache_manifest),
+            teacher_cache_root=Path(args.teacher_cache_root),
         )
-        if (
-            manifest.get("split_scientific_sha256") is not None
-            and manifest.get("split_scientific_sha256")
-            != config.expected_split_scientific_sha256
-        ):
-            _fail(
-                "B2_DESC_SPLIT_HASH_MISMATCH",
-                "teacher-cache split scientific hash does not match config",
-            )
-        plan = build_descriptor_extraction_plan(accepted=accepted, config=config)
+        plan = build_descriptor_extraction_plan(
+            accepted=validated.accepted,
+            config=config,
+        )
         output_root = Path(args.output_root)
         output_dir = Path(args.output_dir)
-        _ = seed, output_root, output_dir  # argparse-required; dry-run writes nothing
+        _ = seed, output_root
 
         payload = {
-            "mode": "dry_run",
+            "mode": "dry_run" if args.dry_run else "production",
             "status": "passed",
             "artifact_written": False,
             "teacher_forward_count": 0,
@@ -241,7 +217,22 @@ def main(argv: list[str] | None = None) -> int:
             "seed": seed,
             "output_dir": str(output_dir),
             "output_root": str(output_root),
+            "source_teacher_cache_manifest_file_sha256": (
+                validated.source_teacher_cache_manifest_file_sha256
+            ),
         }
+        if not args.dry_run:
+            result = materialize_descriptor_artifact_collection(
+                config=config,
+                teacher_cache_manifest_path=Path(args.teacher_cache_manifest),
+                teacher_cache_root=Path(args.teacher_cache_root),
+                output_run_dir=output_dir,
+                validated_teacher_cache=validated,
+            )
+            payload["artifact_written"] = True
+            payload["source_teacher_cache_manifest_file_sha256"] = (
+                result.source_teacher_cache_manifest_file_sha256
+            )
         _print_summary(payload)
         return 0
     except DescriptorArtifactsError as exc:
@@ -251,7 +242,7 @@ def main(argv: list[str] | None = None) -> int:
             RESULT_PREFIX
             + json.dumps(
                 {
-                    "mode": "dry_run",
+                    "mode": "dry_run" if args.dry_run else "production",
                     "status": "failed",
                     "artifact_written": False,
                     "teacher_forward_count": 0,
@@ -272,7 +263,7 @@ def main(argv: list[str] | None = None) -> int:
             RESULT_PREFIX
             + json.dumps(
                 {
-                    "mode": "dry_run",
+                    "mode": "dry_run" if args.dry_run else "production",
                     "status": "failed",
                     "artifact_written": False,
                     "teacher_forward_count": 0,

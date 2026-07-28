@@ -2198,3 +2198,182 @@ def test_resolve_run_relative_artifact_normalizes_formatting_deterministically(
         expected_kind="descriptor record",
     )
     assert first == second
+
+
+# --------------------------------------------------------------------------------
+# B2-03A Story 12: disk-authoritative teacher-cache provenance parity
+# --------------------------------------------------------------------------------
+
+
+def test_common_disk_loader_rejects_manifest_path_outside_cache_root(
+    tmp_path: Path,
+    descriptor_fixture: dict[str, Any],
+    descriptor_config: subject.DescriptorArtifactsConfig,
+) -> None:
+    outside_manifest = tmp_path / "teacher_cache_manifest.json"
+    outside_manifest.write_text(
+        json.dumps(fixtures.production_like_manifest(descriptor_fixture), sort_keys=True),
+        encoding="utf-8",
+    )
+    isolated_root = tmp_path / "isolated-root"
+    isolated_root.mkdir()
+    with pytest.raises(subject.DescriptorArtifactsError, match="B2_DESC_CACHE_MANIFEST_OUTSIDE_ROOT"):
+        subject.load_and_validate_accepted_teacher_cache_from_disk(
+            config=descriptor_config,
+            teacher_cache_manifest_path=outside_manifest,
+            teacher_cache_root=isolated_root,
+        )
+
+
+def test_common_disk_loader_rejects_record_drift_even_when_manifest_checkpoint_matches(
+    tmp_path: Path,
+    descriptor_fixture: dict[str, Any],
+    descriptor_config: subject.DescriptorArtifactsConfig,
+) -> None:
+    manifest = fixtures.production_like_manifest(descriptor_fixture)
+    stable_id = manifest["samples"][0]["stable_sample_id"]
+
+    def mutate_tensor(record: dict[str, Any]) -> dict[str, Any]:
+        name = next(key for key in sorted(record["tensors"]) if key.startswith("causal_map:"))
+        tensor = record["tensors"][name]["tensor"].clone()
+        tensor[0, 0, 0, 0] += 1.0
+        record["tensors"][name] = dict(record["tensors"][name])
+        record["tensors"][name]["tensor"] = tensor
+        record["tensors"][name]["digest"] = cache_mod.canonical_tensor_digest(
+            name, tensor, tuple(record["tensors"][name]["dimension_semantics"])
+        )
+        return record
+
+    fixtures.rewrite_sample_record(descriptor_fixture, manifest, stable_id, mutate_tensor)
+    manifest["checkpoint_sha256"] = descriptor_config.expected_checkpoint_sha256
+    manifest_path = descriptor_fixture["cache_root"] / "teacher_cache_manifest.json"
+    manifest_path.write_text(json.dumps(manifest, sort_keys=True), encoding="utf-8")
+    with pytest.raises(subject.DescriptorArtifactsError, match="B2_DESC_CACHE_SCIENTIFIC_HASH_MISMATCH"):
+        subject.load_and_validate_accepted_teacher_cache_from_disk(
+            config=descriptor_config,
+            teacher_cache_manifest_path=manifest_path,
+            teacher_cache_root=descriptor_fixture["cache_root"],
+        )
+
+
+def test_common_disk_loader_rejects_profile_mismatch_in_manifest(
+    tmp_path: Path,
+    descriptor_fixture: dict[str, Any],
+    descriptor_config: subject.DescriptorArtifactsConfig,
+) -> None:
+    manifest = fixtures.production_like_manifest(descriptor_fixture)
+    manifest["execution_profile_sha256"] = "7" * 64
+    manifest_path = descriptor_fixture["cache_root"] / "teacher_cache_manifest.json"
+    manifest_path.write_text(json.dumps(manifest, sort_keys=True), encoding="utf-8")
+    with pytest.raises(subject.DescriptorArtifactsError, match="B2_DESC_COLLECTION_PROVENANCE_MISMATCH"):
+        subject.load_and_validate_accepted_teacher_cache_from_disk(
+            config=descriptor_config,
+            teacher_cache_manifest_path=manifest_path,
+            teacher_cache_root=descriptor_fixture["cache_root"],
+        )
+
+
+def test_common_disk_loader_rejects_record_candidate_layer_drift(
+    tmp_path: Path,
+    descriptor_fixture: dict[str, Any],
+    descriptor_config: subject.DescriptorArtifactsConfig,
+) -> None:
+    manifest = fixtures.production_like_manifest(descriptor_fixture)
+    stable_id = manifest["samples"][0]["stable_sample_id"]
+
+    def mutate_candidate_layers(record: dict[str, Any]) -> dict[str, Any]:
+        record["candidate_layers"] = [6, 12, 18]
+        return record
+
+    fixtures.rewrite_sample_record(
+        descriptor_fixture, manifest, stable_id, mutate_candidate_layers
+    )
+    manifest_path = descriptor_fixture["cache_root"] / "teacher_cache_manifest.json"
+    manifest_path.write_text(json.dumps(manifest, sort_keys=True), encoding="utf-8")
+    with pytest.raises(subject.DescriptorArtifactsError, match="B2_DESC_COLLECTION_PROVENANCE_MISMATCH"):
+        subject.load_and_validate_accepted_teacher_cache_from_disk(
+            config=descriptor_config,
+            teacher_cache_manifest_path=manifest_path,
+            teacher_cache_root=descriptor_fixture["cache_root"],
+        )
+
+
+def test_common_disk_loader_rejects_record_implementation_digest_drift(
+    tmp_path: Path,
+    descriptor_fixture: dict[str, Any],
+    descriptor_config: subject.DescriptorArtifactsConfig,
+) -> None:
+    manifest = fixtures.production_like_manifest(descriptor_fixture)
+    stable_id = manifest["samples"][0]["stable_sample_id"]
+
+    def mutate_impl(record: dict[str, Any]) -> dict[str, Any]:
+        record["descriptor_implementation_sha256"] = "8" * 64
+        return record
+
+    fixtures.rewrite_sample_record(descriptor_fixture, manifest, stable_id, mutate_impl)
+    manifest_path = descriptor_fixture["cache_root"] / "teacher_cache_manifest.json"
+    manifest_path.write_text(json.dumps(manifest, sort_keys=True), encoding="utf-8")
+    with pytest.raises(subject.DescriptorArtifactsError, match="B2_DESC_CONTRACT_IDENTITY_MISMATCH"):
+        subject.load_and_validate_accepted_teacher_cache_from_disk(
+            config=descriptor_config,
+            teacher_cache_manifest_path=manifest_path,
+            teacher_cache_root=descriptor_fixture["cache_root"],
+        )
+
+
+def test_common_disk_loader_tracks_source_manifest_file_sha_changes(
+    tmp_path: Path,
+    descriptor_fixture: dict[str, Any],
+    descriptor_config: subject.DescriptorArtifactsConfig,
+) -> None:
+    manifest = fixtures.production_like_manifest(descriptor_fixture)
+    manifest_path = descriptor_fixture["cache_root"] / "teacher_cache_manifest.json"
+    manifest_path.write_text(json.dumps(manifest, sort_keys=True), encoding="utf-8")
+    first = subject.load_and_validate_accepted_teacher_cache_from_disk(
+        config=descriptor_config,
+        teacher_cache_manifest_path=manifest_path,
+        teacher_cache_root=descriptor_fixture["cache_root"],
+    )
+    manifest_path.write_text(json.dumps(manifest, sort_keys=True, indent=2), encoding="utf-8")
+    second = subject.load_and_validate_accepted_teacher_cache_from_disk(
+        config=descriptor_config,
+        teacher_cache_manifest_path=manifest_path,
+        teacher_cache_root=descriptor_fixture["cache_root"],
+    )
+    assert first.source_teacher_cache_manifest_file_sha256 != second.source_teacher_cache_manifest_file_sha256
+    assert first.accepted.entries == second.accepted.entries
+
+
+def test_materialize_and_common_disk_loader_share_same_validated_identity(
+    tmp_path: Path,
+    descriptor_fixture: dict[str, Any],
+    descriptor_config: subject.DescriptorArtifactsConfig,
+) -> None:
+    manifest = fixtures.production_like_manifest(descriptor_fixture)
+    manifest_path = descriptor_fixture["cache_root"] / "teacher_cache_manifest.json"
+    manifest_path.write_text(json.dumps(manifest, sort_keys=True), encoding="utf-8")
+    validated = subject.load_and_validate_accepted_teacher_cache_from_disk(
+        config=descriptor_config,
+        teacher_cache_manifest_path=manifest_path,
+        teacher_cache_root=descriptor_fixture["cache_root"],
+    )
+    direct = subject.materialize_descriptor_artifact_collection(
+        config=descriptor_config,
+        teacher_cache_manifest_path=manifest_path,
+        teacher_cache_root=descriptor_fixture["cache_root"],
+        output_run_dir=tmp_path / "materialized-from-direct-path",
+    )
+    preload = subject.materialize_descriptor_artifact_collection(
+        config=descriptor_config,
+        teacher_cache_manifest_path=manifest_path,
+        teacher_cache_root=descriptor_fixture["cache_root"],
+        output_run_dir=tmp_path / "materialized-from-prevalidated-path",
+        validated_teacher_cache=validated,
+    )
+    assert validated.accepted.manifest["cache_scientific_sha256"] == direct.manifest[
+        "expected_teacher_cache_scientific_sha256"
+    ]
+    assert direct.source_teacher_cache_manifest_file_sha256 == preload.source_teacher_cache_manifest_file_sha256
+    assert direct.manifest["source_teacher_cache_manifest_file_sha256"] == preload.manifest[
+        "source_teacher_cache_manifest_file_sha256"
+    ]
