@@ -24,6 +24,10 @@ from rad.config import ExperimentConfig  # noqa: E402
 from rad.data.adapters import build_preprocess, get_adapter  # noqa: E402
 from rad.errors import OutputProtectionError, RADContractError  # noqa: E402
 from rad.evaluation.dataset_evaluator import evaluate_dataset  # noqa: E402
+from rad.evaluation.effective_config import (  # noqa: E402
+    adaptive_config_identity,
+    deep_merge_config,
+)
 from rad.evaluation.paper_metrics import compute_paper_metrics  # noqa: E402
 from tools.smoke_adaptive_engine import build_engine, load_profile  # noqa: E402
 
@@ -91,15 +95,20 @@ def _resolve(path: Path | str) -> Path:
 def main() -> int:
     args = parse_args()
     cfg_path = Path(args.config)
-    raw = yaml.safe_load(cfg_path.read_text())
+    if not cfg_path.is_absolute():
+        cfg_path = REPO_ROOT / cfg_path
+    overlay_path: Path | None = None
     if args.overlay:
         overlay_path = Path(args.overlay)
         if not overlay_path.is_absolute():
             overlay_path = REPO_ROOT / overlay_path
+    config_identity = adaptive_config_identity(cfg_path, overlay_path=overlay_path)
+    raw = yaml.safe_load(cfg_path.read_text())
+    if overlay_path is not None:
         overlay = yaml.safe_load(overlay_path.read_text()) or {}
         if not isinstance(overlay, dict):
             raise SystemExit("--overlay must be a YAML mapping")
-        raw = _deep_merge(raw, overlay)
+        raw = deep_merge_config(raw, overlay)
     cfg = ExperimentConfig.from_yaml(args.config)
     adaptive = dict(raw.get("adaptive", {}))
     data = dict(raw.get("data", {}))
@@ -124,16 +133,20 @@ def main() -> int:
         or adaptive.get("compute_full_depth_reference", False)
     )
 
-    config_hash = sha256_file(Path(args.config))
+    config_hash_fields = config_identity.as_manifest_fields()
     sha = git_sha()
     profiles_path = _resolve(adaptive["policy_profiles"])
     lse_path = _resolve(adaptive["lse_checkpoint"])
     dlcm_path = _resolve(adaptive["dlcm_checkpoint"])
 
     print(f"config: {args.config}")
-    if args.overlay:
-        print(f"overlay: {args.overlay}")
-    print(f"config_hash: {config_hash}")
+    if overlay_path is not None:
+        print(f"overlay: {overlay_path.relative_to(REPO_ROOT)}")
+    print(f"base_config_sha256: {config_identity.base_config_sha256}")
+    if config_identity.overlay_sha256 is not None:
+        print(f"overlay_sha256: {config_identity.overlay_sha256}")
+    print(f"effective_config_sha256: {config_identity.effective_config_sha256}")
+    print(f"config_sha256: {config_hash_fields['config_sha256']}")
     print(f"git_sha: {sha}")
     print(f"seed: {seed}")
     print(f"device: {device}")
@@ -220,7 +233,8 @@ def main() -> int:
         "status": "completed",
         "command": list(sys.argv),
         "config_path": str(args.config),
-        "config_sha256": config_hash,
+        **config_hash_fields,
+        "overlay_path": str(overlay_path.relative_to(REPO_ROOT)) if overlay_path else None,
         "git_sha": sha,
         "seed": seed,
         "dataset": dataset_name,

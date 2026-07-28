@@ -209,6 +209,7 @@ def test_tracked_configuration_pins_task_1_contract_without_sample_ids() -> None
     assert raw["contracts"]["descriptor_contract_version"] == 1
     assert raw["contracts"]["record_hash_schema_version"] == 1
     assert raw["resume_policy"]["replace_invalid_records"] is False
+    assert raw["resume_policy"]["enabled"] is False
     assert "selected_sample_ids" not in CONFIG.read_text(encoding="utf-8")
 
 
@@ -1002,12 +1003,14 @@ def _tensor_meta(
     tensor: torch.Tensor,
     semantics: tuple[str, ...] = MAP_DIMS,
 ) -> dict[str, Any]:
+    value = tensor.detach().to(dtype=torch.float32).contiguous()
     return {
         "logical_name": name,
-        "dtype": str(tensor.dtype).replace("torch.", ""),
-        "shape": list(tensor.shape),
+        "dtype": str(value.dtype).replace("torch.", ""),
+        "shape": list(value.shape),
         "dimension_semantics": list(semantics),
-        "digest": subject.canonical_tensor_digest(name, tensor, semantics),
+        "digest": subject.canonical_tensor_digest(name, value, semantics),
+        "tensor": value,
     }
 
 
@@ -1182,6 +1185,7 @@ def test_canonical_tensor_digests_combine_in_sorted_logical_name_order() -> None
     first_name = next(iter(renamed["tensors"]))
     meta = renamed["tensors"].pop(first_name)
     meta = dict(meta)
+    meta.pop("tensor", None)
     meta["logical_name"] = "zzz_" + first_name
     meta["digest"] = subject.canonical_tensor_digest(
         meta["logical_name"],
@@ -1444,8 +1448,10 @@ def test_record_scientific_hash_is_sensitive_to_tensor_digest() -> None:
     baseline = subject.record_scientific_sha256(record)
     changed = copy.deepcopy(record)
     name = next(iter(changed["tensors"]))
-    meta = changed["tensors"][name]
+    meta = dict(changed["tensors"][name])
+    meta.pop("tensor", None)
     meta["digest"] = "0" * 64
+    changed["tensors"][name] = meta
     assert subject.record_scientific_sha256(changed) != baseline
 
 
@@ -1653,7 +1659,16 @@ def test_option_a_pt_contains_only_scientific_record_and_scientific_hash(
     assert "record_file_sha256" not in payload
     assert "record_file_sha256" not in payload["scientific_record"]
     assert payload["record_scientific_sha256"] == subject.record_scientific_sha256(record)
-    assert payload["scientific_record"] == _scientific_only(record)
+    persisted = payload["scientific_record"]
+    expected = _scientific_only(record)
+    for name, meta in expected["tensors"].items():
+        assert name in persisted["tensors"]
+        assert "tensor" in persisted["tensors"][name]
+        assert persisted["tensors"][name]["digest"] == meta["digest"]
+    for key, value in expected.items():
+        if key == "tensors":
+            continue
+        assert persisted[key] == value
     assert entry.stable_sample_id == stable_id
     assert entry.relative_path == f"samples/{stable_id}.pt"
     assert entry.record_scientific_sha256 == payload["record_scientific_sha256"]
@@ -1695,6 +1710,7 @@ def test_record_file_sha256_lives_only_in_manifest_entry_after_persistence(
         partial_manifest=loaded,
         entries=(entry,),
         plan=plan[:1],
+        run_dir=run_dir,
     )
     assert final["status"] == "passed"
     assert final["samples"][0]["record_file_sha256"] == entry.record_file_sha256
@@ -2126,3 +2142,114 @@ def test_audit_complete_coverage_requires_exact_plan_entry_file_sets(
     ]
     with pytest.raises(subject.TeacherCacheError, match="B2_CACHE_COVERAGE_MISMATCH"):
         subject.audit_complete_coverage(run_dir, plan, tuple(remapped))
+
+
+def _digest_only_record(record: Mapping[str, Any]) -> dict[str, Any]:
+    digest_only = copy.deepcopy(dict(record))
+    tensors = dict(digest_only["tensors"])
+    for name, meta in list(tensors.items()):
+        meta_copy = dict(meta)
+        meta_copy.pop("tensor", None)
+        tensors[name] = meta_copy
+    digest_only["tensors"] = tensors
+    return digest_only
+
+
+def _write_digest_only_artifact(destination: Path, record: Mapping[str, Any]) -> str:
+    digest_only = _digest_only_record(record)
+    scientific_digest = subject.record_scientific_sha256(digest_only)
+    payload = {
+        "scientific_record": dict(subject.scientific_record_content(digest_only)),
+        "record_scientific_sha256": scientific_digest,
+    }
+    destination.parent.mkdir(parents=True, exist_ok=True)
+    torch.save(payload, destination)
+    return subject._sha256_file(destination)
+
+
+@pytest.mark.parametrize(
+    ("strip_mode",),
+    (
+        ("one_tensor",),
+        ("all_tensors",),
+    ),
+)
+def test_validate_resume_state_rejects_digest_only_tensor_records(
+    tmp_path: Path,
+    accepted_manifest: dict[str, Any],
+    accepted_config: subject.TeacherCacheConfig,
+    strip_mode: str,
+) -> None:
+    plan = subject.build_generation_plan(accepted_manifest, accepted_config)
+    run_dir = tmp_path / "run"
+    (run_dir / "samples").mkdir(parents=True)
+    record = _scientific_record_fixture()
+    record["stable_sample_id"] = plan[0].stable_sample_id
+    digest_only = _digest_only_record(record)
+    if strip_mode == "one_tensor":
+        first_name = next(iter(digest_only["tensors"]))
+        digest_only["tensors"][first_name].pop("tensor", None)
+    destination = _sample_pt_path(run_dir, plan[0].stable_sample_id)
+    file_digest = _write_digest_only_artifact(destination, digest_only)
+    scientific_digest = subject.record_scientific_sha256(digest_only)
+    partial = _aligned_partial(
+        plan=plan,
+        accepted_config=accepted_config,
+        entries=[
+            {
+                "stable_sample_id": plan[0].stable_sample_id,
+                "relative_path": subject.sample_relative_path(plan[0].stable_sample_id),
+                "record_scientific_sha256": scientific_digest,
+                "record_file_sha256": file_digest,
+            }
+        ],
+    )
+    kwargs = _resume_call_kwargs(plan=plan, accepted_config=accepted_config)
+    with pytest.raises(
+        subject.TeacherCacheError, match="B2_CACHE_RESUME_TENSOR_MISSING"
+    ):
+        subject.validate_resume_state(run_dir, partial, **kwargs)
+
+
+def test_build_final_manifest_rejects_digest_only_entries(
+    tmp_path: Path,
+    accepted_manifest: dict[str, Any],
+    accepted_config: subject.TeacherCacheConfig,
+) -> None:
+    plan = subject.build_generation_plan(accepted_manifest, accepted_config)
+    run_dir = tmp_path / "run"
+    (run_dir / "samples").mkdir(parents=True)
+    record = _scientific_record_fixture()
+    record["stable_sample_id"] = plan[0].stable_sample_id
+    digest_only = _digest_only_record(record)
+    destination = _sample_pt_path(run_dir, plan[0].stable_sample_id)
+    file_digest = _write_digest_only_artifact(destination, digest_only)
+    scientific_digest = subject.record_scientific_sha256(digest_only)
+    entry = subject.PersistedSampleEntry(
+        stable_sample_id=plan[0].stable_sample_id,
+        relative_path=subject.sample_relative_path(plan[0].stable_sample_id),
+        record_scientific_sha256=scientific_digest,
+        record_file_sha256=file_digest,
+    )
+    partial = _aligned_partial(
+        plan=plan[:1],
+        accepted_config=accepted_config,
+        entries=[
+            {
+                "stable_sample_id": entry.stable_sample_id,
+                "relative_path": entry.relative_path,
+                "record_scientific_sha256": entry.record_scientific_sha256,
+                "record_file_sha256": entry.record_file_sha256,
+            }
+        ],
+    )
+    with pytest.raises(
+        subject.TeacherCacheError, match="B2_CACHE_RESUME_TENSOR_MISSING"
+    ):
+        subject.build_final_manifest(
+            partial_manifest=partial,
+            entries=(entry,),
+            plan=plan[:1],
+            run_dir=run_dir,
+        )
+

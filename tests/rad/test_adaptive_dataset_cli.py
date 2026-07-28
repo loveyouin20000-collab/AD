@@ -60,7 +60,32 @@ def test_evaluate_adaptive_dataset_dry_run_writes_nothing(tmp_path: Path) -> Non
     assert not out.exists()
 
 
-def test_evaluate_adaptive_dataset_has_no_synthetic_or_visa_parser() -> None:
+def test_evaluate_adaptive_dataset_overlay_hashes_differ_by_effective_config(
+    tmp_path: Path,
+) -> None:
+    out = tmp_path / "dataset_out"
+    proc = _run(
+        [
+            PYTHON,
+            "tools/evaluate_adaptive_dataset.py",
+            "--config",
+            "configs/rad/adaptive.yaml",
+            "--overlay",
+            "configs/rad/matrix/fixed_exit_12_equal.yaml",
+            "--seed",
+            "111",
+            "--output-dir",
+            str(out),
+            "--dry-run",
+        ]
+    )
+    assert proc.returncode == 0, proc.stdout + proc.stderr
+    blob = proc.stdout + proc.stderr
+    assert "base_config_sha256:" in blob
+    assert "overlay_sha256:" in blob
+    assert "effective_config_sha256:" in blob
+    assert "config_sha256:" in blob
+
     src = (REPO_ROOT / "tools" / "evaluate_adaptive_dataset.py").read_text(encoding="utf-8")
     assert "_synthetic_batch" not in src
     assert "torch.randn" not in src

@@ -7,8 +7,6 @@ batch_size: 8
 image_size: 518
 train:
   dataset: visa
-  data_path: /root/autodl-tmp/data/Visa
 test:
   dataset: mvtec
-  data_path: /root/autodl-tmp/data/mvtec
 output_dir: runs/baseline/visa_to_mvtec/seed_111_official_bs8

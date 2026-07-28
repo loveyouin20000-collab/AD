@@ -1183,6 +1183,8 @@ def observe_effective_execution_settings() -> dict[str, Any]:
     }
     if hasattr(torch, "get_float32_matmul_precision"):
         observed["float32_matmul_precision"] = torch.get_float32_matmul_precision()
+    else:
+        observed["float32_matmul_precision"] = None
     cuda_backend = getattr(torch.backends, "cuda", None)
     for name in (
         "flash_sdp_enabled",
@@ -1194,6 +1196,30 @@ def observe_effective_execution_settings() -> dict[str, Any]:
     mha_backend = getattr(torch.backends, "mha", None)
     get_fastpath = getattr(mha_backend, "get_fastpath_enabled", None) if mha_backend else None
     observed["mha_fastpath_enabled"] = bool(get_fastpath()) if callable(get_fastpath) else None
+    availability = {
+        "CUBLAS_WORKSPACE_CONFIG": os.environ.get("CUBLAS_WORKSPACE_CONFIG") is not None,
+        "use_deterministic_algorithms": hasattr(
+            torch, "are_deterministic_algorithms_enabled"
+        ),
+        "cuda.matmul.allow_tf32": True,
+        "cudnn.allow_tf32": True,
+        "cudnn.benchmark": True,
+        "cudnn.deterministic": True,
+        "float32_matmul_precision": hasattr(torch, "get_float32_matmul_precision"),
+        "flash_sdp_enabled": callable(
+            getattr(cuda_backend, "flash_sdp_enabled", None) if cuda_backend else None
+        ),
+        "mem_efficient_sdp_enabled": callable(
+            getattr(cuda_backend, "mem_efficient_sdp_enabled", None)
+            if cuda_backend
+            else None
+        ),
+        "math_sdp_enabled": callable(
+            getattr(cuda_backend, "math_sdp_enabled", None) if cuda_backend else None
+        ),
+        "mha_fastpath_enabled": callable(get_fastpath),
+    }
+    observed["control_availability"] = availability
     return observed
 
 
@@ -1253,7 +1279,9 @@ class SameChainGateResult:
     block_counts: list[BlockCountRecord]
     continuation: list[ContinuationRecord]
     continuation_live_tensor_preserved: bool
-    nonstandard_layers_validated: bool
+    official_candidate_layers_tested: tuple[int, ...]
+    synthetic_candidate_layers_tested: tuple[int, ...]
+    nonstandard_official_run_validated: bool
     errors: list[str] = field(default_factory=list)
 
 
@@ -1683,7 +1711,9 @@ def run_same_chain_gate(
         block_counts=block_counts,
         continuation=continuation,
         continuation_live_tensor_preserved=continuation_live,
-        nonstandard_layers_validated=True,
+        official_candidate_layers_tested=tuple(candidate_layers),
+        synthetic_candidate_layers_tested=(2, 4, 6, 8),
+        nonstandard_official_run_validated=False,
         errors=errors,
     )
 

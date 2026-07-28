@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import shlex
 import subprocess
 import sys
 from pathlib import Path
@@ -9,6 +10,7 @@ import yaml
 
 from rad.evaluation.experiment_matrix import (
     ExperimentMatrix,
+    assign_devices,
     estimate_gpu_hours,
     load_experiment_matrix,
     validate_row_immutable,
@@ -24,6 +26,55 @@ from tests.rad.contracts.experiment_matrix import (
 
 REPO = Path(__file__).resolve().parents[2]
 EXPERIMENTS_YAML = REPO / "configs" / "rad" / "experiments.yaml"
+PYTHON = sys.executable
+
+
+def _resolve_original_visualad_argv() -> list[str]:
+    matrix = load_experiment_matrix(EXPERIMENTS_YAML)
+    plans = assign_devices(matrix, num_gpus=1, row_ids=["original_visualad"])
+    assert len(plans) == 1
+    argv = shlex.split(plans[0]["command"])
+    # Matrix commands are authored as `python tools/...`; normalize to the
+    # interpreter under test so argv validation is hermetic.
+    if argv and Path(argv[0]).name.startswith("python"):
+        argv = [PYTHON, *argv[1:]]
+    return argv
+
+
+def test_original_visualad_matrix_argv_supplies_explicit_data_paths(tmp_path: Path):
+    argv = _resolve_original_visualad_argv()
+    assert "tools/reproduce_baseline.py" in " ".join(argv)
+    assert "--train-data-path" in argv
+    assert "--test-data-path" in argv
+    train_idx = argv.index("--train-data-path")
+    test_idx = argv.index("--test-data-path")
+    train_path = argv[train_idx + 1]
+    test_path = argv[test_idx + 1]
+    assert not train_path.startswith("/root/autodl-tmp")
+    assert not test_path.startswith("/root/autodl-tmp")
+    assert train_path.startswith("data/")
+    assert test_path.startswith("data/")
+
+    # Validate the actual final argv through the baseline entrypoint (dry-run).
+    dry_argv = [
+        *argv[1:],  # drop interpreter; subprocess supplies PYTHON
+        "--dry-run",
+        "--output-dir",
+        str(tmp_path / "original_visualad_dry"),
+    ]
+    # Ensure --dry-run is after the script path; argv[1] is tools/reproduce_baseline.py
+    proc = subprocess.run(
+        [PYTHON, *dry_argv],
+        cwd=str(REPO),
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    assert proc.returncode == 0, proc.stderr + proc.stdout
+    assert "train_data_path:" in proc.stdout
+    assert "test_data_path:" in proc.stdout
+    assert train_path in proc.stdout
+    assert test_path in proc.stdout
 
 
 def test_experiments_yaml_exists_and_loads():
