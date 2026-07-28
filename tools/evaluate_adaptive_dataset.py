@@ -15,11 +15,19 @@ REPO_ROOT = Path(__file__).resolve().parents[1]
 if str(REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(REPO_ROOT))
 
-from rad.artifacts import atomic_write_json, refuse_existing_run  # noqa: E402
+from rad.artifacts import (  # noqa: E402
+    assert_json_artifact_eligible_for_evaluation,
+    atomic_write_json,
+    refuse_existing_run,
+)
 from rad.config import ExperimentConfig  # noqa: E402
 from rad.data.adapters import build_preprocess, get_adapter  # noqa: E402
 from rad.errors import OutputProtectionError, RADContractError  # noqa: E402
 from rad.evaluation.dataset_evaluator import evaluate_dataset  # noqa: E402
+from rad.evaluation.effective_config import (  # noqa: E402
+    adaptive_config_identity,
+    deep_merge_config,
+)
 from rad.evaluation.paper_metrics import compute_paper_metrics  # noqa: E402
 from tools.smoke_adaptive_engine import build_engine, load_profile  # noqa: E402
 
@@ -29,6 +37,12 @@ def parse_args() -> argparse.Namespace:
         description="Real-dataset adaptive evaluation (paper metrics path)"
     )
     p.add_argument("--config", type=str, default="configs/rad/adaptive.yaml")
+    p.add_argument(
+        "--overlay",
+        type=str,
+        default=None,
+        help="Optional YAML overlay deep-merged into --config (matrix rows)",
+    )
     p.add_argument("--seed", type=int, default=None)
     p.add_argument("--output-dir", type=Path, default=None)
     p.add_argument("--profile", type=str, default=None)
@@ -40,6 +54,16 @@ def parse_args() -> argparse.Namespace:
     p.add_argument("--data-path", type=Path, default=None)
     p.add_argument("--dry-run", action="store_true")
     return p.parse_args()
+
+
+def _deep_merge(base: dict[str, Any], overlay: dict[str, Any]) -> dict[str, Any]:
+    out = dict(base)
+    for key, value in overlay.items():
+        if isinstance(value, dict) and isinstance(out.get(key), dict):
+            out[key] = _deep_merge(out[key], value)
+        else:
+            out[key] = value
+    return out
 
 
 def sha256_file(path: Path) -> str:
@@ -70,7 +94,21 @@ def _resolve(path: Path | str) -> Path:
 
 def main() -> int:
     args = parse_args()
-    raw = yaml.safe_load(Path(args.config).read_text())
+    cfg_path = Path(args.config)
+    if not cfg_path.is_absolute():
+        cfg_path = REPO_ROOT / cfg_path
+    overlay_path: Path | None = None
+    if args.overlay:
+        overlay_path = Path(args.overlay)
+        if not overlay_path.is_absolute():
+            overlay_path = REPO_ROOT / overlay_path
+    config_identity = adaptive_config_identity(cfg_path, overlay_path=overlay_path)
+    raw = yaml.safe_load(cfg_path.read_text())
+    if overlay_path is not None:
+        overlay = yaml.safe_load(overlay_path.read_text()) or {}
+        if not isinstance(overlay, dict):
+            raise SystemExit("--overlay must be a YAML mapping")
+        raw = deep_merge_config(raw, overlay)
     cfg = ExperimentConfig.from_yaml(args.config)
     adaptive = dict(raw.get("adaptive", {}))
     data = dict(raw.get("data", {}))
@@ -95,14 +133,20 @@ def main() -> int:
         or adaptive.get("compute_full_depth_reference", False)
     )
 
-    config_hash = sha256_file(Path(args.config))
+    config_hash_fields = config_identity.as_manifest_fields()
     sha = git_sha()
     profiles_path = _resolve(adaptive["policy_profiles"])
     lse_path = _resolve(adaptive["lse_checkpoint"])
     dlcm_path = _resolve(adaptive["dlcm_checkpoint"])
 
     print(f"config: {args.config}")
-    print(f"config_hash: {config_hash}")
+    if overlay_path is not None:
+        print(f"overlay: {overlay_path.relative_to(REPO_ROOT)}")
+    print(f"base_config_sha256: {config_identity.base_config_sha256}")
+    if config_identity.overlay_sha256 is not None:
+        print(f"overlay_sha256: {config_identity.overlay_sha256}")
+    print(f"effective_config_sha256: {config_identity.effective_config_sha256}")
+    print(f"config_sha256: {config_hash_fields['config_sha256']}")
     print(f"git_sha: {sha}")
     print(f"seed: {seed}")
     print(f"device: {device}")
@@ -115,6 +159,10 @@ def main() -> int:
     print(f"limit: {limit}")
     print(f"force_full_depth: {force_full_depth}")
     print(f"compute_full_depth_reference: {compute_ref}")
+    if raw.get("selector"):
+        print(f"selector_signals: {json.dumps(raw['selector'].get('signals', {}))}")
+    if raw.get("method"):
+        print(f"method: {json.dumps(raw['method'])}")
 
     if args.dry_run:
         print("dry-run ok")
@@ -131,8 +179,13 @@ def main() -> int:
         raise SystemExit(f"missing LSE checkpoint: {lse_path}")
     if not dlcm_path.is_file():
         raise SystemExit(f"missing DLCM checkpoint: {dlcm_path}")
-    if not profiles_path.is_file():
-        raise SystemExit(f"missing policy profiles: {profiles_path}")
+
+    assert_json_artifact_eligible_for_evaluation(
+        profiles_path, kind="policy profiles"
+    )
+    assert_json_artifact_eligible_for_evaluation(
+        _resolve(adaptive["descriptor_stats"]), kind="descriptor statistics"
+    )
 
     profile = load_profile(profiles_path, profile_name)
     adapter = get_adapter(dataset_name, data_path)
@@ -180,7 +233,8 @@ def main() -> int:
         "status": "completed",
         "command": list(sys.argv),
         "config_path": str(args.config),
-        "config_sha256": config_hash,
+        **config_hash_fields,
+        "overlay_path": str(overlay_path.relative_to(REPO_ROOT)) if overlay_path else None,
         "git_sha": sha,
         "seed": seed,
         "dataset": dataset_name,
@@ -209,6 +263,7 @@ def main() -> int:
             "aupro_steps": 200,
             "boundary_tolerance_ratio": 0.005,
         },
+        **engine.selector_provenance(),
     }
     atomic_write_json(output_dir / "manifest.json", manifest)
     atomic_write_json(output_dir / "metrics.json", metrics.as_dict())

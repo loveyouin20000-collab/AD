@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import io
 import json
 import subprocess
 import sys
@@ -15,8 +14,10 @@ from rad.errors import (
     RADContractError,
 )
 from tests.rad.contracts.baseline import (
-    assert_completed_baseline_manifest,
-    assert_no_baseline_artifacts,
+    assert_baseline_dry_run_contract,
+    assert_checkpoint_after_training_contract,
+    assert_external_checkpoint_contract,
+    assert_metric_provenance_contract,
     assert_required_metrics_finite,
     load_json,
     normalized_metrics_from_log_percentages,
@@ -29,11 +30,11 @@ if str(REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(REPO_ROOT))
 
 from tools.reproduce_baseline import (  # noqa: E402
+    BaselineConfig,
     build_test_command,
     build_train_command,
     load_or_materialize_metrics,
     run_baseline,
-    BaselineConfig,
 )
 
 
@@ -103,7 +104,10 @@ def test_mock_training_creates_checkpoint_and_runs_evaluation(
     assert checkpoint_path.is_file()
 
     manifest = load_json(output_dir / "manifest.json")
-    assert_completed_baseline_manifest(manifest)
+    assert_checkpoint_after_training_contract(
+        checkpoint_path=checkpoint_path,
+        manifest=manifest,
+    )
     metrics = load_json(result_dir / "metrics.json")
     assert_required_metrics_finite(metrics)
     assert metrics == normalized_metrics_from_log_percentages()
@@ -173,8 +177,7 @@ def test_external_checkpoint_skips_training(
     assert run_baseline(config_path, checkpoint=external_ckpt) == 0
     assert len(calls) == 1
     manifest = load_json(output_dir / "manifest.json")
-    assert manifest["eval_only"] is True
-    assert manifest["commands"]["train"] is None
+    assert_external_checkpoint_contract(manifest, calls=calls)
 
 
 def test_missing_external_checkpoint_fails(
@@ -261,9 +264,7 @@ def test_dry_run_writes_nothing(
     config_path, output_dir = baseline_config_path
     assert run_baseline(config_path, dry_run=True) == 0
     captured = capsys.readouterr().out
-    assert "train.py" in captured
-    assert "test.py" in captured
-    assert_no_baseline_artifacts(output_dir)
+    assert_baseline_dry_run_contract(captured, output_dir=output_dir)
 
 
 def test_existing_metrics_json_preferred_over_log_txt(
@@ -285,6 +286,9 @@ def test_existing_metrics_json_preferred_over_log_txt(
         "pixel_ap": 0.55,
         "pixel_f1_max": 0.66,
         "pixel_aupro": 0.77,
+        "pixel_aupro_aggregation": "category_macro",
+        "pixel_aupro_max_fpr": 0.3,
+        "pixel_aupro_steps": 200,
     }
     log_metrics = normalized_metrics_from_log_percentages()
 
@@ -312,6 +316,7 @@ def test_existing_metrics_json_preferred_over_log_txt(
 
     assert run_baseline(config_path) == 0
     manifest = load_json(output_dir / "manifest.json")
+    assert_metric_provenance_contract(manifest["metrics"])
     assert manifest["metrics"] == metrics_from_json
     assert manifest["metrics"] != log_metrics
     assert load_json(result_dir / "metrics.json") == metrics_from_json
@@ -435,7 +440,9 @@ def test_full_pipeline_integration(
     assert run_baseline(config_path) == 0
     assert stages == ["train", "test"]
     manifest = load_json(output_dir / "manifest.json")
-    assert_completed_baseline_manifest(manifest)
-    assert manifest["checkpoint_sha256"]
+    assert_checkpoint_after_training_contract(
+        checkpoint_path=checkpoint_path,
+        manifest=manifest,
+    )
     metrics = load_json(result_dir / "metrics.json")
     assert_required_metrics_finite(metrics)

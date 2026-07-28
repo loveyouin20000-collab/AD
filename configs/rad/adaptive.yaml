@@ -6,7 +6,7 @@ backbone:
   candidate_layers: [6, 12, 18, 24]
 data:
   dataset: mvtec
-  data_path: /root/autodl-tmp/data/mvtec
+  data_path: data/mvtec
   split_manifest: artifacts/splits/mvtec_seed111.jsonl
 teacher:
   checkpoint_path: weight/train_on_mvtec/CLIP.pth
@@ -30,3 +30,11 @@ adaptive:
   warmup: 50
   limit: null
   compute_full_depth_reference: false
+selector:
+  mask_mode: train_and_infer
+  signals:
+    response: true
+    uncertainty: true
+    stability: true
+    complementarity: true
+    token_separation: true

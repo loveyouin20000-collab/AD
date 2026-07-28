@@ -16,6 +16,13 @@ from rad.models.descriptors import (
 from rad.models.dlcm import DLCM, sum_preserving_fusion
 from rad.models.lse import LSE, GainPrediction
 from rad.models.policy import ExitSignals, PolicyProfile, should_exit
+from rad.models.selector_signals import (
+    SelectorSignalLayout,
+    apply_selector_signal_mask,
+    build_default_selector_signal_layout,
+    parse_enabled_signals,
+    selector_signal_provenance,
+)
 from rad.types import CheckpointOutput, StageCache
 
 
@@ -95,6 +102,10 @@ class AdaptiveEngine(nn.Module):
         image_size: int,
         normalizer: DescriptorNormalizer | None = None,
         temperature: float = 1.0,
+        enabled_signals: Mapping[str, bool] | None = None,
+        selector_layout: SelectorSignalLayout | None = None,
+        fusion_mode: str = "dynamic",
+        fixed_exit_depth: int | None = None,
     ) -> None:
         super().__init__()
         layers = tuple(sorted(int(x) for x in candidate_layers))
@@ -107,6 +118,10 @@ class AdaptiveEngine(nn.Module):
             raise ValueError("early_depths must be a subset of candidate_layers")
         if int(full_depth) not in layers:
             raise ValueError("full_depth must be in candidate_layers")
+        if fusion_mode not in {"dynamic", "equal"}:
+            raise ValueError("fusion_mode must be 'dynamic' or 'equal'")
+        if fixed_exit_depth is not None and int(fixed_exit_depth) not in layers:
+            raise ValueError("fixed_exit_depth must be in candidate_layers")
 
         self.visual = visual
         self.map_generator = map_generator
@@ -121,6 +136,13 @@ class AdaptiveEngine(nn.Module):
         self.full_depth = int(full_depth)
         self.image_size = int(image_size)
         self.temperature = float(temperature)
+        self.enabled_signals = parse_enabled_signals(enabled_signals)
+        self.selector_layout = selector_layout or build_default_selector_signal_layout()
+        self.selector_layout.validate(descriptor_dim=18)
+        self.fusion_mode = str(fusion_mode)
+        self.fixed_exit_depth = (
+            None if fixed_exit_depth is None else int(fixed_exit_depth)
+        )
 
     def _device(self) -> torch.device:
         return next(self.dlcm.parameters()).device
@@ -151,10 +173,27 @@ class AdaptiveEngine(nn.Module):
             layer_ids=layer_ids,
             prev_fused=prev_fused,
         )
-        weights = self.dlcm(layer_desc, ctx, layer_ids, valid)
+        if self.fusion_mode == "equal":
+            weights = valid.to(maps_4d.dtype)
+            weights = weights / weights.sum(dim=1, keepdim=True).clamp_min(1.0)
+        else:
+            weights = self.dlcm(layer_desc, ctx, layer_ids, valid)
         fused = sum_preserving_fusion(stacked, weights, valid)
-        state = torch.cat([layer_desc.mean(dim=1), ctx], dim=-1)
+        # LSE path: mask a clone after normalization; DLCM keeps full descriptor.
+        lse_desc = apply_selector_signal_mask(
+            layer_desc,
+            layout=self.selector_layout,
+            enabled_signals=self.enabled_signals,
+        )
+        state = torch.cat([lse_desc.mean(dim=1), ctx], dim=-1)
         return fused, weights, state
+
+    def selector_provenance(self) -> dict[str, object]:
+        return selector_signal_provenance(
+            enabled_signals=self.enabled_signals,
+            layout=self.selector_layout,
+            mask_applied=True,
+        )
 
     @torch.no_grad()
     def infer(
@@ -205,6 +244,8 @@ class AdaptiveEngine(nn.Module):
         selected = self.full_depth
 
         for depth in self.candidate_layers:
+            if self.fixed_exit_depth is not None and depth > self.fixed_exit_depth:
+                break
             t0 = tick()
             out, cache = self.visual.run_to(cache, depth)
             timing["backbone"] += _elapsed_ms(t0, tick()) if measure_timing else 0.0
@@ -212,6 +253,8 @@ class AdaptiveEngine(nn.Module):
             checkpoint_trace.append(depth)
 
             decide = depth in self.early_depths or depth == self.full_depth
+            if self.fixed_exit_depth is not None:
+                decide = depth == self.fixed_exit_depth
             if not decide:
                 continue
 
@@ -239,6 +282,11 @@ class AdaptiveEngine(nn.Module):
             last_score = torch.sigmoid(fused / max(self.temperature, 1e-6)).flatten(1).max(
                 dim=1
             ).values
+
+            if self.fixed_exit_depth is not None and depth == self.fixed_exit_depth:
+                selected = depth
+                prev_fused = fused
+                break
 
             if depth in self.early_depths and not force_full_depth:
                 t0 = tick()

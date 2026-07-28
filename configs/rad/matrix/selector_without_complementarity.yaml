@@ -1,0 +1,13 @@
+method:
+  name: selector_without_complementarity
+  fusion: dynamic
+selector:
+  mask_mode: train_and_infer
+  signals:
+    response: true
+    uncertainty: true
+    stability: true
+    complementarity: false
+    token_separation: true
+adaptive:
+  lse_checkpoint: artifacts/checkpoints/lse/selector_without_complementarity/lse_best.pt

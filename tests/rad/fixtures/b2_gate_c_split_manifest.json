@@ -1,0 +1,499 @@
+{
+  "b1_base_commit": "3a751b2784a50eb0a08ed49e1db2df0b53608ccc",
+  "b1_base_tag": "b1-strict-independent-v1",
+  "categories": [
+    "bottle",
+    "carpet"
+  ],
+  "count_audit": {
+    "by_split": {
+      "calibration": {
+        "bottle": {
+          "anomalous": 2,
+          "normal": 2,
+          "total": 4
+        },
+        "carpet": {
+          "anomalous": 2,
+          "normal": 2,
+          "total": 4
+        }
+      },
+      "evaluation": {
+        "bottle": {
+          "anomalous": 2,
+          "normal": 2,
+          "total": 4
+        },
+        "carpet": {
+          "anomalous": 2,
+          "normal": 2,
+          "total": 4
+        }
+      },
+      "training": {
+        "bottle": {
+          "anomalous": 4,
+          "normal": 4,
+          "total": 8
+        },
+        "carpet": {
+          "anomalous": 4,
+          "normal": 4,
+          "total": 8
+        }
+      }
+    },
+    "passed": true,
+    "split_totals": {
+      "calibration": 8,
+      "evaluation": 8,
+      "training": 16
+    },
+    "total_selected": 32
+  },
+  "creation_timestamp": "2026-07-21T12:45:00Z",
+  "execution_profile": {
+    "execution_profile_name": "frozen_deterministic_math",
+    "execution_profile_sha256": "7af8dba39633743da0380fef9710940cded655f68c9efa8f84f5a52aeddb3c8d",
+    "runtime_attestation_sha256": "4c01b7490b10f7fa8db8ac50b22d7bd30c704991fc169acf809f4942537f786b"
+  },
+  "fixture_path_audit": {
+    "forbidden_components": [
+      "examples",
+      "fixtures",
+      "synthetic",
+      "tests"
+    ],
+    "passed": true,
+    "violations": []
+  },
+  "forbidden_target_dataset": "visa",
+  "generation_branch": "phase-b2-tiny-gate-c",
+  "generation_git_commit": "18bac047227754c975b23b46842458a5b41d5e2a",
+  "generation_worktree_path": "/root/autodl-tmp/AD-phase-b2-gate-c",
+  "mask_audit": {
+    "anomalous_selected": 16,
+    "anomalous_with_masks": 16,
+    "normal_selected": 16,
+    "normal_with_masks": 0,
+    "passed": true
+  },
+  "output_directory": "/root/autodl-tmp/AD-phase-b2-gate-c/artifacts/phase_b/b2_gate_c/b2c-20260721-v2-final-18bac04",
+  "overlap_audit": {
+    "intersections": {
+      "calibration_evaluation": [],
+      "training_calibration": [],
+      "training_evaluation": []
+    },
+    "pairwise_disjoint": true,
+    "passed": true,
+    "unique_selected_ids": 32
+  },
+  "run_id": "b2c-20260721-v2-final-18bac04",
+  "runtime_attestation": {
+    "canary": {
+      "execution_count": 3,
+      "first_input_identity": "input_instance_1",
+      "first_input_sha256": "252479f796941b9c17b9f81e1fea8dedda89d3197a29c4124c94b944f0536258",
+      "first_module_identity": "module_instance_1",
+      "first_module_sha256": "28195ea03deb41c302e57a61c8a268a9b175c7e70c1d5bdc59c2aa189b1f4224",
+      "first_output_sha256": "36cf78f51218196f34419afaec24bbc7b6efe0306a9ab209b25c5cad4df72d78",
+      "independent_reconstruction": true,
+      "input_rebuilt": true,
+      "module_rebuilt": true,
+      "reconstructed_input_identity": "input_instance_2",
+      "reconstructed_input_sha256": "252479f796941b9c17b9f81e1fea8dedda89d3197a29c4124c94b944f0536258",
+      "reconstructed_module_identity": "module_instance_2",
+      "reconstructed_module_sha256": "28195ea03deb41c302e57a61c8a268a9b175c7e70c1d5bdc59c2aa189b1f4224",
+      "reconstructed_output_sha256": "36cf78f51218196f34419afaec24bbc7b6efe0306a9ab209b25c5cad4df72d78",
+      "reconstruction_count": 1,
+      "repeat_output_sha256": "36cf78f51218196f34419afaec24bbc7b6efe0306a9ab209b25c5cad4df72d78",
+      "self_repeatability": true
+    },
+    "effective_settings": {
+      "cuda.matmul.allow_tf32": false,
+      "cudnn.allow_tf32": false,
+      "cudnn.benchmark": false,
+      "cudnn.deterministic": true,
+      "flash_sdp_enabled": false,
+      "float32_matmul_precision": "highest",
+      "math_sdp_enabled": true,
+      "mem_efficient_sdp_enabled": false,
+      "mha_fastpath_enabled": null,
+      "mha_fastpath_supported": false,
+      "use_deterministic_algorithms": true
+    },
+    "environment": {
+      "cublas_workspace_config": ":4096:8",
+      "cuda_available": false,
+      "cuda_initialized_before_apply": false,
+      "cuda_version": "11.8",
+      "cudnn_version": 8700,
+      "driver_version": null,
+      "gpu_identity": [],
+      "python_version": "3.10.20",
+      "torch_version": "2.0.0+cu118"
+    },
+    "profile": {
+      "expected_sha256": "7af8dba39633743da0380fef9710940cded655f68c9efa8f84f5a52aeddb3c8d",
+      "hashes_match": true,
+      "launcher_sha256": "7af8dba39633743da0380fef9710940cded655f68c9efa8f84f5a52aeddb3c8d",
+      "path": "/root/autodl-tmp/AD-phase-b2-gate-c/configs/execution/frozen_deterministic_math.json",
+      "profile_id": "frozen_deterministic_math",
+      "runtime_sha256": "7af8dba39633743da0380fef9710940cded655f68c9efa8f84f5a52aeddb3c8d"
+    },
+    "requested_settings": {
+      "model": {
+        "amp": false,
+        "dtype": "float32",
+        "eval_mode": true,
+        "no_grad": true
+      },
+      "required_environment": {
+        "CUBLAS_WORKSPACE_CONFIG": ":4096:8"
+      },
+      "torch": {
+        "cuda.matmul.allow_tf32": false,
+        "cudnn.allow_tf32": false,
+        "cudnn.benchmark": false,
+        "cudnn.deterministic": true,
+        "enable_flash_sdp": false,
+        "enable_math_sdp": true,
+        "enable_mem_efficient_sdp": false,
+        "float32_matmul_precision": "highest",
+        "mha_fastpath_enabled": false,
+        "seed": 111,
+        "use_deterministic_algorithms": true
+      }
+    },
+    "schema_version": 1
+  },
+  "schema_version": 1,
+  "scientific_hash_contract": {
+    "active_version": 2,
+    "canonical_scientific_hash_v2": "91570da1fed6d7859d407196b10403581832ae0ff677a1ea7657ca76b91471f0",
+    "legacy_canonical_hash_v1": "0b9371deb6c55f359a14959c8b46ff50205191b1189a48ee380eafaf28c5791a",
+    "migration": "V1 mixed runtime provenance with science; f840fd54 was rejected because it retained branch/worktree fields; V2 uses a strict scientific whitelist.",
+    "rejected_intermediate_candidate": "f840fd54f4385acda5af76f17d39e35251384f9ed56164b6b0769a0120ef6d88"
+  },
+  "seed": 111,
+  "source": {
+    "adapter_class": "MVTecAdapter",
+    "adapter_module": "rad.data.adapters.mvtec",
+    "dataset": "mvtec",
+    "dataset_root_identity_sha256": "44cc6679ff61a38e2819f6621be97027b3722d2da41fc2d10073680c0848781e",
+    "record_count": 200,
+    "source_list_sha256": "335337d43dccea9e368393d2616972ad2217e490b91468d11a7e7f04fd688ee4"
+  },
+  "source_only_audit": {
+    "forbidden_target_access_count": 0,
+    "forbidden_target_dataset": "visa",
+    "passed": true,
+    "source_dataset": "mvtec"
+  },
+  "specification": {
+    "path": "configs/phase_b/b2_tiny_gate_c.json",
+    "sha256": "06ceb68c7b89a70ce9ead5e38680c9fe158747dace337d3f901d48393bb7b630",
+    "specification_id": "b2_tiny_gate_c"
+  },
+  "splits": {
+    "calibration": [
+      {
+        "anomaly_type": "good",
+        "category": "bottle",
+        "image_identity": "bottle/test/good/011.png",
+        "image_label": 0,
+        "mask_identity": null,
+        "membership": "calibration",
+        "stable_sample_id": "470b6ac9a792158887fa97063a475003b459996806bbbc9a29dac172a63fb75a"
+      },
+      {
+        "anomaly_type": "good",
+        "category": "bottle",
+        "image_identity": "bottle/test/good/014.png",
+        "image_label": 0,
+        "mask_identity": null,
+        "membership": "calibration",
+        "stable_sample_id": "39e5843992fb7946bc422b00a9dd5221a9edb0e89be3d96dd70b46ba0c84e9db"
+      },
+      {
+        "anomaly_type": "broken_large",
+        "category": "bottle",
+        "image_identity": "bottle/test/broken_large/013.png",
+        "image_label": 1,
+        "mask_identity": "bottle/ground_truth/broken_large/013_mask.png",
+        "membership": "calibration",
+        "stable_sample_id": "b65ec198775f295af3078c1ba0d082e0c24f4cdde8cd4d8524e48bb3b1a75459"
+      },
+      {
+        "anomaly_type": "broken_small",
+        "category": "bottle",
+        "image_identity": "bottle/test/broken_small/009.png",
+        "image_label": 1,
+        "mask_identity": "bottle/ground_truth/broken_small/009_mask.png",
+        "membership": "calibration",
+        "stable_sample_id": "db65fd91e8de32de3d303f678c9a523e94f1109a6a92521c149e93ec629eecff"
+      },
+      {
+        "anomaly_type": "good",
+        "category": "carpet",
+        "image_identity": "carpet/test/good/022.png",
+        "image_label": 0,
+        "mask_identity": null,
+        "membership": "calibration",
+        "stable_sample_id": "e2a2ef9c18627ab5773229786424db9f7159181d6c5098de65cf4aa9e701124a"
+      },
+      {
+        "anomaly_type": "good",
+        "category": "carpet",
+        "image_identity": "carpet/test/good/026.png",
+        "image_label": 0,
+        "mask_identity": null,
+        "membership": "calibration",
+        "stable_sample_id": "8f68b6aad99aa55fce3a1cebe2a63ead6f84fec6073c6ab86cc684409c6335a8"
+      },
+      {
+        "anomaly_type": "thread",
+        "category": "carpet",
+        "image_identity": "carpet/test/thread/002.png",
+        "image_label": 1,
+        "mask_identity": "carpet/ground_truth/thread/002_mask.png",
+        "membership": "calibration",
+        "stable_sample_id": "27132d1f08fb1ac31a64d08865646bb30bc979a0dcd45149b85c1c050d4a7ad4"
+      },
+      {
+        "anomaly_type": "hole",
+        "category": "carpet",
+        "image_identity": "carpet/test/hole/015.png",
+        "image_label": 1,
+        "mask_identity": "carpet/ground_truth/hole/015_mask.png",
+        "membership": "calibration",
+        "stable_sample_id": "e037290913264076779a86b0f8f75b92f190f30563ceefe7b2193590d9d9c933"
+      }
+    ],
+    "evaluation": [
+      {
+        "anomaly_type": "good",
+        "category": "bottle",
+        "image_identity": "bottle/test/good/013.png",
+        "image_label": 0,
+        "mask_identity": null,
+        "membership": "evaluation",
+        "stable_sample_id": "21e574b912c19b6cc865795240bb63b590e49bc8c282b45ee4be86612518dc67"
+      },
+      {
+        "anomaly_type": "good",
+        "category": "bottle",
+        "image_identity": "bottle/test/good/007.png",
+        "image_label": 0,
+        "mask_identity": null,
+        "membership": "evaluation",
+        "stable_sample_id": "75bfc286b425959334a3b2152bfab56dd36da505ef504bc070ab48029b15b4c6"
+      },
+      {
+        "anomaly_type": "contamination",
+        "category": "bottle",
+        "image_identity": "bottle/test/contamination/013.png",
+        "image_label": 1,
+        "mask_identity": "bottle/ground_truth/contamination/013_mask.png",
+        "membership": "evaluation",
+        "stable_sample_id": "356d42931fc7166a7043237f7c58ae5ae5035127e92d55907423e9612f29553a"
+      },
+      {
+        "anomaly_type": "broken_large",
+        "category": "bottle",
+        "image_identity": "bottle/test/broken_large/004.png",
+        "image_label": 1,
+        "mask_identity": "bottle/ground_truth/broken_large/004_mask.png",
+        "membership": "evaluation",
+        "stable_sample_id": "b8e2d4c737dc749801a5e0ee14644af086ef254a1047aba50498bd6d4535eded"
+      },
+      {
+        "anomaly_type": "good",
+        "category": "carpet",
+        "image_identity": "carpet/test/good/006.png",
+        "image_label": 0,
+        "mask_identity": null,
+        "membership": "evaluation",
+        "stable_sample_id": "110187c718114d1555fe49d7d51813c5f1e38630e40848a95c57421153fee3ed"
+      },
+      {
+        "anomaly_type": "good",
+        "category": "carpet",
+        "image_identity": "carpet/test/good/004.png",
+        "image_label": 0,
+        "mask_identity": null,
+        "membership": "evaluation",
+        "stable_sample_id": "b810eb668bb5e847eb8328d3f4855b787d96b01ace0322b4711377a12a5a7e8a"
+      },
+      {
+        "anomaly_type": "thread",
+        "category": "carpet",
+        "image_identity": "carpet/test/thread/016.png",
+        "image_label": 1,
+        "mask_identity": "carpet/ground_truth/thread/016_mask.png",
+        "membership": "evaluation",
+        "stable_sample_id": "c0f7b822157ab6c76c7aa681f2f8cec7a54ccf8c25860cd6a4ea8997478fc102"
+      },
+      {
+        "anomaly_type": "cut",
+        "category": "carpet",
+        "image_identity": "carpet/test/cut/000.png",
+        "image_label": 1,
+        "mask_identity": "carpet/ground_truth/cut/000_mask.png",
+        "membership": "evaluation",
+        "stable_sample_id": "6af754e5bf30ca26b9e44cbfab026f2fcd1e89c476b65795e382ab5fcf7af743"
+      }
+    ],
+    "training": [
+      {
+        "anomaly_type": "good",
+        "category": "bottle",
+        "image_identity": "bottle/test/good/009.png",
+        "image_label": 0,
+        "mask_identity": null,
+        "membership": "training",
+        "stable_sample_id": "0b2f3b31acc9e921f27741ce925748e51fc5ae9bafde688df4fdfa56d06c0568"
+      },
+      {
+        "anomaly_type": "good",
+        "category": "bottle",
+        "image_identity": "bottle/test/good/002.png",
+        "image_label": 0,
+        "mask_identity": null,
+        "membership": "training",
+        "stable_sample_id": "739d3b84f30449b0ca0d5e512413343a86a21ddf1cc6f790938fe6f040418539"
+      },
+      {
+        "anomaly_type": "good",
+        "category": "bottle",
+        "image_identity": "bottle/test/good/016.png",
+        "image_label": 0,
+        "mask_identity": null,
+        "membership": "training",
+        "stable_sample_id": "51515673757b1a05057d9b6078f8a063077bce33cb12d89cd70e8edae75de2f3"
+      },
+      {
+        "anomaly_type": "good",
+        "category": "bottle",
+        "image_identity": "bottle/test/good/004.png",
+        "image_label": 0,
+        "mask_identity": null,
+        "membership": "training",
+        "stable_sample_id": "334267832320d6574ef39f56a8429cd09f5892c67b985da72991628e1ace8e8f"
+      },
+      {
+        "anomaly_type": "broken_large",
+        "category": "bottle",
+        "image_identity": "bottle/test/broken_large/014.png",
+        "image_label": 1,
+        "mask_identity": "bottle/ground_truth/broken_large/014_mask.png",
+        "membership": "training",
+        "stable_sample_id": "ce4c220fe047beb3dc5f8ccf8f913b5a935eb494f15e500125dfbb5c94d3f68c"
+      },
+      {
+        "anomaly_type": "contamination",
+        "category": "bottle",
+        "image_identity": "bottle/test/contamination/003.png",
+        "image_label": 1,
+        "mask_identity": "bottle/ground_truth/contamination/003_mask.png",
+        "membership": "training",
+        "stable_sample_id": "4cb7a040ad5db2f12aff0f5b4a3448e449e9a5f12485b3d994ab004fce5e8cf9"
+      },
+      {
+        "anomaly_type": "broken_small",
+        "category": "bottle",
+        "image_identity": "bottle/test/broken_small/018.png",
+        "image_label": 1,
+        "mask_identity": "bottle/ground_truth/broken_small/018_mask.png",
+        "membership": "training",
+        "stable_sample_id": "f504d5d07ffd0d18fc38578dd4cce6fa41f7bb72b2fbf5a7dc1a9c81d3b61717"
+      },
+      {
+        "anomaly_type": "broken_large",
+        "category": "bottle",
+        "image_identity": "bottle/test/broken_large/002.png",
+        "image_label": 1,
+        "mask_identity": "bottle/ground_truth/broken_large/002_mask.png",
+        "membership": "training",
+        "stable_sample_id": "b337dfcf7da6f062d5ddb741345a71dc6acfb4cd04c37883d2a449a389f79bdd"
+      },
+      {
+        "anomaly_type": "good",
+        "category": "carpet",
+        "image_identity": "carpet/test/good/016.png",
+        "image_label": 0,
+        "mask_identity": null,
+        "membership": "training",
+        "stable_sample_id": "807a6dd2cc9d1a76a19ee614912d6ad2889e88a8baa3454ac847f1ad0bdd1f05"
+      },
+      {
+        "anomaly_type": "good",
+        "category": "carpet",
+        "image_identity": "carpet/test/good/012.png",
+        "image_label": 0,
+        "mask_identity": null,
+        "membership": "training",
+        "stable_sample_id": "c06a144bb9b47feeff8802d80e3aba03bdc7d0602ddcc39110e6bb748fd5f5e4"
+      },
+      {
+        "anomaly_type": "good",
+        "category": "carpet",
+        "image_identity": "carpet/test/good/024.png",
+        "image_label": 0,
+        "mask_identity": null,
+        "membership": "training",
+        "stable_sample_id": "6e6fe71d8c200d48d3bacac94cd99f0b4cbe444220486e65b9d935293af075cb"
+      },
+      {
+        "anomaly_type": "good",
+        "category": "carpet",
+        "image_identity": "carpet/test/good/005.png",
+        "image_label": 0,
+        "mask_identity": null,
+        "membership": "training",
+        "stable_sample_id": "1a23cfbc654627fa40355296ef5b35c5c74aafb8cf930cc63e5ccb81d80c606e"
+      },
+      {
+        "anomaly_type": "hole",
+        "category": "carpet",
+        "image_identity": "carpet/test/hole/011.png",
+        "image_label": 1,
+        "mask_identity": "carpet/ground_truth/hole/011_mask.png",
+        "membership": "training",
+        "stable_sample_id": "fd9fb5fda2c48f34ee2234e62e0d34ddfb72fa1a572fb3612ac8b667d5141c32"
+      },
+      {
+        "anomaly_type": "thread",
+        "category": "carpet",
+        "image_identity": "carpet/test/thread/003.png",
+        "image_label": 1,
+        "mask_identity": "carpet/ground_truth/thread/003_mask.png",
+        "membership": "training",
+        "stable_sample_id": "739b37724fed11a806b02d4251b6947c55f72437a73706afd0b919516e01f3ab"
+      },
+      {
+        "anomaly_type": "metal_contamination",
+        "category": "carpet",
+        "image_identity": "carpet/test/metal_contamination/011.png",
+        "image_label": 1,
+        "mask_identity": "carpet/ground_truth/metal_contamination/011_mask.png",
+        "membership": "training",
+        "stable_sample_id": "58bd40b827230b0647a47736e3fa703a2207a5756c12d5b244c09ea0c3b11ece"
+      },
+      {
+        "anomaly_type": "metal_contamination",
+        "category": "carpet",
+        "image_identity": "carpet/test/metal_contamination/012.png",
+        "image_label": 1,
+        "mask_identity": "carpet/ground_truth/metal_contamination/012_mask.png",
+        "membership": "training",
+        "stable_sample_id": "1805392e5bbb2c23955b65954ca41529375d8e4b5dcb6cdb5843f6b45299377e"
+      }
+    ]
+  },
+  "status": "passed",
+  "transfer_direction": "mvtec_to_visa",
+  "worktree_clean": true
+}

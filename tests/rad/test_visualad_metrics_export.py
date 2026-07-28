@@ -11,7 +11,11 @@ import pytest
 import torch
 
 from rad.evaluation.paper_metrics import safe_aupro
-from utils.metrics import cal_pro_score, compute_metrics
+from tests.rad.contracts.utils_metrics import load_metrics_module
+
+_metrics = load_metrics_module()
+cal_pro_score = _metrics.cal_pro_score
+compute_metrics = _metrics.compute_metrics
 
 AUPRO_MAX_FPR = 0.3
 AUPRO_STEPS = 200
@@ -141,7 +145,7 @@ def test_compute_metrics_does_not_replace_aupro_with_default_zero() -> None:
     import inspect
     import re
 
-    from utils import metrics as metrics_mod
+    metrics_mod = load_metrics_module()
 
     source = inspect.getsource(metrics_mod.compute_metrics)
     assert "cal_pro_score(" in source

@@ -6,7 +6,7 @@ backbone:
   candidate_layers: [6, 12, 18, 24]
 data:
   dataset: mvtec
-  data_path: /root/autodl-tmp/data/mvtec
+  data_path: data/mvtec
   split_manifest: artifacts/splits/mvtec_seed111.jsonl
 teacher:
   checkpoint_path: weight/train_on_mvtec/CLIP.pth
@@ -22,8 +22,8 @@ fusion:
   allow_missing_shapley: false
   require_descriptor_stats: true
   fail_if_no_gate_passes: true
-  # Unit-interval metric drop (0.2 pp == 0.002). Zero means no regression allowed.
-  max_pixel_ap_drop: 0.0
+  # Primary scientific gate: 0.2 pp == 0.002 on [0,1] pixel AP.
+  max_pixel_ap_drop: 0.002
   train_depths: [12, 18, 24]
   lambda_loc:
     12: 0.5

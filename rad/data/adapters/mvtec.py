@@ -59,9 +59,20 @@ class MVTecAdapter:
         if not self.root.is_dir():
             raise DatasetIntegrityError(f"MVTec root is not a directory: {self.root}")
 
-    def records(self, split: str = "test") -> Sequence[EvaluationRecord]:
+    def records(
+        self,
+        split: str = "test",
+        *,
+        categories: Sequence[str] | None = None,
+    ) -> Sequence[EvaluationRecord]:
         records: list[EvaluationRecord] = []
+        selected_categories = set(categories) if categories is not None else None
         for category_dir in sorted(p for p in self.root.iterdir() if p.is_dir()):
+            if (
+                selected_categories is not None
+                and category_dir.name not in selected_categories
+            ):
+                continue
             split_dir = category_dir / split
             if not split_dir.is_dir():
                 continue

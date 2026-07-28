@@ -6,7 +6,7 @@ backbone:
   candidate_layers: [6, 12, 18, 24]
 data:
   dataset: mvtec
-  data_path: /root/autodl-tmp/data/mvtec
+  data_path: data/mvtec
   split_manifest: artifacts/splits/mvtec_seed111.jsonl
 teacher:
   checkpoint_path: weight/train_on_mvtec/CLIP.pth
@@ -41,6 +41,14 @@ lse:
   patience: 10
   output_dir: artifacts/targets/gain
   train_output_dir: artifacts/checkpoints/lse
+selector:
+  mask_mode: train_and_infer
+  signals:
+    response: true
+    uncertainty: true
+    stability: true
+    complementarity: true
+    token_separation: true
 zero_shot:
   source_dataset: mvtec
   target_datasets: [visa]

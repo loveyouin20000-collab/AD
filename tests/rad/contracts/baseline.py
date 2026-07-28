@@ -20,6 +20,12 @@ REQUIRED_BASELINE_METRIC_KEYS = (
     "pixel_aupro",
 )
 
+AUPRO_PROVENANCE_KEYS = (
+    "pixel_aupro_aggregation",
+    "pixel_aupro_max_fpr",
+    "pixel_aupro_steps",
+)
+
 LOG_COLUMN_TO_METRIC_KEY = {
     "Pixel-AUROC": "pixel_auroc",
     "Pixel-F1": "pixel_f1_max",
@@ -105,16 +111,22 @@ def normalized_metrics_from_log_percentages(
     }
 
 
-def assert_dry_run_resolves_train_and_test(stdout: str) -> None:
-    assert "train.py" in stdout
-    assert "features_list 6 12 18 24" in stdout
+def assert_baseline_dry_run_contract(
+    stdout: str,
+    *,
+    checkpoint: str | None = None,
+    output_dir: Path | None = None,
+) -> None:
+    """Dry-run must resolve commands and write no artifacts."""
     assert "test.py" in stdout
-
-
-def assert_checkpoint_dry_run_skips_train(stdout: str, checkpoint: str) -> None:
-    assert "SKIPPED (using --checkpoint)" in stdout
-    assert checkpoint in stdout
-    assert "test.py" in stdout
+    if checkpoint is not None:
+        assert "SKIPPED (using --checkpoint)" in stdout
+        assert checkpoint in stdout
+    else:
+        assert "train.py" in stdout
+        assert "features_list 6 12 18 24" in stdout
+    if output_dir is not None:
+        assert_no_baseline_artifacts(output_dir)
 
 
 def assert_no_baseline_artifacts(output_dir: Path) -> None:
@@ -123,7 +135,7 @@ def assert_no_baseline_artifacts(output_dir: Path) -> None:
     assert list(output_dir.rglob("*")) == []
 
 
-def assert_completed_baseline_manifest(manifest: dict[str, Any]) -> None:
+def assert_completed_manifest_contract(manifest: dict[str, Any]) -> None:
     assert manifest.get("status") == "completed"
     for key in (
         "schema_version",
@@ -137,13 +149,54 @@ def assert_completed_baseline_manifest(manifest: dict[str, Any]) -> None:
     ):
         assert key in manifest, f"missing manifest key: {key}"
     assert manifest["schema_version"] == 1
+    assert manifest["checkpoint_sha256"]
+
+
+def assert_checkpoint_after_training_contract(
+    *,
+    checkpoint_path: Path,
+    manifest: dict[str, Any],
+    train_was_run: bool = True,
+) -> None:
+    """Training path must materialize checkpoint before evaluation."""
+    assert checkpoint_path.is_file(), f"checkpoint missing after training: {checkpoint_path}"
+    assert_completed_manifest_contract(manifest)
+    if train_was_run:
+        assert manifest.get("eval_only") is not True
+        assert manifest["commands"]["train"] is not None
+
+
+def assert_external_checkpoint_contract(
+    manifest: dict[str, Any],
+    *,
+    calls: list[list[str]] | None = None,
+) -> None:
+    """External checkpoint path must skip training."""
+    assert manifest.get("eval_only") is True
+    assert manifest["commands"]["train"] is None
+    assert_completed_manifest_contract(manifest)
+    if calls is not None:
+        assert len(calls) == 1, "external checkpoint must run evaluation only once"
+
+
+def assert_metric_provenance_contract(metrics: dict[str, Any]) -> None:
+    """Required metrics must be finite and AUPRO provenance must be present."""
+    assert_required_metrics_finite(metrics)
+    for key in AUPRO_PROVENANCE_KEYS:
+        assert key in metrics, f"missing AUPRO provenance key: {key}"
+        value = metrics[key]
+        if key == "pixel_aupro_aggregation":
+            assert isinstance(value, str) and value
+        else:
+            assert isinstance(value, int | float), f"{key} is not numeric"
+            assert math.isfinite(float(value)), f"{key} is not finite"
 
 
 def assert_required_metrics_finite(metrics: dict[str, Any]) -> None:
     for key in REQUIRED_BASELINE_METRIC_KEYS:
         assert key in metrics, f"missing metric key: {key}"
         value = metrics[key]
-        assert isinstance(value, (int, float)), f"{key} is not numeric"
+        assert isinstance(value, int | float), f"{key} is not numeric"
         assert math.isfinite(float(value)), f"{key} is not finite"
 
 

@@ -16,6 +16,7 @@ REPO_ROOT = Path(__file__).resolve().parents[1]
 if str(REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(REPO_ROOT))
 
+from rad.artifacts import assert_json_artifact_eligible_for_evaluation  # noqa: E402
 from rad.config import ExperimentConfig  # noqa: E402
 from rad.data.teacher_inference import load_teacher_bundle  # noqa: E402
 from rad.inference.adaptive_engine import AdaptiveEngine  # noqa: E402
@@ -124,6 +125,38 @@ def build_engine(
     stats_path = _resolve(adaptive["descriptor_stats"])
     normalizer = DescriptorNormalizer.load(stats_path) if stats_path.is_file() else None
 
+    from rad.models.selector_signals import (
+        build_default_selector_signal_layout,
+        parse_enabled_signals,
+    )
+
+    selector_cfg = dict(raw.get("selector", {}))
+    method_cfg = dict(raw.get("method", {}))
+    enabled_signals = parse_enabled_signals(selector_cfg.get("signals"))
+    layout = build_default_selector_signal_layout()
+    mask_mode = str(selector_cfg.get("mask_mode", "train_and_infer"))
+    ckpt_signals = lse_ckpt.get("selector_signals")
+    if (
+        mask_mode == "train_and_infer"
+        and isinstance(ckpt_signals, dict)
+        and parse_enabled_signals(ckpt_signals) != enabled_signals
+    ):
+        raise ValueError(
+            "LSE checkpoint selector_signals do not match config under "
+            "mask_mode=train_and_infer (primary scientific ablation A). "
+            "Retrain LSE with the same selector.signals map, or use "
+            "mask_mode=infer_only for a named stress test."
+        )
+    fusion_mode = str(
+        method_cfg.get("fusion")
+        or adaptive.get("fusion_mode")
+        or selector_cfg.get("fusion_mode")
+        or "dynamic"
+    )
+    fixed_exit_depth = method_cfg.get("exit_depth", adaptive.get("fixed_exit_depth"))
+    if fixed_exit_depth is not None:
+        fixed_exit_depth = int(fixed_exit_depth)
+
     engine = AdaptiveEngine(
         visual=visual,
         map_generator=CheckpointMapGenerator(
@@ -140,6 +173,10 @@ def build_engine(
         image_size=image_size,
         normalizer=normalizer,
         temperature=temperature,
+        enabled_signals=enabled_signals,
+        selector_layout=layout,
+        fusion_mode=fusion_mode,
+        fixed_exit_depth=fixed_exit_depth,
     )
     return engine.to(device)
 
@@ -193,8 +230,13 @@ def main() -> int:
         raise SystemExit(f"missing LSE checkpoint: {lse_path}")
     if not dlcm_path.is_file():
         raise SystemExit(f"missing DLCM checkpoint: {dlcm_path}")
-    if not profiles_path.is_file():
-        raise SystemExit(f"missing policy profiles: {profiles_path}")
+
+    assert_json_artifact_eligible_for_evaluation(
+        profiles_path, kind="policy profiles"
+    )
+    assert_json_artifact_eligible_for_evaluation(
+        _resolve(adaptive["descriptor_stats"]), kind="descriptor statistics"
+    )
 
     profile = load_profile(profiles_path, profile_name)
     engine = build_engine(raw=raw, cfg=cfg, device=device, profile=profile)

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import shlex
 import subprocess
 import sys
 from pathlib import Path
@@ -8,32 +9,84 @@ import pytest
 import yaml
 
 from rad.evaluation.experiment_matrix import (
-    REQUIRED_ABLATIONS,
-    REQUIRED_METHODS,
     ExperimentMatrix,
+    assign_devices,
     estimate_gpu_hours,
     load_experiment_matrix,
     validate_row_immutable,
 )
+from tests.rad.contracts.experiment_matrix import (
+    assert_dataset_backed_evaluation_row,
+    assert_fixed_exit_semantics,
+    assert_no_synthetic_paper_evaluation,
+    assert_required_methods_and_ablations_present,
+    assert_selector_ablation_semantics,
+    assert_unique_experiment_ids,
+)
 
 REPO = Path(__file__).resolve().parents[2]
 EXPERIMENTS_YAML = REPO / "configs" / "rad" / "experiments.yaml"
+PYTHON = sys.executable
+
+
+def _resolve_original_visualad_argv() -> list[str]:
+    matrix = load_experiment_matrix(EXPERIMENTS_YAML)
+    plans = assign_devices(matrix, num_gpus=1, row_ids=["original_visualad"])
+    assert len(plans) == 1
+    argv = shlex.split(plans[0]["command"])
+    # Matrix commands are authored as `python tools/...`; normalize to the
+    # interpreter under test so argv validation is hermetic.
+    if argv and Path(argv[0]).name.startswith("python"):
+        argv = [PYTHON, *argv[1:]]
+    return argv
+
+
+def test_original_visualad_matrix_argv_supplies_explicit_data_paths(tmp_path: Path):
+    argv = _resolve_original_visualad_argv()
+    assert "tools/reproduce_baseline.py" in " ".join(argv)
+    assert "--train-data-path" in argv
+    assert "--test-data-path" in argv
+    train_idx = argv.index("--train-data-path")
+    test_idx = argv.index("--test-data-path")
+    train_path = argv[train_idx + 1]
+    test_path = argv[test_idx + 1]
+    assert not train_path.startswith("/root/autodl-tmp")
+    assert not test_path.startswith("/root/autodl-tmp")
+    assert train_path.startswith("data/")
+    assert test_path.startswith("data/")
+
+    # Validate the actual final argv through the baseline entrypoint (dry-run).
+    dry_argv = [
+        *argv[1:],  # drop interpreter; subprocess supplies PYTHON
+        "--dry-run",
+        "--output-dir",
+        str(tmp_path / "original_visualad_dry"),
+    ]
+    # Ensure --dry-run is after the script path; argv[1] is tools/reproduce_baseline.py
+    proc = subprocess.run(
+        [PYTHON, *dry_argv],
+        cwd=str(REPO),
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    assert proc.returncode == 0, proc.stderr + proc.stdout
+    assert "train_data_path:" in proc.stdout
+    assert "test_data_path:" in proc.stdout
+    assert train_path in proc.stdout
+    assert test_path in proc.stdout
 
 
 def test_experiments_yaml_exists_and_loads():
     assert EXPERIMENTS_YAML.is_file()
     matrix = load_experiment_matrix(EXPERIMENTS_YAML)
     assert isinstance(matrix, ExperimentMatrix)
-    assert len(matrix.rows) >= len(REQUIRED_METHODS) + len(REQUIRED_ABLATIONS)
+    assert_required_methods_and_ablations_present(matrix)
 
 
 def test_required_methods_and_ablations_present():
     matrix = load_experiment_matrix(EXPERIMENTS_YAML)
-    ids = {r.id for r in matrix.rows}
-    missing_m = set(REQUIRED_METHODS) - ids
-    missing_a = set(REQUIRED_ABLATIONS) - ids
-    assert not missing_m, f"missing methods: {sorted(missing_m)}"
-    assert not missing_a, f"missing ablations: {sorted(missing_a)}"
+    assert_required_methods_and_ablations_present(matrix)
 
 
 def test_each_row_is_complete_immutable_config():
@@ -44,8 +97,7 @@ def test_each_row_is_complete_immutable_config():
 
 def test_row_ids_unique():
     matrix = load_experiment_matrix(EXPERIMENTS_YAML)
-    ids = [r.id for r in matrix.rows]
-    assert len(ids) == len(set(ids))
+    assert_unique_experiment_ids(matrix)
 
 
 def test_estimate_gpu_hours_accounts_for_dual_gpus():
@@ -83,9 +135,7 @@ def test_dry_run_cli_prints_commands_and_gpu_hours(tmp_path: Path):
     assert "gpu-hours" in out or "gpu_hours" in out
     assert "wall" in out
     assert "command" in out or "python" in out
-    # dual GPU noted
     assert "2" in proc.stdout
-    # no target tuning
     raw = yaml.safe_load(EXPERIMENTS_YAML.read_text())
     assert raw["defaults"]["zero_shot"]["target_tuning"] is False
 
@@ -100,3 +150,50 @@ def test_joint_ablation_row_uses_joint_entrypoint():
     assert row.estimated_gpu_hours == 2.5
     assert row.raw.get("primary_pipeline") is False
     assert row.raw.get("requires_gates") == ["fusion_stage_passed", "lse_stage_passed"]
+
+
+def test_fixed_exit_rows_have_fair_semantics():
+    matrix = load_experiment_matrix(EXPERIMENTS_YAML)
+    assert_fixed_exit_semantics(matrix)
+
+
+def test_selector_ablation_rows_have_complete_signal_maps():
+    matrix = load_experiment_matrix(EXPERIMENTS_YAML)
+    assert_selector_ablation_semantics(matrix)
+
+
+def test_paper_evaluation_method_rows_use_dataset_cli():
+    matrix = load_experiment_matrix(EXPERIMENTS_YAML)
+    assert_no_synthetic_paper_evaluation(matrix)
+
+
+def test_dry_run_effective_configs_expose_signal_maps(tmp_path: Path):
+    proc = subprocess.run(
+        [
+            sys.executable,
+            str(REPO / "tools" / "run_experiment_matrix.py"),
+            "--config",
+            str(EXPERIMENTS_YAML),
+            "--dry-run",
+            "--num-gpus",
+            "1",
+            "--ids",
+            "selector_full,selector_without_stability,fixed_exit_12_equal",
+            "--output-dir",
+            str(tmp_path / "matrix"),
+        ],
+        cwd=str(REPO),
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    assert proc.returncode == 0, proc.stderr + proc.stdout
+    assert "smoke_adaptive_engine" not in proc.stdout
+    assert "evaluate_adaptive.py" not in proc.stdout
+    assert "evaluate_adaptive_dataset.py" in proc.stdout
+
+    matrix = load_experiment_matrix(EXPERIMENTS_YAML)
+    assert_fixed_exit_semantics(matrix)
+    assert_selector_ablation_semantics(matrix)
+    assert_dataset_backed_evaluation_row(matrix.row_by_id("fixed_exit_12_equal"))
+    assert_dataset_backed_evaluation_row(matrix.row_by_id("selector_without_stability"))

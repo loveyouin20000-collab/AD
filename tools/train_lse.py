@@ -17,6 +17,7 @@ REPO_ROOT = Path(__file__).resolve().parents[1]
 if str(REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(REPO_ROOT))
 
+from rad.artifacts import assert_json_artifact_eligible_for_evaluation  # noqa: E402
 from rad.config import ExperimentConfig  # noqa: E402
 from rad.data.cache_dataset import TeacherCacheDataset  # noqa: E402
 from rad.models.descriptors import (  # noqa: E402
@@ -26,6 +27,13 @@ from rad.models.descriptors import (  # noqa: E402
 )
 from rad.models.dlcm import DLCM, sum_preserving_fusion  # noqa: E402
 from rad.models.lse import LSE  # noqa: E402
+from rad.models.selector_signals import (  # noqa: E402
+    SelectorSignalLayout,
+    apply_selector_signal_mask,
+    build_default_selector_signal_layout,
+    parse_enabled_signals,
+    selector_signal_provenance,
+)
 from rad.trainers.lse_trainer import LSETrainer  # noqa: E402
 
 
@@ -83,8 +91,12 @@ def build_states_for_sample(
     candidate_layers: tuple[int, ...],
     early_depths: tuple[int, ...],
     device: torch.device,
+    enabled_signals: dict[str, bool] | None = None,
+    selector_layout: SelectorSignalLayout | None = None,
 ) -> dict[int, torch.Tensor]:
     """Return depth -> state [state_dim] using mean-pooled layer desc + context (18+8)."""
+    signals = parse_enabled_signals(enabled_signals)
+    layout = selector_layout or build_default_selector_signal_layout()
     prev_fused: torch.Tensor | None = None
     states: dict[int, torch.Tensor] = {}
     for depth in sorted(early_depths):
@@ -108,8 +120,11 @@ def build_states_for_sample(
         )
         weights = dlcm(layer_desc, ctx, layer_ids, valid)
         fused = sum_preserving_fusion(maps, weights, valid)
-        # state = mean pool layer descriptors + context
-        state = torch.cat([layer_desc.mean(dim=1), ctx], dim=-1)[0].cpu()
+        # Primary scientific ablation: mask during training materialization (A).
+        lse_desc = apply_selector_signal_mask(
+            layer_desc, layout=layout, enabled_signals=signals
+        )
+        state = torch.cat([lse_desc.mean(dim=1), ctx], dim=-1)[0].cpu()
         states[int(depth)] = state
         prev_fused = fused.detach()
     return states
@@ -150,6 +165,8 @@ def materialize_rows(
     early_depths: tuple[int, ...],
     device: torch.device,
     limit: int | None,
+    enabled_signals: dict[str, bool] | None = None,
+    selector_layout: SelectorSignalLayout | None = None,
 ) -> list[dict[str, Any]]:
     n = len(cache) if limit is None else min(len(cache), limit)
     rows: list[dict[str, Any]] = []
@@ -170,6 +187,8 @@ def materialize_rows(
             candidate_layers=candidate_layers,
             early_depths=early_depths,
             device=device,
+            enabled_signals=enabled_signals,
+            selector_layout=selector_layout,
         )
         for depth in early_depths:
             g = rec["gains"][depth]
@@ -276,8 +295,32 @@ def main() -> int:
     print(f"epochs: {epochs} patience: {patience}")
     print(f"early_depths: {early_depths} state_dim: {state_dim}")
 
+    selector_cfg = dict(raw.get("selector", {}))
+    selector_layout = build_default_selector_signal_layout()
+    enabled_signals = parse_enabled_signals(selector_cfg.get("signals"))
+    mask_mode = str(selector_cfg.get("mask_mode", "train_and_infer"))
+    if mask_mode not in {"train_and_infer", "infer_only"}:
+        raise SystemExit(f"unsupported selector.mask_mode: {mask_mode}")
+    # Primary scientific ablation uses train_and_infer (A). infer_only is stress-only.
+    train_time_signals = (
+        enabled_signals if mask_mode == "train_and_infer" else parse_enabled_signals(None)
+    )
+    selector_prov = selector_signal_provenance(
+        enabled_signals=enabled_signals,
+        layout=selector_layout,
+        mask_applied=True,
+    )
+    print(f"selector_mask_mode: {mask_mode}")
+    print(f"selector_signals: {json.dumps(enabled_signals)}")
+    print(f"selector_signal_layout_hash: {selector_prov['selector_signal_layout_hash']}")
+
     if args.dry_run:
         return 0
+
+    if stats_path:
+        assert_json_artifact_eligible_for_evaluation(
+            stats_path, kind="descriptor statistics"
+        )
 
     if not train_gains_path.is_file():
         raise SystemExit(f"missing train gain targets: {train_gains_path}")
@@ -319,6 +362,8 @@ def main() -> int:
         early_depths=early_depths,
         device=device,
         limit=args.limit_train,
+        enabled_signals=train_time_signals,
+        selector_layout=selector_layout,
     )
     cal_rows = materialize_rows(
         cache=cal_cache,
@@ -331,6 +376,8 @@ def main() -> int:
         early_depths=early_depths,
         device=device,
         limit=args.limit_cal,
+        enabled_signals=train_time_signals,
+        selector_layout=selector_layout,
     )
     if train_rows:
         print(f"tensor_shapes state={tuple(train_rows[0]['state'].shape)}")
@@ -403,6 +450,8 @@ def main() -> int:
                     "git_sha": sha,
                     "checkpoint_hash": checkpoint_hash,
                     "split_manifest_hash": train_cache.meta.get("split_hash"),
+                    "selector_mask_mode": mask_mode,
+                    **selector_prov,
                 },
                 best_path,
             )
@@ -429,6 +478,8 @@ def main() -> int:
         "git_sha": sha,
         "checkpoint_hash": checkpoint_hash,
         "seed": seed,
+        "selector_mask_mode": mask_mode,
+        **selector_prov,
     }
     (output_dir / "summary.json").write_text(json.dumps(summary, indent=2) + "\n")
     print(json.dumps(summary, indent=2))

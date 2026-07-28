@@ -1,0 +1,19 @@
+{
+  "artifact_kind": "test_fixture",
+  "eligible_for_evaluation": false,
+  "schema_version": 1,
+  "note": "CPU CI reference only; real evaluation must reject this fixture.",
+  "profiles": {
+    "balanced": {
+      "name": "balanced",
+      "gain_threshold": 0.02,
+      "kappa": 0.5,
+      "map_uncertainty_threshold": 0.5,
+      "image_confidence_margin": 0.4,
+      "stability_threshold": 1.0,
+      "require_map_uncertainty": true,
+      "require_image_confidence": true,
+      "require_stability": false
+    }
+  }
+}

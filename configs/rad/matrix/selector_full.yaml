@@ -1,0 +1,13 @@
+method:
+  name: selector_full
+  fusion: dynamic
+selector:
+  mask_mode: train_and_infer
+  signals:
+    response: true
+    uncertainty: true
+    stability: true
+    complementarity: true
+    token_separation: true
+adaptive:
+  lse_checkpoint: artifacts/checkpoints/lse/selector_full/lse_best.pt

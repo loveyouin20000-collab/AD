@@ -1,26 +1,25 @@
 from __future__ import annotations
 
 import json
+import subprocess
+import sys
 from pathlib import Path
 
-import numpy as np
 import pytest
+import yaml
 
-from rad.evaluation.export import (
-    TransferSamplePrediction,
-    export_transfer_predictions,
-)
 from rad.evaluation.zero_shot import (
     TargetAccessError,
-    assert_policy_unchanged,
-    boundary_f_score,
-    compute_stratified_metrics,
-    compute_transfer_metrics,
     forbid_target_access_during_calibration,
     load_frozen_policy_profile,
-    pixel_average_precision,
-    pro_score_proxy,
 )
+from tests.rad.contracts.zero_shot import (
+    assert_source_policy_frozen,
+    assert_target_tuning_rejected,
+)
+
+REPO_ROOT = Path(__file__).resolve().parents[2]
+PYTHON = sys.executable
 
 
 def test_forbid_target_access_during_calibration_monkeypatch():
@@ -32,7 +31,6 @@ def test_forbid_target_access_during_calibration_monkeypatch():
         source_dataset=source,
         target_datasets=targets,
     ) as guard:
-        # Source paths are allowed
         guard.check_path("/root/autodl-tmp/data/mvtec/bottle/train/good/000.png")
         guard.check_sample_id("mvtec/bottle/good/000")
 
@@ -62,111 +60,44 @@ def test_load_frozen_policy_is_unchanged(tmp_path: Path):
         "seed": 111,
     }
     path = tmp_path / "policy_profiles.json"
-    path.write_text(json.dumps(profiles))
-    profile, digest = load_frozen_policy_profile(path, "balanced")
-    assert profile.name == "balanced"
-    assert_policy_unchanged(path, "balanced", digest)
-    # Mutating file must be detected
+    path.write_text(json.dumps(profiles), encoding="utf-8")
+    _profile, digest = load_frozen_policy_profile(path, "balanced")
+    assert_source_policy_frozen(path, "balanced", digest)
     profiles["profiles"]["balanced"]["gain_threshold"] = 0.99
-    path.write_text(json.dumps(profiles))
+    path.write_text(json.dumps(profiles), encoding="utf-8")
     with pytest.raises(ValueError, match="changed"):
-        assert_policy_unchanged(path, "balanced", digest)
+        assert_source_policy_frozen(path, "balanced", digest)
 
 
-def test_transfer_metrics_and_stratification_hand_fixture():
-    # Two samples: early exit good, full-depth anomaly with residual gain
-    preds = np.array(
+def test_target_tuning_true_is_rejected(tmp_path: Path) -> None:
+    config_path = tmp_path / "zero_shot_target_tuning.yaml"
+    payload = yaml.safe_load(
+        (REPO_ROOT / "configs/rad/zero_shot_transfer.yaml").read_text(encoding="utf-8")
+    )
+    payload["zero_shot"]["target_tuning"] = True
+    config_path.write_text(yaml.safe_dump(payload, sort_keys=False), encoding="utf-8")
+
+    proc = subprocess.run(
         [
-            [[0.1, 0.1], [0.1, 0.1]],
-            [[0.9, 0.1], [0.1, 0.1]],
+            PYTHON,
+            str(REPO_ROOT / "tools/evaluate_zero_shot_transfer.py"),
+            "--config",
+            str(config_path),
+            "--seed",
+            "111",
+            "--output-dir",
+            str(tmp_path / "zs_out"),
+            "--dry-run",
         ],
-        dtype=np.float64,
+        cwd=str(REPO_ROOT),
+        capture_output=True,
+        text=True,
+        check=False,
     )
-    full = np.array(
-        [
-            [[0.1, 0.1], [0.1, 0.1]],
-            [[0.95, 0.05], [0.05, 0.05]],
-        ],
-        dtype=np.float64,
-    )
-    masks = np.array(
-        [
-            [[0, 0], [0, 0]],
-            [[1, 0], [0, 0]],
-        ],
-        dtype=np.float64,
-    )
-    depths = np.array([12, 24])
-    gains = np.array([0.0, 0.2])
-    labels = np.array([0, 1])
-
-    metrics = compute_transfer_metrics(
-        adaptive_maps=preds,
-        full_depth_maps=full,
-        masks=masks,
-        selected_depths=depths,
-        residual_gains=gains,
-        image_labels=labels,
-        epsilon=0.05,
-        full_depth=24,
-    )
-    assert "pixel_ap_drop" in metrics
-    assert "pixel_aupro_drop" in metrics
-    assert "boundary_f_score_drop" in metrics
-    assert "adaptive" in metrics and "full" in metrics
-    assert "pixel_aupro" in metrics["adaptive"]
-    assert "pro_drop" not in metrics
-    assert "false_safe_exit_rate" in metrics
-    assert "expected_depth" in metrics
-    assert metrics["exit_histogram"] == {12: 1, 24: 1}
-
-    strata = compute_stratified_metrics(
-        adaptive_maps=preds,
-        full_depth_maps=full,
-        masks=masks,
-        selected_depths=depths,
-        residual_gains=gains,
-        image_labels=labels,
-        images=np.stack([preds, preds], axis=0),  # proxy images
-        epsilon=0.05,
-        full_depth=24,
-    )
-    assert "normal" in strata and "anomalous" in strata
-    assert "anomaly_area" in strata
-    assert "contrast" in strata
-    assert "boundary_complexity" in strata
+    assert_target_tuning_rejected(proc)
 
 
-def test_export_writes_predictions_before_summary(tmp_path: Path):
-    rows = [
-        TransferSamplePrediction(
-            sample_id="visa/a",
-            dataset="visa",
-            selected_depth=12,
-            image_label=0,
-            residual_gain=0.0,
-            anomaly_area=0.0,
-            contrast_proxy=0.1,
-            boundary_complexity=0.0,
-        )
-    ]
-    out = tmp_path / "transfer"
-    summary = export_transfer_predictions(rows, output_dir=out, full_depth=24, epsilon=0.05)
-    pred_path = out / "per_sample_predictions.jsonl"
-    summary_path = out / "summary.json"
-    assert pred_path.is_file()
-    assert summary_path.is_file()
-    assert pred_path.stat().st_mtime <= summary_path.stat().st_mtime
-    assert summary["n"] == 1
-    assert "depth_distribution" in summary
-
-
-def test_metric_helpers_hand_values():
-    pred = np.array([[0.9, 0.1], [0.1, 0.1]], dtype=np.float64)
-    mask = np.array([[1.0, 0.0], [0.0, 0.0]], dtype=np.float64)
-    ap = pixel_average_precision(pred, mask)
-    assert 0.0 <= ap <= 1.0
-    bf = boundary_f_score(pred, mask)
-    assert 0.0 <= bf <= 1.0
-    pro = pro_score_proxy(pred, mask)
-    assert 0.0 <= pro <= 1.0
+def test_pro_score_proxy_is_absent_from_zero_shot_reporting_path() -> None:
+    src = (REPO_ROOT / "rad/evaluation/zero_shot.py").read_text(encoding="utf-8")
+    reporting = src.split("def compute_transfer_metrics", 1)[1]
+    assert "pro_score_proxy" not in reporting

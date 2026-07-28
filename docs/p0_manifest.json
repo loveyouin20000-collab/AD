@@ -1,0 +1,59 @@
+{
+  "schema_version": 1,
+  "status": "p0_verified_cpu",
+  "verified_code_sha": "4d085cb1ec1cdd06628423fedacb505507bbcd92",
+  "audit_document_commit_sha": null,
+  "audit_date": "2026-07-20",
+  "environment": {
+    "python": "3.10.20",
+    "pytorch": "2.0.0+cu118",
+    "os": "Linux 5.15.0-101-generic",
+    "ci_workflow_sha256": "fcc19c23a842891512b0956dbcead6851175b61c3fc9e60fb1aba584094a8ba3"
+  },
+  "validated": {
+    "cpu_test_contracts": true,
+    "baseline_mvtec_to_visa": true,
+    "baseline_visa_to_mvtec": true,
+    "paper_metrics": true,
+    "dataset_adapters_mvtec_visa": true,
+    "fusion_fail_closed": true,
+    "selector_signal_masking": true,
+    "experiment_matrix_dry_run": true,
+    "legacy_test_contract_sync": true,
+    "artifact_hygiene": true
+  },
+  "not_yet_validated": {
+    "cuda_staged_equivalence": true,
+    "full_adaptive_training": true,
+    "autodl_gate_c": true,
+    "teacher_cache_full_scale": true,
+    "shapley_full_source_dataset": true,
+    "full_dlcm_training": true,
+    "residual_gain_target_generation_full_scale": true,
+    "full_lse_training": true,
+    "source_policy_calibration": true,
+    "eight_method_pilot": true,
+    "adaptive_latency_gains": true,
+    "paper_result_matrix": true
+  },
+  "test_summary": {
+    "passed": 270,
+    "skipped": 2,
+    "failed": 0,
+    "duration_seconds": 47.8
+  },
+  "ci_checks": {
+    "ruff": "pass",
+    "mypy": "pass",
+    "export_paper_tables_dry_run": "pass",
+    "run_experiment_matrix_dry_run": "pass"
+  },
+  "baseline_acceptance_files": [
+    "docs/baseline_acceptance/mvtec_to_visa_seed111_official.json",
+    "docs/baseline_acceptance/visa_to_mvtec_seed111_official.json"
+  ],
+  "traceability_docs": [
+    "docs/traceability.md",
+    "docs/p0-research-validity-audit.md"
+  ]
+}

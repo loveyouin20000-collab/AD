@@ -8,8 +8,6 @@ batch_size: 2
 image_size: 518
 train:
   dataset: visa
-  data_path: /root/autodl-tmp/data/Visa
 test:
   dataset: mvtec
-  data_path: /root/autodl-tmp/data/mvtec
 output_dir: artifacts/baseline/visa_to_mvtec

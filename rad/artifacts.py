@@ -8,7 +8,27 @@ import tempfile
 from pathlib import Path
 from typing import Any
 
-from rad.errors import OutputProtectionError
+from rad.errors import ArtifactIntegrityError, OutputProtectionError
+
+
+def assert_json_artifact_eligible_for_evaluation(
+    path: Path | str,
+    *,
+    kind: str,
+) -> None:
+    """Reject tracked test fixtures before real evaluation or training."""
+    target = Path(path)
+    if not target.is_file():
+        raise ArtifactIntegrityError(f"missing {kind}: {target}")
+    raw = json.loads(target.read_text(encoding="utf-8"))
+    if raw.get("artifact_kind") == "test_fixture":
+        raise ArtifactIntegrityError(
+            f"{kind} {target} is a test fixture and cannot be used for evaluation"
+        )
+    if raw.get("eligible_for_evaluation") is False:
+        raise ArtifactIntegrityError(
+            f"{kind} {target} is marked eligible_for_evaluation=false"
+        )
 
 
 def atomic_write_json(path: Path | str, payload: Any) -> None:

@@ -33,3 +33,6 @@ class MetricComputationError(RADContractError):
 
 class ScientificGateError(RADContractError):
     """Scientific gate failed after a completed execution attempt."""
+
+
+ARTIFACT_INTEGRITY_EXIT_CODE = 3

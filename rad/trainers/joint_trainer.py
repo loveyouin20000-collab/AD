@@ -19,6 +19,12 @@ from rad.models.descriptors import (
 )
 from rad.models.dlcm import DLCM, sum_preserving_fusion
 from rad.models.lse import LSE
+from rad.models.selector_signals import (
+    SelectorSignalLayout,
+    apply_selector_signal_mask,
+    build_default_selector_signal_layout,
+    parse_enabled_signals,
+)
 from rad.targets.residual_gain import build_gain_target_record
 from rad.trainers.fusion_trainer import FusionLossWeights, compute_fusion_objective
 from rad.trainers.lse_trainer import compute_lse_objective
@@ -253,6 +259,8 @@ class JointTrainer(nn.Module):
         fusion_loss_weights: FusionLossWeights | None = None,
         normalizer: DescriptorNormalizer | None = None,
         grad_clip_norm: float = 5.0,
+        enabled_signals: Mapping[str, bool] | None = None,
+        selector_layout: SelectorSignalLayout | None = None,
     ) -> None:
         super().__init__()
         self.dlcm = dlcm
@@ -275,6 +283,9 @@ class JointTrainer(nn.Module):
         self.sufficiency_weight = float(sufficiency_weight)
         self.fusion_loss_weights = fusion_loss_weights or FusionLossWeights()
         self.grad_clip_norm = float(grad_clip_norm)
+        self.enabled_signals = parse_enabled_signals(enabled_signals)
+        self.selector_layout = selector_layout or build_default_selector_signal_layout()
+        self.selector_layout.validate(descriptor_dim=18)
 
     def trainable_parameters(self) -> Iterator[nn.Parameter]:
         yield from self.dlcm.parameters()
@@ -331,7 +342,12 @@ class JointTrainer(nn.Module):
             )
             weights = self.dlcm(layer_desc, ctx, layer_ids, valid_mask)
             fused = sum_preserving_fusion(maps, weights, valid_mask)
-            states[depth] = torch.cat([layer_desc.mean(dim=1), ctx], dim=-1)
+            lse_desc = apply_selector_signal_mask(
+                layer_desc,
+                layout=self.selector_layout,
+                enabled_signals=self.enabled_signals,
+            )
+            states[depth] = torch.cat([lse_desc.mean(dim=1), ctx], dim=-1)
             prev_fused = fused
 
         return states

@@ -8,6 +8,28 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 
+# Authoritative 18-D layer-descriptor feature order (must match stack() below).
+LAYER_DESCRIPTOR_FEATURE_NAMES: tuple[str, ...] = (
+    "margin_mean",
+    "margin_std",
+    "margin_max",
+    "margin_topk",
+    "background_contrast",
+    "response_topk_mean",
+    "response_max",
+    "sparsity",
+    "top_entropy",
+    "global_entropy",
+    "rank_spearman",
+    "topk_overlap",
+    "fused_map_change",
+    "response_comp",
+    "absolute_comp",
+    "boundary_comp",
+    "response_trend",
+    "entropy_trend",
+)
+
 
 def _masked_softmax(x: torch.Tensor, dim: int = -1, eps: float = 1e-8) -> torch.Tensor:
     x = x - x.amax(dim=dim, keepdim=True)
@@ -179,6 +201,11 @@ class LayerDescriptorExtractor(nn.Module):
             ],
             dim=-1,
         )
+        if feats.shape[-1] != len(LAYER_DESCRIPTOR_FEATURE_NAMES):
+            raise RuntimeError(
+                "layer descriptor feature count drifted from "
+                "LAYER_DESCRIPTOR_FEATURE_NAMES"
+            )
         feats = torch.nan_to_num(feats, nan=0.0, posinf=0.0, neginf=0.0)
         feats = feats * valid_mask.to(feats.dtype).unsqueeze(-1)
         return feats
@@ -337,6 +364,9 @@ class DescriptorNormalizer:
 
     @classmethod
     def load(cls, path: Path | str) -> DescriptorNormalizer:
+        from rad.artifacts import assert_json_artifact_eligible_for_evaluation
+
+        assert_json_artifact_eligible_for_evaluation(path, kind="descriptor statistics")
         payload: dict[str, Any] = json.loads(Path(path).read_text())
         obj = cls(clamp=tuple(payload["clamp"]), eps=float(payload.get("eps", 1e-6)))
         obj.median = torch.tensor(payload["median"], dtype=torch.float32)
