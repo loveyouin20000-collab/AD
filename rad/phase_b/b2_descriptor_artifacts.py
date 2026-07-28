@@ -2123,9 +2123,17 @@ def compare_descriptor_artifact_collections(
                     break
     if normalization_statistics_scientific_content(first.normalization_statistics) != normalization_statistics_scientific_content(second.normalization_statistics):
         reasons.append("normalization_statistics_values")
-    file_byte_equal = _sha256_file(first.run_dir / _FINAL_MANIFEST_NAME) == _sha256_file(
-        second.run_dir / _FINAL_MANIFEST_NAME
-    )
+    first_files = {
+        path.relative_to(first.run_dir).as_posix(): _sha256_file(path)
+        for path in sorted(first.run_dir.rglob("*"))
+        if path.is_file()
+    }
+    second_files = {
+        path.relative_to(second.run_dir).as_posix(): _sha256_file(path)
+        for path in sorted(second.run_dir.rglob("*"))
+        if path.is_file()
+    }
+    file_byte_equal = first_files == second_files
     return DescriptorCollectionComparison(
         scientifically_equivalent=not reasons,
         reasons=tuple(reasons),
