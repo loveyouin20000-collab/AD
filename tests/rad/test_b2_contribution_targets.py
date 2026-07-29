@@ -1,11 +1,13 @@
-"""B2-04A Story 1 TDD RED: mathematical contracts for dual contribution targets.
+"""B2-04A TDD: mathematical contracts and artifact contracts for dual targets.
 
-``rad.phase_b.b2_contribution_targets`` does not exist yet, so importing it below
-fails the whole module at collection time. That is the expected RED signal.
+Story 1 covers the frozen mathematics. Story 2 adds the per-sample scientific
+record schema, the GT map calibration artifact, the training-only Shapley
+normalization artifact, the split coverage / collection / plan identities, and
+the pure leakage-access helpers. Neither story persists anything: no CLI, no run
+directories, no ``.pt`` writes, no teacher forward, no dataset access.
 
 --------------------------------------------------------------------------------
-Contract assumed by every test in this file (Story 1 = mathematics only; no
-persistence, no CLI, no plan hash, no teacher checkpoint, no dataset access):
+Contract assumed by the Story 1 tests in this file (mathematics only):
 
 * Spatial maps are logically ``[height, width]``. ``as_spatial_map`` accepts the
   teacher-cache shapes ``[1, 1, H, W]`` / ``[1, H, W]`` as well and always returns
@@ -39,11 +41,32 @@ persistence, no CLI, no plan hash, no teacher checkpoint, no dataset access):
 * Shapley values are exact enumeration in ``float64`` on empty-centered
   utilities, with efficiency residual ``<= 1e-12``, followed by positive-player
   renormalization or the minimum-harm equal-ties fallback.
+
+Contract assumed by the Story 2 tests in this file (artifacts only):
+
+* One scientific record per sample carries both ``gt_localization`` and
+  ``teacher_fidelity`` families under ``depth_targets`` for every configured
+  prediction depth, with the complete coalition table (component values only,
+  never anomaly maps) and float64 utility / Shapley / allocation numbers.
+
+* Scientific digests come from explicit whitelists over canonical JSON, so
+  paths, timestamps, Git state, and file-byte hashes can never enter a
+  scientific identity, and unknown fields fail closed.
+
+* GT map calibration and Shapley normalization are source-training-only; the
+  normalization axes are ``target_family × prediction_depth × candidate_layer``
+  with deterministic two-pass float64 population statistics (ddof=0), and
+  standardized values exist only at read time.
+
+* The plan identity binds all seven layered identities plus the ordered record
+  hashes, the calibration and normalization artifacts, the frozen contract
+  versions, and the upstream teacher/descriptor/split/checkpoint identities.
 --------------------------------------------------------------------------------
 """
 
 from __future__ import annotations
 
+import copy
 import inspect
 import math
 from pathlib import Path
@@ -53,7 +76,8 @@ import numpy as np
 import pytest
 import torch
 
-import rad.phase_b.b2_contribution_targets as subject  # RED: module does not exist yet
+import rad.phase_b.b2_contribution_targets as subject
+import tests.rad.b2_contribution_target_fixtures as fixtures
 from rad.evaluation import paper_metrics
 from rad.models import dlcm as dlcm_module
 
@@ -599,26 +623,30 @@ def test_binarize_and_validate_mask_rejects_anomalous_mask_without_background() 
 
 
 def test_soft_dice_matches_linear_denominator_formula() -> None:
+    """Authoritative Soft Dice places eps in both numerator and denominator."""
+
     calibrated = _tensor([[0.5, 0.25], [1.0, 0.0]])
     mask = _tensor([[1.0, 0.0], [1.0, 0.0]])
     intersection = 0.5 * 1.0 + 1.0 * 1.0
-    expected = (2.0 * intersection) / (1.75 + 2.0 + subject.SOFT_DICE_EPS)
+    eps = subject.SOFT_DICE_EPS
+    expected = (2.0 * intersection + eps) / (1.75 + 2.0 + eps)
     value = subject.soft_dice(calibrated, mask)
     assert isinstance(value, float)
     assert value == pytest.approx(expected, abs=1e-15)
 
 
-def test_soft_dice_perfect_overlap_is_almost_one() -> None:
+def test_soft_dice_perfect_overlap_is_one_with_shared_eps() -> None:
     mask = _tensor([[1.0, 0.0], [1.0, 0.0]])
     value = subject.soft_dice(mask, mask)
-    assert value == pytest.approx(1.0, abs=1e-6)
-    assert value < 1.0
+    assert value == pytest.approx(1.0, abs=1e-15)
 
 
-def test_soft_dice_disjoint_prediction_is_zero() -> None:
+def test_soft_dice_disjoint_prediction_is_eps_over_mass() -> None:
     calibrated = _tensor([[0.0, 1.0], [0.0, 1.0]])
     mask = _tensor([[1.0, 0.0], [1.0, 0.0]])
-    assert subject.soft_dice(calibrated, mask) == 0.0
+    eps = subject.SOFT_DICE_EPS
+    expected = eps / (2.0 + 2.0 + eps)
+    assert subject.soft_dice(calibrated, mask) == pytest.approx(expected, abs=1e-15)
 
 
 def test_pixel_ap_raw_delegates_to_production_binary_ap(
@@ -732,8 +760,12 @@ def test_gt_utility_abnormal_without_background_response_has_zero_penalty() -> N
         raw_map=raw_map, calibrated_map=calibrated, mask=mask
     )
     assert components.background_penalty == 0.0
+    # Shared eps makes a perfect overlap exactly 1, so this reaches the
+    # unpenalized maximum 0.4 * 1 + 0.4 * 1 of the unclipped abnormal utility.
+    assert components.pixel_ap == pytest.approx(1.0, abs=1e-15)
+    assert components.soft_dice == pytest.approx(1.0, abs=1e-15)
     assert components.utility == pytest.approx(0.4 + 0.4 * components.soft_dice, abs=1e-15)
-    assert components.utility < 0.8
+    assert components.utility == pytest.approx(0.8, abs=1e-15)
 
 
 def test_gt_utility_normal_uses_full_image_top_k_and_frozen_weights() -> None:
@@ -1154,3 +1186,1634 @@ def test_positive_allocation_rejects_nonfinite_or_empty_phi() -> None:
     with pytest.raises(subject.ContributionTargetError) as excinfo:
         subject.positive_allocation({})
     assert _error_code(excinfo) == "B2_TARGET_ALLOCATION_PLAYERS_MISSING"
+
+
+# ===========================================================================
+# Story 2 — record schema, artifact identities, and leakage-access helpers
+# ===========================================================================
+
+
+@pytest.fixture(scope="module")
+def target_fixture() -> Any:
+    return fixtures.build_contribution_target_fixture()
+
+
+@pytest.fixture(scope="module")
+def calibration_artifact(target_fixture: Any) -> Any:
+    return fixtures.fixture_calibration_artifact(target_fixture)
+
+
+@pytest.fixture(scope="module")
+def target_records(target_fixture: Any) -> Any:
+    return fixtures.build_fixture_records(target_fixture)
+
+
+@pytest.fixture(scope="module")
+def normalization(target_fixture: Any, target_records: Any) -> Any:
+    return fixtures.build_fixture_normalization(target_fixture, target_records)
+
+
+def _record_for(records: Any, membership: str, *, label: int) -> Any:
+    for row in records:
+        if row["split_membership"] == membership and int(row["label"]) == label:
+            return row
+    raise AssertionError(f"no {membership} record with label {label}")
+
+
+def _walk(value: Any, path: str = "") -> Any:
+    yield path, value
+    if isinstance(value, dict):
+        for key, item in value.items():
+            yield from _walk(item, f"{path}.{key}")
+    elif isinstance(value, list | tuple):
+        for index, item in enumerate(value):
+            yield from _walk(item, f"{path}[{index}]")
+
+
+def _depth_block(record: Any, depth: int) -> Any:
+    return record["depth_targets"][str(depth)]
+
+
+def _coalition_entry(record: Any, depth: int, bitmask: int) -> Any:
+    for entry in _depth_block(record, depth)["coalition_table"]:
+        if int(entry["bitmask"]) == bitmask:
+            return entry
+    raise AssertionError(f"no coalition {bitmask} at depth {depth}")
+
+
+# ---------------------------------------------------------------------------
+# Story 2 constants and contract versions
+# ---------------------------------------------------------------------------
+
+
+def test_story2_contract_constants_are_frozen() -> None:
+    assert subject.RECORD_SCHEMA_VERSION == 1
+    assert subject.TARGET_FAMILIES == ("gt_localization", "teacher_fidelity")
+    assert subject.SPLIT_MEMBERSHIPS == ("training", "calibration", "evaluation")
+    assert dict(subject.REQUIRED_SPLIT_COUNTS) == {
+        "training": 16,
+        "calibration": 8,
+        "evaluation": 8,
+    }
+    assert subject.ACCESS_MODES == ("training_only", "calibration_only", "evaluation_only")
+    assert subject.STATISTICS_DTYPE == "float64"
+    assert subject.STANDARD_DEVIATION_DDOF == 0
+    assert subject.QUANTILE_RULE == "nearest_rank_ceiling"
+    assert subject.PRODUCTION_ARTIFACT_KIND == "production"
+    assert subject.TEST_FIXTURE_ARTIFACT_KIND == "test_fixture"
+    for version in (
+        subject.RECORD_CONTRACT_VERSION,
+        subject.CALIBRATION_CONTRACT_VERSION,
+        subject.NORMALIZATION_CONTRACT_VERSION,
+        subject.COLLECTION_CONTRACT_VERSION,
+        subject.PLAN_CONTRACT_VERSION,
+    ):
+        assert isinstance(version, str) and version
+
+
+def test_story2_module_still_has_no_persistence_or_target_domain() -> None:
+    source = Path(subject.__file__).read_text(encoding="utf-8").lower()
+    for forbidden in (
+        "load_teacher_bundle",
+        "torch.save",
+        "atomic_write",
+        "visa",
+        "mkdir",
+        "open(",
+        "argparse",
+    ):
+        assert forbidden not in source
+
+
+# ---------------------------------------------------------------------------
+# Hermetic fixture
+# ---------------------------------------------------------------------------
+
+
+def test_fixture_is_split_shaped_with_normal_and_anomalous_samples(
+    target_fixture: Any,
+) -> None:
+    assert target_fixture.artifact_kind == "test_fixture"
+    assert len(target_fixture.samples) == 32
+    counts = {
+        membership: len(target_fixture.by_membership(membership))
+        for membership in ("training", "calibration", "evaluation")
+    }
+    assert counts == {"training": 16, "calibration": 8, "evaluation": 8}
+    for membership in counts:
+        labels = {sample.label for sample in target_fixture.by_membership(membership)}
+        assert labels == {0, 1}
+    for sample in target_fixture.samples:
+        assert tuple(sample.mask.shape) == target_fixture.map_shape
+        assert set(sample.mask.unique().tolist()) <= {0.0, 1.0}
+        if sample.is_anomalous:
+            assert 0.0 < float(sample.mask.sum()) < float(sample.mask.numel())
+        else:
+            assert float(sample.mask.sum()) == 0.0
+        for depth in target_fixture.prediction_depths:
+            expected = subject.players_for_depth(target_fixture.candidate_layers, depth)
+            assert tuple(sorted(sample.maps_by_depth[depth])) == expected
+            for tensor in sample.maps_by_depth[depth].values():
+                assert tuple(tensor.shape) == target_fixture.map_shape
+
+
+def test_fixture_full_depth_reference_is_bitexact_and_deterministic(
+    target_fixture: Any,
+) -> None:
+    rebuilt = fixtures.build_contribution_target_fixture()
+    for left, right in zip(target_fixture.samples, rebuilt.samples, strict=True):
+        assert left.stable_sample_id == right.stable_sample_id
+        assert torch.equal(left.full_depth_map, right.full_depth_map)
+        reconstructed = subject.reconstruct_full_depth_teacher(
+            left.maps_by_depth[max(target_fixture.prediction_depths)],
+            candidate_layers=target_fixture.candidate_layers,
+        )
+        assert subject.verify_full_depth_teacher_bitexact(reconstructed, left.full_depth_map) is None
+
+
+def test_fixture_records_are_never_accepted_by_the_production_gate(
+    target_records: Any,
+    calibration_artifact: Any,
+    normalization: Any,
+) -> None:
+    for payload in (target_records[0], calibration_artifact, normalization):
+        assert payload["artifact_kind"] == "test_fixture"
+        with pytest.raises(subject.ContributionTargetError) as excinfo:
+            subject.require_production_artifact_kind(payload)
+        assert _error_code(excinfo) == "B2_TARGET_TEST_FIXTURE_NOT_ACCEPTED"
+    assert subject.require_production_artifact_kind({"artifact_kind": "production"}) is None
+    with pytest.raises(subject.ContributionTargetError) as excinfo:
+        subject.require_production_artifact_kind({"artifact_kind": "something_else"})
+    assert _error_code(excinfo) == "B2_TARGET_ARTIFACT_KIND_INVALID"
+
+
+def test_fixture_models_the_b2_04b_dual_run_boundary() -> None:
+    run_a = fixtures.build_contribution_target_fixture(descriptor_variant="A")
+    run_b = fixtures.build_contribution_target_fixture(descriptor_variant="B")
+    assert run_a.teacher_cache_scientific_sha256 == run_b.teacher_cache_scientific_sha256
+    assert run_a.checkpoint_sha256 == run_b.checkpoint_sha256
+    assert (
+        run_a.descriptor_collection_scientific_sha256
+        != run_b.descriptor_collection_scientific_sha256
+    )
+    records_a = fixtures.build_fixture_records(run_a)
+    records_b = fixtures.build_fixture_records(run_b)
+    # Same teacher cache means identical mathematics ...
+    for left, right in zip(records_a, records_b, strict=True):
+        assert left["depth_targets"] == right["depth_targets"]
+        # ... but a different descriptor anchor is a different scientific record.
+        assert (
+            left["contribution_target_record_scientific_sha256"]
+            != right["contribution_target_record_scientific_sha256"]
+        )
+    normalization_a = fixtures.build_fixture_normalization(run_a, records_a)
+    normalization_b = fixtures.build_fixture_normalization(run_b, records_b)
+    assert (
+        normalization_a["shapley_normalization_scientific_sha256"]
+        != normalization_b["shapley_normalization_scientific_sha256"]
+    )
+
+
+# ---------------------------------------------------------------------------
+# Upstream identity binding
+# ---------------------------------------------------------------------------
+
+
+def test_bind_upstream_identities_returns_every_scientific_hash(
+    target_fixture: Any,
+) -> None:
+    sample = target_fixture.samples[0]
+    upstream = fixtures.fixture_upstream(target_fixture, sample)
+    assert upstream.source_teacher_record_scientific_sha256 == (
+        sample.teacher_record_scientific_sha256
+    )
+    assert upstream.descriptor_record_scientific_sha256 == (
+        sample.descriptor_record["descriptor_record_scientific_sha256"]
+    )
+    assert upstream.teacher_cache_scientific_sha256 == (
+        target_fixture.teacher_cache_scientific_sha256
+    )
+    assert upstream.descriptor_collection_scientific_sha256 == (
+        target_fixture.descriptor_collection_scientific_sha256
+    )
+    assert upstream.split_scientific_sha256 == target_fixture.split_scientific_sha256
+    assert upstream.checkpoint_sha256 == target_fixture.checkpoint_sha256
+    assert upstream.execution_profile_sha256 == target_fixture.execution_profile_sha256
+
+
+def test_bind_upstream_identities_rejects_teacher_descriptor_mismatch(
+    target_fixture: Any,
+) -> None:
+    sample = target_fixture.samples[0]
+    other = target_fixture.samples[1]
+    descriptor = dict(sample.descriptor_record)
+    descriptor["source_teacher_record_scientific_sha256"] = (
+        other.teacher_record_scientific_sha256
+    )
+    with pytest.raises(subject.ContributionTargetError) as excinfo:
+        subject.bind_upstream_identities(
+            teacher_record=sample.teacher_record,
+            teacher_record_scientific_sha256=sample.teacher_record_scientific_sha256,
+            teacher_cache_scientific_sha256=target_fixture.teacher_cache_scientific_sha256,
+            teacher_cache_sample_coverage_sha256=(
+                target_fixture.teacher_cache_sample_coverage_sha256
+            ),
+            descriptor_record=descriptor,
+            descriptor_collection_scientific_sha256=(
+                target_fixture.descriptor_collection_scientific_sha256
+            ),
+            candidate_layers=target_fixture.candidate_layers,
+            prediction_depths=target_fixture.prediction_depths,
+        )
+    assert _error_code(excinfo) == "B2_TARGET_UPSTREAM_TEACHER_MISMATCH"
+
+
+def test_bind_upstream_identities_rejects_sample_and_split_mismatch(
+    target_fixture: Any,
+) -> None:
+    sample = target_fixture.by_membership("training")[0]
+    other = target_fixture.by_membership("evaluation")[0]
+
+    descriptor = dict(sample.descriptor_record)
+    descriptor["stable_sample_id"] = other.stable_sample_id
+    with pytest.raises(subject.ContributionTargetError) as excinfo:
+        subject.bind_upstream_identities(
+            teacher_record=sample.teacher_record,
+            teacher_record_scientific_sha256=sample.teacher_record_scientific_sha256,
+            teacher_cache_scientific_sha256=target_fixture.teacher_cache_scientific_sha256,
+            teacher_cache_sample_coverage_sha256=(
+                target_fixture.teacher_cache_sample_coverage_sha256
+            ),
+            descriptor_record=descriptor,
+            descriptor_collection_scientific_sha256=(
+                target_fixture.descriptor_collection_scientific_sha256
+            ),
+            candidate_layers=target_fixture.candidate_layers,
+            prediction_depths=target_fixture.prediction_depths,
+        )
+    assert _error_code(excinfo) == "B2_TARGET_UPSTREAM_SAMPLE_MISMATCH"
+
+    descriptor = dict(sample.descriptor_record)
+    descriptor["split_membership"] = "evaluation"
+    with pytest.raises(subject.ContributionTargetError) as excinfo:
+        subject.bind_upstream_identities(
+            teacher_record=sample.teacher_record,
+            teacher_record_scientific_sha256=sample.teacher_record_scientific_sha256,
+            teacher_cache_scientific_sha256=target_fixture.teacher_cache_scientific_sha256,
+            teacher_cache_sample_coverage_sha256=(
+                target_fixture.teacher_cache_sample_coverage_sha256
+            ),
+            descriptor_record=descriptor,
+            descriptor_collection_scientific_sha256=(
+                target_fixture.descriptor_collection_scientific_sha256
+            ),
+            candidate_layers=target_fixture.candidate_layers,
+            prediction_depths=target_fixture.prediction_depths,
+        )
+    assert _error_code(excinfo) == "B2_TARGET_UPSTREAM_SPLIT_MISMATCH"
+
+
+@pytest.mark.parametrize(
+    "field",
+    ["split_scientific_sha256", "checkpoint_sha256", "execution_profile_sha256"],
+)
+def test_bind_upstream_identities_rejects_upstream_hash_drift(
+    target_fixture: Any, field: str
+) -> None:
+    sample = target_fixture.samples[0]
+    descriptor = dict(sample.descriptor_record)
+    descriptor[field] = "0" * 64
+    with pytest.raises(subject.ContributionTargetError) as excinfo:
+        subject.bind_upstream_identities(
+            teacher_record=sample.teacher_record,
+            teacher_record_scientific_sha256=sample.teacher_record_scientific_sha256,
+            teacher_cache_scientific_sha256=target_fixture.teacher_cache_scientific_sha256,
+            teacher_cache_sample_coverage_sha256=(
+                target_fixture.teacher_cache_sample_coverage_sha256
+            ),
+            descriptor_record=descriptor,
+            descriptor_collection_scientific_sha256=(
+                target_fixture.descriptor_collection_scientific_sha256
+            ),
+            candidate_layers=target_fixture.candidate_layers,
+            prediction_depths=target_fixture.prediction_depths,
+        )
+    assert _error_code(excinfo) == "B2_TARGET_UPSTREAM_IDENTITY_MISMATCH"
+
+
+def test_bind_upstream_identities_rejects_lattice_drift_and_bad_hashes(
+    target_fixture: Any,
+) -> None:
+    sample = target_fixture.samples[0]
+    descriptor = dict(sample.descriptor_record)
+    descriptor["prediction_depths"] = [12, 18]
+    with pytest.raises(subject.ContributionTargetError) as excinfo:
+        subject.bind_upstream_identities(
+            teacher_record=sample.teacher_record,
+            teacher_record_scientific_sha256=sample.teacher_record_scientific_sha256,
+            teacher_cache_scientific_sha256=target_fixture.teacher_cache_scientific_sha256,
+            teacher_cache_sample_coverage_sha256=(
+                target_fixture.teacher_cache_sample_coverage_sha256
+            ),
+            descriptor_record=descriptor,
+            descriptor_collection_scientific_sha256=(
+                target_fixture.descriptor_collection_scientific_sha256
+            ),
+            candidate_layers=target_fixture.candidate_layers,
+            prediction_depths=target_fixture.prediction_depths,
+        )
+    assert _error_code(excinfo) == "B2_TARGET_UPSTREAM_LATTICE_MISMATCH"
+
+    with pytest.raises(subject.ContributionTargetError) as excinfo:
+        subject.bind_upstream_identities(
+            teacher_record=sample.teacher_record,
+            teacher_record_scientific_sha256="not-a-sha256",
+            teacher_cache_scientific_sha256=target_fixture.teacher_cache_scientific_sha256,
+            teacher_cache_sample_coverage_sha256=(
+                target_fixture.teacher_cache_sample_coverage_sha256
+            ),
+            descriptor_record=sample.descriptor_record,
+            descriptor_collection_scientific_sha256=(
+                target_fixture.descriptor_collection_scientific_sha256
+            ),
+            candidate_layers=target_fixture.candidate_layers,
+            prediction_depths=target_fixture.prediction_depths,
+        )
+    assert _error_code(excinfo) == "B2_TARGET_UPSTREAM_HASH_INVALID"
+
+
+# ---------------------------------------------------------------------------
+# GT map calibration artifact
+# ---------------------------------------------------------------------------
+
+
+def test_gt_map_calibration_artifact_carries_depth_bounds_and_identities(
+    target_fixture: Any,
+    calibration_artifact: Any,
+) -> None:
+    calibration = fixtures.fit_fixture_calibration(target_fixture)
+    assert calibration_artifact["calibration_contract_version"] == (
+        subject.CALIBRATION_CONTRACT_VERSION
+    )
+    assert calibration_artifact["statistics_dtype"] == "float64"
+    assert calibration_artifact["quantile_rule"] == "nearest_rank_ceiling"
+    assert calibration_artifact["q_low_quantile"] == 0.01
+    assert calibration_artifact["q_high_quantile"] == 0.995
+    assert calibration_artifact["candidate_layers"] == list(target_fixture.candidate_layers)
+    assert calibration_artifact["prediction_depths"] == list(target_fixture.prediction_depths)
+    assert calibration_artifact["training_sample_count"] == 16
+    training_ids = [
+        sample.stable_sample_id for sample in target_fixture.by_membership("training")
+    ]
+    assert calibration_artifact["ordered_training_stable_sample_ids"] == sorted(training_ids)
+    assert set(calibration_artifact["source_teacher_record_scientific_sha256_by_id"]) == set(
+        training_ids
+    )
+    expected_bitmasks = {12: [1, 2, 3], 18: list(range(1, 8)), 24: list(range(1, 16))}
+    for depth in target_fixture.prediction_depths:
+        entry = calibration_artifact["by_depth"][str(depth)]
+        assert entry["prediction_depth"] == depth
+        assert entry["ordered_player_layers"] == list(
+            subject.players_for_depth(target_fixture.candidate_layers, depth)
+        )
+        assert entry["nonempty_coalition_bitmasks"] == expected_bitmasks[depth]
+        assert entry["nonempty_coalition_count"] == len(expected_bitmasks[depth])
+        assert entry["training_sample_count"] == 16
+        assert entry["value_count"] == calibration.by_depth[depth].value_count
+        assert entry["q_low"] == calibration.by_depth[depth].q_low
+        assert entry["q_high"] == calibration.by_depth[depth].q_high
+        assert entry["q_high"] > entry["q_low"]
+        assert isinstance(entry["q_low"], float) and isinstance(entry["q_high"], float)
+    for field in (
+        "teacher_cache_scientific_sha256",
+        "teacher_cache_sample_coverage_sha256",
+        "descriptor_collection_scientific_sha256",
+        "split_scientific_sha256",
+        "checkpoint_sha256",
+        "execution_profile_sha256",
+        "gt_map_calibration_training_coverage_sha256",
+        "gt_map_calibration_scientific_sha256",
+    ):
+        assert len(calibration_artifact[field]) == 64
+
+
+def test_gt_map_calibration_artifact_hash_matches_content_and_ignores_non_science(
+    calibration_artifact: Any,
+) -> None:
+    artifact = copy.deepcopy(calibration_artifact)
+    claimed = artifact["gt_map_calibration_scientific_sha256"]
+    assert subject.gt_map_calibration_scientific_sha256(artifact) == claimed
+    assert subject.validate_gt_map_calibration_artifact(artifact) is None
+    for key, value in (
+        ("absolute_output_path", "/tmp/gt_map_calibration.pt"),
+        ("timestamp", "2026-07-29T00:00:00Z"),
+        ("calibration_file_sha256", "0" * 64),
+        ("git_branch", "phase-b2-contribution-target-contract"),
+    ):
+        polluted = dict(artifact)
+        polluted[key] = value
+        assert subject.gt_map_calibration_scientific_sha256(polluted) == claimed
+    drifted = copy.deepcopy(artifact)
+    drifted["by_depth"]["12"]["q_high"] = float(drifted["by_depth"]["12"]["q_high"]) + 1.0
+    assert subject.gt_map_calibration_scientific_sha256(drifted) != claimed
+    with pytest.raises(subject.ContributionTargetError) as excinfo:
+        subject.validate_gt_map_calibration_artifact(drifted)
+    assert _error_code(excinfo) == "B2_TARGET_CALIBRATION_HASH_MISMATCH"
+
+
+def test_gt_map_calibration_artifact_rejects_unknown_scientific_fields(
+    calibration_artifact: Any,
+) -> None:
+    polluted = dict(calibration_artifact)
+    polluted["sneaky_calibration_field"] = 1
+    with pytest.raises(subject.ContributionTargetError) as excinfo:
+        subject.gt_map_calibration_scientific_sha256(polluted)
+    assert _error_code(excinfo) == "B2_TARGET_CALIBRATION_HASH_SCHEMA_INVALID"
+
+
+@pytest.mark.parametrize("membership", ["calibration", "evaluation"])
+def test_gt_map_calibration_rejects_non_training_samples_from_the_fixture(
+    target_fixture: Any, membership: str
+) -> None:
+    leaking = target_fixture.by_membership(membership)[0]
+    samples = [
+        *fixtures.fixture_calibration_samples(target_fixture),
+        subject.GtCalibrationSample(
+            stable_sample_id=leaking.stable_sample_id,
+            membership=leaking.membership,
+            maps_by_depth=leaking.maps_by_depth,
+        ),
+    ]
+    with pytest.raises(subject.ContributionTargetError) as excinfo:
+        subject.fit_gt_map_calibration(
+            samples,
+            candidate_layers=target_fixture.candidate_layers,
+            prediction_depths=target_fixture.prediction_depths,
+        )
+    assert _error_code(excinfo) == "B2_TARGET_CALIBRATION_LEAKAGE"
+
+
+def test_gt_map_calibration_artifact_rejects_wrong_training_count(
+    target_fixture: Any,
+) -> None:
+    calibration = subject.fit_gt_map_calibration(
+        fixtures.fixture_calibration_samples(target_fixture)[:4],
+        candidate_layers=target_fixture.candidate_layers,
+        prediction_depths=target_fixture.prediction_depths,
+    )
+    hashes = {
+        sample.stable_sample_id: sample.teacher_record_scientific_sha256
+        for sample in target_fixture.by_membership("training")[:4]
+    }
+    with pytest.raises(subject.ContributionTargetError) as excinfo:
+        subject.build_gt_map_calibration_artifact(
+            calibration,
+            source_teacher_record_scientific_sha256_by_id=hashes,
+            teacher_cache_scientific_sha256=target_fixture.teacher_cache_scientific_sha256,
+            teacher_cache_sample_coverage_sha256=(
+                target_fixture.teacher_cache_sample_coverage_sha256
+            ),
+            descriptor_collection_scientific_sha256=(
+                target_fixture.descriptor_collection_scientific_sha256
+            ),
+            split_scientific_sha256=target_fixture.split_scientific_sha256,
+            checkpoint_sha256=target_fixture.checkpoint_sha256,
+            execution_profile_sha256=target_fixture.execution_profile_sha256,
+            expected_training_count=16,
+            artifact_kind="test_fixture",
+        )
+    assert _error_code(excinfo) == "B2_TARGET_CALIBRATION_COUNT_MISMATCH"
+
+
+def test_gt_map_calibration_artifact_rejects_teacher_hash_coverage_drift(
+    target_fixture: Any,
+) -> None:
+    calibration = fixtures.fit_fixture_calibration(target_fixture)
+    hashes = {
+        sample.stable_sample_id: sample.teacher_record_scientific_sha256
+        for sample in target_fixture.by_membership("training")
+    }
+    leaking = target_fixture.by_membership("calibration")[0]
+    hashes[leaking.stable_sample_id] = leaking.teacher_record_scientific_sha256
+    with pytest.raises(subject.ContributionTargetError) as excinfo:
+        subject.build_gt_map_calibration_artifact(
+            calibration,
+            source_teacher_record_scientific_sha256_by_id=hashes,
+            teacher_cache_scientific_sha256=target_fixture.teacher_cache_scientific_sha256,
+            teacher_cache_sample_coverage_sha256=(
+                target_fixture.teacher_cache_sample_coverage_sha256
+            ),
+            descriptor_collection_scientific_sha256=(
+                target_fixture.descriptor_collection_scientific_sha256
+            ),
+            split_scientific_sha256=target_fixture.split_scientific_sha256,
+            checkpoint_sha256=target_fixture.checkpoint_sha256,
+            execution_profile_sha256=target_fixture.execution_profile_sha256,
+            expected_training_count=16,
+            artifact_kind="test_fixture",
+        )
+    assert _error_code(excinfo) == "B2_TARGET_CALIBRATION_COVERAGE_MISMATCH"
+
+
+# ---------------------------------------------------------------------------
+# Sample target record schema
+# ---------------------------------------------------------------------------
+
+
+def test_target_record_carries_both_families_at_every_depth(
+    target_fixture: Any, target_records: Any
+) -> None:
+    assert len(target_records) == 32
+    expected_coalitions = {12: 4, 18: 8, 24: 16}
+    for record in target_records:
+        assert record["schema_version"] == 1
+        assert record["target_record_contract_version"] == subject.RECORD_CONTRACT_VERSION
+        assert record["target_families"] == ["gt_localization", "teacher_fidelity"]
+        assert record["candidate_layers"] == list(target_fixture.candidate_layers)
+        assert record["prediction_depths"] == list(target_fixture.prediction_depths)
+        assert record["statistics_dtype"] == "float64"
+        assert sorted(record["depth_targets"], key=int) == ["12", "18", "24"]
+        for depth in target_fixture.prediction_depths:
+            block = _depth_block(record, depth)
+            players = subject.players_for_depth(target_fixture.candidate_layers, depth)
+            assert block["prediction_depth"] == depth
+            assert block["ordered_player_layers"] == list(players)
+            assert len(block["coalition_table"]) == expected_coalitions[depth]
+            assert [int(entry["bitmask"]) for entry in block["coalition_table"]] == list(
+                range(expected_coalitions[depth])
+            )
+            for family in subject.TARGET_FAMILIES:
+                family_block = block[family]
+                assert set(family_block["raw_signed_shapley_by_layer"]) == {
+                    str(layer) for layer in players
+                }
+                assert set(family_block["positive_allocation_target_by_layer"]) == {
+                    str(layer) for layer in players
+                }
+                assert family_block["efficiency_residual"] <= subject.EFFICIENCY_TOLERANCE
+                allocation = family_block["positive_allocation_target_by_layer"].values()
+                assert sum(allocation) == pytest.approx(1.0, abs=1e-12)
+                assert all(value >= 0.0 for value in allocation)
+
+
+def test_target_record_binds_every_upstream_and_contract_identity(
+    target_fixture: Any, target_records: Any, calibration_artifact: Any
+) -> None:
+    for record in target_records:
+        sample = target_fixture.sample_by_id(record["stable_sample_id"])
+        assert record["split_membership"] == sample.membership
+        assert record["category"] == sample.category
+        assert record["label"] == sample.label
+        assert record["anomaly_type"] == sample.anomaly_type
+        assert record["coalition_contract_version"] == subject.COALITION_CONTRACT_VERSION
+        assert record["utility_contract_version"] == subject.UTILITY_CONTRACT_VERSION
+        assert record["shapley_contract_version"] == subject.SHAPLEY_CONTRACT_VERSION
+        assert record["allocation_contract_version"] == subject.ALLOCATION_CONTRACT_VERSION
+        assert record["gt_map_calibration_scientific_sha256"] == (
+            calibration_artifact["gt_map_calibration_scientific_sha256"]
+        )
+        assert record["source_teacher_record_scientific_sha256"] == (
+            sample.teacher_record_scientific_sha256
+        )
+        assert record["descriptor_record_scientific_sha256"] == (
+            sample.descriptor_record["descriptor_record_scientific_sha256"]
+        )
+        assert record["teacher_cache_scientific_sha256"] == (
+            target_fixture.teacher_cache_scientific_sha256
+        )
+        assert record["teacher_cache_sample_coverage_sha256"] == (
+            target_fixture.teacher_cache_sample_coverage_sha256
+        )
+        assert record["descriptor_collection_scientific_sha256"] == (
+            target_fixture.descriptor_collection_scientific_sha256
+        )
+        assert record["split_scientific_sha256"] == target_fixture.split_scientific_sha256
+        assert record["checkpoint_sha256"] == target_fixture.checkpoint_sha256
+        assert record["execution_profile_sha256"] == target_fixture.execution_profile_sha256
+
+
+def test_target_record_mask_and_teacher_reference_provenance(
+    target_fixture: Any, target_records: Any
+) -> None:
+    for record in target_records:
+        sample = target_fixture.sample_by_id(record["stable_sample_id"])
+        mask = record["mask_provenance"]
+        assert mask["binarization_threshold"] == 0.5
+        assert mask["alignment_mode"] == "nearest"
+        assert mask["mask_shape"] == [
+            int(target_fixture.map_shape[-2]),
+            int(target_fixture.map_shape[-1]),
+        ]
+        assert mask["mask_identity"] == sample.mask_identity
+        assert len(mask["mask_digest"]) == 64
+        if sample.is_anomalous:
+            assert mask["mask_source"] == "production_gt_mask"
+            assert mask["positive_pixel_count"] > 0
+            assert mask["background_pixel_count"] > 0
+        else:
+            assert mask["mask_source"] == "normal_all_zero_mask"
+            assert mask["positive_pixel_count"] == 0
+        teacher = record["teacher_reference_provenance"]
+        assert teacher["fusion_function"] == "rad.models.dlcm.sum_preserving_fusion"
+        assert teacher["reconstruction_verified"] is True
+        assert teacher["source_candidate_layers"] == list(target_fixture.candidate_layers)
+        assert teacher["cached_full_depth_map_digest"] == subject.full_depth_map_digest(
+            sample.full_depth_map
+        )
+        assert teacher["full_depth_map_dtype"] == "float32"
+
+
+def test_target_record_coalition_table_has_components_but_no_maps(
+    target_records: Any,
+) -> None:
+    record = _record_for(target_records, "training", label=1)
+    entry = _coalition_entry(record, 24, 15)
+    assert entry["layer_ids"] == [6, 12, 18, 24]
+    assert entry["coalition_size"] == 4
+    assert set(entry["gt_localization"]["utility_components"]) == {
+        "pixel_ap",
+        "soft_dice",
+        "background_penalty",
+        "background_pixel_count",
+        "background_top1_percent_k",
+        "background_top1_percent_mean",
+        "background_global_mean",
+    }
+    assert set(entry["teacher_fidelity"]["utility_components"]) == {
+        "spearman_raw",
+        "spearman_fidelity",
+        "top1_overlap",
+    }
+    for path, value in _walk(record):
+        assert not isinstance(value, torch.Tensor), path
+        assert isinstance(
+            value, dict | list | tuple | str | int | float | bool | type(None)
+        ), path
+    keys = {path.rsplit(".", 1)[-1] for path, _ in _walk(record) if path}
+    assert not any("map" == key or key.endswith("_map") for key in keys)
+
+
+def test_target_record_normal_samples_use_the_suppression_utility(
+    target_records: Any,
+) -> None:
+    record = _record_for(target_records, "training", label=0)
+    block = _depth_block(record, 12)
+    assert block["gt_localization"]["utility_mode"] == "normal"
+    for entry in block["coalition_table"]:
+        assert set(entry["gt_localization"]["utility_components"]) == {
+            "top1_percent_k",
+            "top1_percent_mean",
+            "global_mean",
+        }
+    anomalous = _record_for(target_records, "training", label=1)
+    assert _depth_block(anomalous, 12)["gt_localization"]["utility_mode"] == "abnormal"
+
+
+def test_target_record_values_are_float64_and_never_standardized(
+    target_records: Any,
+) -> None:
+    numeric_keys = {
+        "raw_utility",
+        "centered_value",
+        "efficiency_residual",
+        "empty_coalition_raw_utility",
+        "grand_coalition_centered_value",
+    }
+    for record in target_records:
+        for path, value in _walk(record):
+            key = path.rsplit(".", 1)[-1]
+            assert "standardized" not in key
+            assert "z_score" not in key
+            if key in numeric_keys:
+                assert isinstance(value, float), path
+        for depth_block in record["depth_targets"].values():
+            for family in subject.TARGET_FAMILIES:
+                for mapping_key in (
+                    "raw_signed_shapley_by_layer",
+                    "positive_allocation_target_by_layer",
+                ):
+                    for value in depth_block[family][mapping_key].values():
+                        assert isinstance(value, float)
+                        assert math.isfinite(value)
+
+
+def test_target_record_mathematics_match_the_story_one_primitives(
+    target_fixture: Any, target_records: Any, calibration_artifact: Any
+) -> None:
+    record = _record_for(target_records, "training", label=1)
+    sample = target_fixture.sample_by_id(record["stable_sample_id"])
+    depth = 12
+    players = subject.players_for_depth(target_fixture.candidate_layers, depth)
+    bounds = calibration_artifact["by_depth"][str(depth)]
+    mask = subject.binarize_and_validate_mask(
+        sample.mask,
+        is_anomalous=True,
+        map_shape=(target_fixture.map_shape[-2], target_fixture.map_shape[-1]),
+    )
+    layer_maps = sample.maps_by_depth[depth]
+    raw_gt: dict[int, float] = {}
+    raw_teacher: dict[int, float] = {}
+    for coalition in subject.enumerate_coalitions(players):
+        fused = subject.fuse_equal_average(
+            layer_maps, coalition.layer_ids, template=layer_maps[players[0]]
+        )
+        calibrated = subject.apply_gt_calibration(fused, bounds["q_low"], bounds["q_high"])
+        raw_gt[coalition.bitmask] = subject.gt_utility_abnormal(
+            raw_map=fused, calibrated_map=calibrated, mask=mask
+        ).utility
+        raw_teacher[coalition.bitmask] = subject.teacher_utility(
+            fused, sample.full_depth_map
+        ).utility
+    for family, raw in (("gt_localization", raw_gt), ("teacher_fidelity", raw_teacher)):
+        centered = subject.center_utilities(raw)
+        phi = subject.exact_shapley(players, centered)
+        allocation = subject.positive_allocation(phi)
+        block = _depth_block(record, depth)[family]
+        for layer in players:
+            assert block["raw_signed_shapley_by_layer"][str(layer)] == pytest.approx(
+                phi[layer], abs=1e-15
+            )
+            assert block["positive_allocation_target_by_layer"][str(layer)] == (
+                pytest.approx(allocation[layer], abs=1e-15)
+            )
+        for bitmask, value in raw.items():
+            entry = _coalition_entry(record, depth, bitmask)
+            assert entry[family]["raw_utility"] == pytest.approx(value, abs=1e-15)
+            assert entry[family]["centered_value"] == pytest.approx(
+                centered[bitmask], abs=1e-15
+            )
+        assert block["grand_coalition_centered_value"] == pytest.approx(
+            centered[(1 << len(players)) - 1], abs=1e-15
+        )
+
+
+def test_target_record_scientific_hash_excludes_paths_timestamps_and_file_hashes(
+    target_records: Any,
+) -> None:
+    record = copy.deepcopy(target_records[0])
+    claimed = record["contribution_target_record_scientific_sha256"]
+    assert subject.contribution_target_record_scientific_sha256(record) == claimed
+    for key, value in (
+        ("absolute_output_path", "/tmp/records/x.pt"),
+        ("relative_record_path", "records/x.pt"),
+        ("record_file_sha256", "0" * 64),
+        ("timestamp", "2026-07-29T00:00:00Z"),
+        ("git_branch", "phase-b2-contribution-target-contract"),
+        ("worktree_path", "/root/autodl-tmp"),
+        ("runtime_attestation_sha256", "f" * 64),
+    ):
+        polluted = dict(record)
+        polluted[key] = value
+        assert subject.contribution_target_record_scientific_sha256(polluted) == claimed
+    polluted = dict(record)
+    polluted["undeclared_science"] = "leak"
+    with pytest.raises(subject.ContributionTargetError) as excinfo:
+        subject.contribution_target_record_scientific_sha256(polluted)
+    assert _error_code(excinfo) == "B2_TARGET_RECORD_HASH_SCHEMA_INVALID"
+
+
+def test_target_record_scientific_hash_requires_every_whitelisted_field(
+    target_records: Any,
+) -> None:
+    for field in ("depth_targets", "mask_provenance", "split_membership"):
+        broken = copy.deepcopy(target_records[0])
+        del broken[field]
+        with pytest.raises(subject.ContributionTargetError) as excinfo:
+            subject.contribution_target_record_scientific_sha256(broken)
+        assert _error_code(excinfo) == "B2_TARGET_RECORD_HASH_SCHEMA_INVALID"
+
+
+def test_validate_contribution_target_record_detects_content_drift(
+    target_fixture: Any, target_records: Any
+) -> None:
+    record = copy.deepcopy(target_records[0])
+    assert (
+        subject.validate_contribution_target_record(
+            record,
+            candidate_layers=target_fixture.candidate_layers,
+            prediction_depths=target_fixture.prediction_depths,
+        )
+        is None
+    )
+    drifted = copy.deepcopy(record)
+    block = _depth_block(drifted, 12)["gt_localization"]
+    layer = next(iter(block["raw_signed_shapley_by_layer"]))
+    block["raw_signed_shapley_by_layer"][layer] += 0.5
+    with pytest.raises(subject.ContributionTargetError) as excinfo:
+        subject.validate_contribution_target_record(
+            drifted,
+            candidate_layers=target_fixture.candidate_layers,
+            prediction_depths=target_fixture.prediction_depths,
+        )
+    assert _error_code(excinfo) == "B2_TARGET_RECORD_HASH_MISMATCH"
+
+    missing_depth = copy.deepcopy(record)
+    del missing_depth["depth_targets"]["18"]
+    missing_depth["contribution_target_record_scientific_sha256"] = (
+        subject.contribution_target_record_scientific_sha256(missing_depth)
+    )
+    with pytest.raises(subject.ContributionTargetError) as excinfo:
+        subject.validate_contribution_target_record(
+            missing_depth,
+            candidate_layers=target_fixture.candidate_layers,
+            prediction_depths=target_fixture.prediction_depths,
+        )
+    assert _error_code(excinfo) == "B2_TARGET_RECORD_DEPTH_MISSING"
+
+
+def test_build_target_record_rejects_unverified_teacher_reference(
+    target_fixture: Any, calibration_artifact: Any
+) -> None:
+    sample = target_fixture.samples[0]
+    provenance = subject.TeacherReferenceProvenance(
+        cached_full_depth_map_digest=subject.full_depth_map_digest(sample.full_depth_map),
+        reconstruction_verified=False,
+        source_candidate_layers=target_fixture.candidate_layers,
+    )
+    with pytest.raises(subject.ContributionTargetError) as excinfo:
+        subject.build_contribution_target_record(
+            sample=subject.ContributionTargetSample(
+                stable_sample_id=sample.stable_sample_id,
+                split_membership=sample.membership,
+                category=sample.category,
+                label=sample.label,
+                anomaly_type=sample.anomaly_type,
+                maps_by_depth=sample.maps_by_depth,
+                mask=sample.mask,
+                teacher_reference_map=sample.full_depth_map,
+            ),
+            calibration_artifact=calibration_artifact,
+            upstream=fixtures.fixture_upstream(target_fixture, sample),
+            mask_provenance=fixtures.fixture_mask_provenance(sample),
+            teacher_reference_provenance=provenance,
+            candidate_layers=target_fixture.candidate_layers,
+            prediction_depths=target_fixture.prediction_depths,
+            artifact_kind="test_fixture",
+        )
+    assert _error_code(excinfo) == "B2_TARGET_TEACHER_REFERENCE_UNVERIFIED"
+
+
+def test_build_target_record_rejects_teacher_reference_digest_drift(
+    target_fixture: Any, calibration_artifact: Any
+) -> None:
+    sample = target_fixture.samples[0]
+    other = target_fixture.samples[1]
+    provenance = subject.TeacherReferenceProvenance(
+        cached_full_depth_map_digest=subject.full_depth_map_digest(other.full_depth_map),
+        reconstruction_verified=True,
+        source_candidate_layers=target_fixture.candidate_layers,
+    )
+    with pytest.raises(subject.ContributionTargetError) as excinfo:
+        subject.build_contribution_target_record(
+            sample=subject.ContributionTargetSample(
+                stable_sample_id=sample.stable_sample_id,
+                split_membership=sample.membership,
+                category=sample.category,
+                label=sample.label,
+                anomaly_type=sample.anomaly_type,
+                maps_by_depth=sample.maps_by_depth,
+                mask=sample.mask,
+                teacher_reference_map=sample.full_depth_map,
+            ),
+            calibration_artifact=calibration_artifact,
+            upstream=fixtures.fixture_upstream(target_fixture, sample),
+            mask_provenance=fixtures.fixture_mask_provenance(sample),
+            teacher_reference_provenance=provenance,
+            candidate_layers=target_fixture.candidate_layers,
+            prediction_depths=target_fixture.prediction_depths,
+            artifact_kind="test_fixture",
+        )
+    assert _error_code(excinfo) == "B2_TARGET_TEACHER_REFERENCE_DIGEST_MISMATCH"
+
+
+def _build_record_with(
+    target_fixture: Any,
+    calibration_artifact: Any,
+    sample: Any,
+    **overrides: Any,
+) -> Any:
+    payload = {
+        "stable_sample_id": sample.stable_sample_id,
+        "split_membership": sample.membership,
+        "category": sample.category,
+        "label": sample.label,
+        "anomaly_type": sample.anomaly_type,
+        "maps_by_depth": sample.maps_by_depth,
+        "mask": sample.mask,
+        "teacher_reference_map": sample.full_depth_map,
+    }
+    payload.update(overrides)
+    return subject.build_contribution_target_record(
+        sample=subject.ContributionTargetSample(**payload),
+        calibration_artifact=calibration_artifact,
+        upstream=fixtures.fixture_upstream(target_fixture, sample),
+        mask_provenance=fixtures.fixture_mask_provenance(sample),
+        teacher_reference_provenance=fixtures.fixture_teacher_reference_provenance(
+            target_fixture, sample
+        ),
+        candidate_layers=target_fixture.candidate_layers,
+        prediction_depths=target_fixture.prediction_depths,
+        artifact_kind="test_fixture",
+    )
+
+
+def test_build_target_record_rejects_missing_depth_maps(
+    target_fixture: Any, calibration_artifact: Any
+) -> None:
+    sample = target_fixture.samples[0]
+    truncated = {
+        depth: maps
+        for depth, maps in sample.maps_by_depth.items()
+        if depth != max(target_fixture.prediction_depths)
+    }
+    with pytest.raises(subject.ContributionTargetError) as excinfo:
+        _build_record_with(
+            target_fixture, calibration_artifact, sample, maps_by_depth=truncated
+        )
+    assert _error_code(excinfo) == "B2_TARGET_RECORD_DEPTH_MISSING"
+
+    incomplete = dict(sample.maps_by_depth)
+    incomplete[12] = {6: sample.maps_by_depth[12][6]}
+    with pytest.raises(subject.ContributionTargetError) as excinfo:
+        _build_record_with(
+            target_fixture, calibration_artifact, sample, maps_by_depth=incomplete
+        )
+    assert _error_code(excinfo) == "B2_TARGET_RECORD_LAYER_SET_INVALID"
+
+
+def test_build_target_record_rejects_wrong_dtype_and_nonfinite_maps(
+    target_fixture: Any, calibration_artifact: Any
+) -> None:
+    sample = target_fixture.samples[0]
+    integral = dict(sample.maps_by_depth)
+    integral[12] = dict(sample.maps_by_depth[12])
+    integral[12][6] = sample.maps_by_depth[12][6].to(dtype=torch.int64)
+    with pytest.raises(subject.ContributionTargetError) as excinfo:
+        _build_record_with(
+            target_fixture, calibration_artifact, sample, maps_by_depth=integral
+        )
+    assert _error_code(excinfo) == "B2_TARGET_MAP_DTYPE_INVALID"
+
+    nonfinite = dict(sample.maps_by_depth)
+    nonfinite[12] = dict(sample.maps_by_depth[12])
+    broken = sample.maps_by_depth[12][6].clone()
+    broken.reshape(-1)[0] = float("nan")
+    nonfinite[12][6] = broken
+    with pytest.raises(subject.ContributionTargetError) as excinfo:
+        _build_record_with(
+            target_fixture, calibration_artifact, sample, maps_by_depth=nonfinite
+        )
+    assert _error_code(excinfo) == "B2_TARGET_MAP_NONFINITE"
+
+
+def test_build_target_record_rejects_mask_label_disagreement(
+    target_fixture: Any, calibration_artifact: Any
+) -> None:
+    anomalous = _first_sample(target_fixture, label=1)
+    with pytest.raises(subject.ContributionTargetError) as excinfo:
+        _build_record_with(
+            target_fixture,
+            calibration_artifact,
+            anomalous,
+            mask=torch.zeros(target_fixture.map_shape, dtype=torch.float32),
+        )
+    assert _error_code(excinfo) == "B2_TARGET_MASK_ANOMALY_MISSING"
+
+    normal = _first_sample(target_fixture, label=0)
+    with pytest.raises(subject.ContributionTargetError) as excinfo:
+        subject.build_contribution_target_record(
+            sample=subject.ContributionTargetSample(
+                stable_sample_id=normal.stable_sample_id,
+                split_membership=normal.membership,
+                category=normal.category,
+                label=normal.label,
+                anomaly_type=normal.anomaly_type,
+                maps_by_depth=normal.maps_by_depth,
+                mask=torch.ones(target_fixture.map_shape, dtype=torch.float32),
+                teacher_reference_map=normal.full_depth_map,
+            ),
+            calibration_artifact=calibration_artifact,
+            upstream=fixtures.fixture_upstream(target_fixture, normal),
+            mask_provenance=fixtures.fixture_mask_provenance(normal),
+            teacher_reference_provenance=fixtures.fixture_teacher_reference_provenance(
+                target_fixture, normal
+            ),
+            candidate_layers=target_fixture.candidate_layers,
+            prediction_depths=target_fixture.prediction_depths,
+            artifact_kind="test_fixture",
+        )
+    assert _error_code(excinfo) == "B2_TARGET_MASK_NORMAL_NOT_EMPTY"
+
+
+def _first_sample(target_fixture: Any, *, label: int) -> Any:
+    for sample in target_fixture.samples:
+        if sample.label == label:
+            return sample
+    raise AssertionError(f"no fixture sample with label {label}")
+
+
+def test_build_target_record_rejects_inconsistent_mask_provenance(
+    target_fixture: Any, calibration_artifact: Any
+) -> None:
+    sample = _first_sample(target_fixture, label=1)
+    for provenance, code in (
+        (
+            subject.MaskProvenance(
+                mask_identity=sample.mask_identity,
+                mask_source="normal_all_zero_mask",
+            ),
+            "B2_TARGET_MASK_PROVENANCE_INVALID",
+        ),
+        (
+            subject.MaskProvenance(
+                mask_identity=sample.mask_identity,
+                mask_source="production_gt_mask",
+                alignment_mode="bilinear",
+            ),
+            "B2_TARGET_MASK_PROVENANCE_INVALID",
+        ),
+        (
+            subject.MaskProvenance(
+                mask_identity=sample.mask_identity,
+                mask_source="production_gt_mask",
+                binarization_threshold=0.25,
+            ),
+            "B2_TARGET_MASK_PROVENANCE_INVALID",
+        ),
+    ):
+        with pytest.raises(subject.ContributionTargetError) as excinfo:
+            subject.build_contribution_target_record(
+                sample=subject.ContributionTargetSample(
+                    stable_sample_id=sample.stable_sample_id,
+                    split_membership=sample.membership,
+                    category=sample.category,
+                    label=sample.label,
+                    anomaly_type=sample.anomaly_type,
+                    maps_by_depth=sample.maps_by_depth,
+                    mask=sample.mask,
+                    teacher_reference_map=sample.full_depth_map,
+                ),
+                calibration_artifact=calibration_artifact,
+                upstream=fixtures.fixture_upstream(target_fixture, sample),
+                mask_provenance=provenance,
+                teacher_reference_provenance=(
+                    fixtures.fixture_teacher_reference_provenance(target_fixture, sample)
+                ),
+                candidate_layers=target_fixture.candidate_layers,
+                prediction_depths=target_fixture.prediction_depths,
+                artifact_kind="test_fixture",
+            )
+        assert _error_code(excinfo) == code
+
+
+def test_build_target_record_rejects_calibration_artifact_drift(
+    target_fixture: Any, calibration_artifact: Any
+) -> None:
+    sample = target_fixture.samples[0]
+    tampered = copy.deepcopy(calibration_artifact)
+    tampered["by_depth"]["18"]["q_low"] = float(tampered["by_depth"]["18"]["q_low"]) - 1.0
+    with pytest.raises(subject.ContributionTargetError) as excinfo:
+        subject.build_contribution_target_record(
+            sample=subject.ContributionTargetSample(
+                stable_sample_id=sample.stable_sample_id,
+                split_membership=sample.membership,
+                category=sample.category,
+                label=sample.label,
+                anomaly_type=sample.anomaly_type,
+                maps_by_depth=sample.maps_by_depth,
+                mask=sample.mask,
+                teacher_reference_map=sample.full_depth_map,
+            ),
+            calibration_artifact=tampered,
+            upstream=fixtures.fixture_upstream(target_fixture, sample),
+            mask_provenance=fixtures.fixture_mask_provenance(sample),
+            teacher_reference_provenance=fixtures.fixture_teacher_reference_provenance(
+                target_fixture, sample
+            ),
+            candidate_layers=target_fixture.candidate_layers,
+            prediction_depths=target_fixture.prediction_depths,
+            artifact_kind="test_fixture",
+        )
+    assert _error_code(excinfo) == "B2_TARGET_CALIBRATION_HASH_MISMATCH"
+
+
+def test_build_target_record_fails_closed_on_efficiency_violation(
+    target_fixture: Any,
+    calibration_artifact: Any,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    sample = target_fixture.samples[0]
+    original = subject.exact_shapley
+
+    def _perturbed(players: Any, centered: Any) -> Any:
+        phi = dict(original(players, centered))
+        phi[players[0]] = phi[players[0]] + 1.0
+        return phi
+
+    monkeypatch.setattr(subject, "exact_shapley", _perturbed)
+    with pytest.raises(subject.ContributionTargetError) as excinfo:
+        _build_record_with(target_fixture, calibration_artifact, sample)
+    assert _error_code(excinfo) == "B2_TARGET_SHAPLEY_EFFICIENCY_VIOLATION"
+
+
+def test_build_target_record_rejects_unknown_split_membership(
+    target_fixture: Any, calibration_artifact: Any
+) -> None:
+    sample = target_fixture.samples[0]
+    with pytest.raises(subject.ContributionTargetError) as excinfo:
+        _build_record_with(
+            target_fixture, calibration_artifact, sample, split_membership="target"
+        )
+    assert _error_code(excinfo) == "B2_TARGET_RECORD_MEMBERSHIP_INVALID"
+
+
+# ---------------------------------------------------------------------------
+# Shapley normalization artifact
+# ---------------------------------------------------------------------------
+
+
+def test_shapley_normalization_axes_are_family_depth_layer(
+    target_fixture: Any, target_records: Any, normalization: Any
+) -> None:
+    assert normalization["normalization_contract_version"] == (
+        subject.NORMALIZATION_CONTRACT_VERSION
+    )
+    assert normalization["statistics_dtype"] == "float64"
+    assert normalization["standard_deviation_ddof"] == 0
+    assert normalization["target_families"] == list(subject.TARGET_FAMILIES)
+    training = fixtures.records_by_membership(target_records, "training")
+    ordered_ids = sorted(row["stable_sample_id"] for row in training)
+    assert normalization["ordered_training_stable_sample_ids"] == ordered_ids
+    assert set(normalization["contribution_target_record_scientific_sha256_by_id"]) == set(
+        ordered_ids
+    )
+    for family in subject.TARGET_FAMILIES:
+        for depth in target_fixture.prediction_depths:
+            players = subject.players_for_depth(target_fixture.candidate_layers, depth)
+            entry = normalization["axes"][family][str(depth)]
+            assert entry["prediction_depth"] == depth
+            assert [layer["candidate_layer_id"] for layer in entry["layers"]] == list(players)
+            for layer in entry["layers"]:
+                values = [
+                    float(
+                        row["depth_targets"][str(depth)][family][
+                            "raw_signed_shapley_by_layer"
+                        ][str(layer["candidate_layer_id"])]
+                    )
+                    for row in sorted(training, key=lambda item: item["stable_sample_id"])
+                ]
+                mean = math.fsum(values) / len(values)
+                variance = math.fsum((value - mean) ** 2 for value in values) / len(values)
+                assert layer["count"] == 16
+                assert layer["mean"] == pytest.approx(mean, abs=1e-15)
+                assert layer["std"] == pytest.approx(math.sqrt(variance), abs=1e-15)
+                assert layer["minimum"] == pytest.approx(min(values), abs=1e-15)
+                assert layer["maximum"] == pytest.approx(max(values), abs=1e-15)
+                assert layer["zero_variance"] is (layer["std"] == 0.0)
+
+
+def test_shapley_normalization_uses_only_the_sixteen_training_records(
+    target_fixture: Any, target_records: Any
+) -> None:
+    for membership in ("calibration", "evaluation"):
+        leaking = [
+            *fixtures.records_by_membership(target_records, "training")[:15],
+            fixtures.records_by_membership(target_records, membership)[0],
+        ]
+        with pytest.raises(subject.ContributionTargetError) as excinfo:
+            subject.compute_shapley_normalization(
+                leaking,
+                candidate_layers=target_fixture.candidate_layers,
+                prediction_depths=target_fixture.prediction_depths,
+                expected_training_count=16,
+                artifact_kind="test_fixture",
+            )
+        assert _error_code(excinfo) == "B2_TARGET_NORMALIZATION_MEMBERSHIP_INVALID"
+
+    with pytest.raises(subject.ContributionTargetError) as excinfo:
+        subject.compute_shapley_normalization(
+            fixtures.records_by_membership(target_records, "training")[:8],
+            candidate_layers=target_fixture.candidate_layers,
+            prediction_depths=target_fixture.prediction_depths,
+            expected_training_count=16,
+            artifact_kind="test_fixture",
+        )
+    assert _error_code(excinfo) == "B2_TARGET_NORMALIZATION_COUNT_MISMATCH"
+
+
+def test_shapley_normalization_is_input_order_independent(
+    target_fixture: Any, target_records: Any, normalization: Any
+) -> None:
+    training = list(fixtures.records_by_membership(target_records, "training"))
+    shuffled = [*training[8:], *training[:8]]
+    recomputed = subject.compute_shapley_normalization(
+        shuffled,
+        candidate_layers=target_fixture.candidate_layers,
+        prediction_depths=target_fixture.prediction_depths,
+        expected_training_count=16,
+        artifact_kind="test_fixture",
+    )
+    assert recomputed["shapley_normalization_scientific_sha256"] == (
+        normalization["shapley_normalization_scientific_sha256"]
+    )
+    assert recomputed["ordered_training_stable_sample_ids"] == (
+        normalization["ordered_training_stable_sample_ids"]
+    )
+
+
+def test_shapley_normalization_hash_excludes_non_scientific_fields(
+    normalization: Any,
+) -> None:
+    artifact = copy.deepcopy(normalization)
+    claimed = artifact["shapley_normalization_scientific_sha256"]
+    assert subject.shapley_normalization_scientific_sha256(artifact) == claimed
+    for key, value in (
+        ("absolute_output_path", "/tmp/shapley_normalization.pt"),
+        ("timestamp", "2026-07-29T00:00:00Z"),
+        ("normalization_file_sha256", "0" * 64),
+    ):
+        polluted = dict(artifact)
+        polluted[key] = value
+        assert subject.shapley_normalization_scientific_sha256(polluted) == claimed
+    polluted = dict(artifact)
+    polluted["undeclared_statistic"] = 3
+    with pytest.raises(subject.ContributionTargetError) as excinfo:
+        subject.shapley_normalization_scientific_sha256(polluted)
+    assert _error_code(excinfo) == "B2_TARGET_NORMALIZATION_HASH_SCHEMA_INVALID"
+
+
+def test_standardize_signed_shapley_is_a_read_time_z_score(normalization: Any) -> None:
+    artifact = copy.deepcopy(normalization)
+    entry = artifact["axes"]["gt_localization"]["12"]["layers"][0]
+    mean = float(entry["mean"])
+    std = float(entry["std"])
+    assert std > 0.0
+    value = mean + 2.0 * std
+    assert subject.standardize_signed_shapley(
+        value,
+        artifact,
+        target_family="gt_localization",
+        prediction_depth=12,
+        candidate_layer_id=int(entry["candidate_layer_id"]),
+    ) == pytest.approx(2.0, abs=1e-12)
+
+    entry["std"] = 0.0
+    entry["zero_variance"] = True
+    assert subject.standardize_signed_shapley(
+        value,
+        artifact,
+        target_family="gt_localization",
+        prediction_depth=12,
+        candidate_layer_id=int(entry["candidate_layer_id"]),
+    ) == 0.0
+
+
+def test_standardize_signed_shapley_rejects_unknown_axes(normalization: Any) -> None:
+    with pytest.raises(subject.ContributionTargetError) as excinfo:
+        subject.standardize_signed_shapley(
+            0.0,
+            normalization,
+            target_family="residual_gain",
+            prediction_depth=12,
+            candidate_layer_id=6,
+        )
+    assert _error_code(excinfo) == "B2_TARGET_FAMILY_INVALID"
+    with pytest.raises(subject.ContributionTargetError) as excinfo:
+        subject.standardize_signed_shapley(
+            0.0,
+            normalization,
+            target_family="gt_localization",
+            prediction_depth=12,
+            candidate_layer_id=18,
+        )
+    assert _error_code(excinfo) == "B2_TARGET_NORMALIZATION_AXIS_MISSING"
+
+
+# ---------------------------------------------------------------------------
+# Coverage, collection, and plan identities
+# ---------------------------------------------------------------------------
+
+
+def test_sample_coverage_hash_binds_ordered_ids_and_split_counts(
+    target_records: Any,
+) -> None:
+    coverage = subject.contribution_target_sample_coverage_sha256(target_records)
+    assert len(coverage) == 64
+    shuffled = [*target_records[16:], *target_records[:16]]
+    assert subject.contribution_target_sample_coverage_sha256(shuffled) == coverage
+    drifted = copy.deepcopy(list(target_records))
+    drifted[0]["split_membership"] = "calibration"
+    with pytest.raises(subject.ContributionTargetError) as excinfo:
+        subject.contribution_target_sample_coverage_sha256(drifted)
+    assert _error_code(excinfo) == "B2_TARGET_COVERAGE_COUNT_MISMATCH"
+    with pytest.raises(subject.ContributionTargetError) as excinfo:
+        subject.contribution_target_sample_coverage_sha256(target_records[:31])
+    assert _error_code(excinfo) == "B2_TARGET_COVERAGE_COUNT_MISMATCH"
+
+
+def test_split_coverage_hashes_are_distinct_and_reject_foreign_records(
+    target_records: Any,
+) -> None:
+    training = fixtures.records_by_membership(target_records, "training")
+    calibration = fixtures.records_by_membership(target_records, "calibration")
+    evaluation = fixtures.records_by_membership(target_records, "evaluation")
+    hashes = {
+        subject.training_target_coverage_sha256(training),
+        subject.calibration_target_coverage_sha256(calibration),
+        subject.evaluation_target_coverage_sha256(evaluation),
+    }
+    assert len(hashes) == 3
+    with pytest.raises(subject.ContributionTargetError) as excinfo:
+        subject.training_target_coverage_sha256(calibration)
+    assert _error_code(excinfo) == "B2_TARGET_COVERAGE_MEMBERSHIP_INVALID"
+    with pytest.raises(subject.ContributionTargetError) as excinfo:
+        subject.calibration_target_coverage_sha256(calibration[:4])
+    assert _error_code(excinfo) == "B2_TARGET_COVERAGE_COUNT_MISMATCH"
+    with pytest.raises(subject.ContributionTargetError) as excinfo:
+        subject.evaluation_target_coverage_sha256(training)
+    assert _error_code(excinfo) == "B2_TARGET_COVERAGE_MEMBERSHIP_INVALID"
+
+
+def test_collection_identity_binds_records_calibration_and_normalization(
+    target_fixture: Any,
+    target_records: Any,
+    calibration_artifact: Any,
+    normalization: Any,
+) -> None:
+    baseline = subject.contribution_target_collection_scientific_sha256(
+        records=target_records,
+        calibration_artifact=calibration_artifact,
+        normalization=normalization,
+        candidate_layers=target_fixture.candidate_layers,
+        prediction_depths=target_fixture.prediction_depths,
+    )
+    assert len(baseline) == 64
+    shuffled = [*target_records[8:], *target_records[:8]]
+    assert (
+        subject.contribution_target_collection_scientific_sha256(
+            records=shuffled,
+            calibration_artifact=calibration_artifact,
+            normalization=normalization,
+            candidate_layers=target_fixture.candidate_layers,
+            prediction_depths=target_fixture.prediction_depths,
+        )
+        == baseline
+    )
+    drifted_calibration = copy.deepcopy(calibration_artifact)
+    drifted_calibration["gt_map_calibration_scientific_sha256"] = "1" * 64
+    assert (
+        subject.contribution_target_collection_scientific_sha256(
+            records=target_records,
+            calibration_artifact=drifted_calibration,
+            normalization=normalization,
+            candidate_layers=target_fixture.candidate_layers,
+            prediction_depths=target_fixture.prediction_depths,
+        )
+        != baseline
+    )
+    drifted_normalization = copy.deepcopy(normalization)
+    drifted_normalization["shapley_normalization_scientific_sha256"] = "2" * 64
+    assert (
+        subject.contribution_target_collection_scientific_sha256(
+            records=target_records,
+            calibration_artifact=drifted_normalization and drifted_calibration,
+            normalization=drifted_normalization,
+            candidate_layers=target_fixture.candidate_layers,
+            prediction_depths=target_fixture.prediction_depths,
+        )
+        != baseline
+    )
+
+
+def test_contribution_plan_binds_all_seven_identities(
+    target_fixture: Any,
+    target_records: Any,
+    calibration_artifact: Any,
+    normalization: Any,
+) -> None:
+    plan = subject.build_contribution_plan(
+        records=target_records,
+        calibration_artifact=calibration_artifact,
+        normalization=normalization,
+        candidate_layers=target_fixture.candidate_layers,
+        prediction_depths=target_fixture.prediction_depths,
+    )
+    identities = (
+        "gt_map_calibration_scientific_sha256",
+        "contribution_target_sample_coverage_sha256",
+        "contribution_target_collection_scientific_sha256",
+        "shapley_normalization_scientific_sha256",
+        "training_target_coverage_sha256",
+        "calibration_target_coverage_sha256",
+        "evaluation_target_coverage_sha256",
+    )
+    for identity in identities:
+        assert len(plan[identity]) == 64
+    assert len(set(plan[identity] for identity in identities)) == 7
+    assert len(plan["contribution_plan_scientific_sha256"]) == 64
+    assert plan["teacher_forward_count"] == 0
+    assert plan["official_materialization_enabled"] is False
+    assert plan["planned_record_count"] == 32
+    assert plan["planned_split_counts"] == {
+        "training": 16,
+        "calibration": 8,
+        "evaluation": 8,
+    }
+    assert plan["planned_ordered_stable_sample_ids"] == sorted(
+        row["stable_sample_id"] for row in target_records
+    )
+    assert plan["prediction_depths"] == list(target_fixture.prediction_depths)
+    assert plan["candidate_layers"] == list(target_fixture.candidate_layers)
+    assert plan["contract_versions"] == {
+        "coalition": subject.COALITION_CONTRACT_VERSION,
+        "utility": subject.UTILITY_CONTRACT_VERSION,
+        "shapley": subject.SHAPLEY_CONTRACT_VERSION,
+        "allocation": subject.ALLOCATION_CONTRACT_VERSION,
+        "record": subject.RECORD_CONTRACT_VERSION,
+        "calibration": subject.CALIBRATION_CONTRACT_VERSION,
+        "normalization": subject.NORMALIZATION_CONTRACT_VERSION,
+        "collection": subject.COLLECTION_CONTRACT_VERSION,
+        "plan": subject.PLAN_CONTRACT_VERSION,
+    }
+    # A pure in-memory plan: recomputing it twice is identical and writes nothing.
+    again = subject.build_contribution_plan(
+        records=[*target_records[4:], *target_records[:4]],
+        calibration_artifact=calibration_artifact,
+        normalization=normalization,
+        candidate_layers=target_fixture.candidate_layers,
+        prediction_depths=target_fixture.prediction_depths,
+    )
+    assert again["contribution_plan_scientific_sha256"] == (
+        plan["contribution_plan_scientific_sha256"]
+    )
+
+
+@pytest.mark.parametrize(
+    "mutate",
+    ["record", "calibration", "normalization", "official_flag"],
+)
+def test_contribution_plan_hash_changes_when_any_bound_identity_changes(
+    target_fixture: Any,
+    target_records: Any,
+    calibration_artifact: Any,
+    normalization: Any,
+    mutate: str,
+) -> None:
+    baseline = subject.build_contribution_plan(
+        records=target_records,
+        calibration_artifact=calibration_artifact,
+        normalization=normalization,
+        candidate_layers=target_fixture.candidate_layers,
+        prediction_depths=target_fixture.prediction_depths,
+    )["contribution_plan_scientific_sha256"]
+    records = copy.deepcopy(list(target_records))
+    artifact = copy.deepcopy(calibration_artifact)
+    statistics = copy.deepcopy(normalization)
+    official = False
+    if mutate == "record":
+        records[0]["contribution_target_record_scientific_sha256"] = "3" * 64
+    elif mutate == "calibration":
+        artifact["gt_map_calibration_scientific_sha256"] = "4" * 64
+    elif mutate == "normalization":
+        statistics["shapley_normalization_scientific_sha256"] = "5" * 64
+    else:
+        official = True
+    mutated = subject.build_contribution_plan(
+        records=records,
+        calibration_artifact=artifact,
+        normalization=statistics,
+        candidate_layers=target_fixture.candidate_layers,
+        prediction_depths=target_fixture.prediction_depths,
+        official_materialization_enabled=official,
+    )["contribution_plan_scientific_sha256"]
+    assert mutated != baseline
+
+
+def test_contribution_plan_rejects_wrong_split_counts(
+    target_fixture: Any,
+    target_records: Any,
+    calibration_artifact: Any,
+    normalization: Any,
+) -> None:
+    with pytest.raises(subject.ContributionTargetError) as excinfo:
+        subject.build_contribution_plan(
+            records=target_records[:24],
+            calibration_artifact=calibration_artifact,
+            normalization=normalization,
+            candidate_layers=target_fixture.candidate_layers,
+            prediction_depths=target_fixture.prediction_depths,
+        )
+    assert _error_code(excinfo) == "B2_TARGET_COVERAGE_COUNT_MISMATCH"
+
+
+# ---------------------------------------------------------------------------
+# Leakage-access helpers
+# ---------------------------------------------------------------------------
+
+
+def test_training_access_mode_fails_closed_on_calibration_or_evaluation_records(
+    target_records: Any, normalization: Any
+) -> None:
+    training = list(fixtures.records_by_membership(target_records, "training"))
+    for membership in ("calibration", "evaluation"):
+        leaking = [
+            *training,
+            fixtures.records_by_membership(target_records, membership)[0],
+        ]
+        with pytest.raises(subject.ContributionTargetError) as excinfo:
+            subject.load_targets_for_access(
+                leaking, access_mode="training_only", normalization=normalization
+            )
+        assert _error_code(excinfo) == "B2_TARGET_ACCESS_LEAKAGE"
+
+
+def test_access_modes_only_admit_their_own_split(
+    target_records: Any, normalization: Any
+) -> None:
+    for access_mode, membership in (
+        ("training_only", "training"),
+        ("calibration_only", "calibration"),
+        ("evaluation_only", "evaluation"),
+    ):
+        records = fixtures.records_by_membership(target_records, membership)
+        views = subject.load_targets_for_access(
+            records, access_mode=access_mode, normalization=normalization
+        )
+        assert [view["split_membership"] for view in views] == [membership] * len(records)
+        assert [view["stable_sample_id"] for view in views] == sorted(
+            row["stable_sample_id"] for row in records
+        )
+        foreign = fixtures.records_by_membership(
+            target_records, "training" if membership != "training" else "evaluation"
+        )
+        with pytest.raises(subject.ContributionTargetError) as excinfo:
+            subject.load_targets_for_access(
+                foreign, access_mode=access_mode, normalization=normalization
+            )
+        assert _error_code(excinfo) == "B2_TARGET_ACCESS_LEAKAGE"
+
+
+def test_access_mode_rejects_unknown_mode_and_tampered_normalization(
+    target_records: Any, normalization: Any
+) -> None:
+    training = fixtures.records_by_membership(target_records, "training")
+    with pytest.raises(subject.ContributionTargetError) as excinfo:
+        subject.load_targets_for_access(
+            training, access_mode="everything", normalization=normalization
+        )
+    assert _error_code(excinfo) == "B2_TARGET_ACCESS_MODE_INVALID"
+    tampered = copy.deepcopy(normalization)
+    tampered["axes"]["gt_localization"]["12"]["layers"][0]["mean"] = 12345.0
+    with pytest.raises(subject.ContributionTargetError) as excinfo:
+        subject.load_targets_for_access(
+            training, access_mode="training_only", normalization=tampered
+        )
+    assert _error_code(excinfo) == "B2_TARGET_NORMALIZATION_HASH_MISMATCH"
+
+
+def test_access_views_expose_raw_signed_allocation_and_standardized_values(
+    target_fixture: Any, target_records: Any, normalization: Any
+) -> None:
+    training = fixtures.records_by_membership(target_records, "training")
+    views = subject.load_targets_for_access(
+        training, access_mode="training_only", normalization=normalization
+    )
+    by_id = {row["stable_sample_id"]: row for row in training}
+    for view in views:
+        record = by_id[view["stable_sample_id"]]
+        for depth in target_fixture.prediction_depths:
+            players = subject.players_for_depth(target_fixture.candidate_layers, depth)
+            for family in subject.TARGET_FAMILIES:
+                source = record["depth_targets"][str(depth)][family]
+                target = view["by_depth"][str(depth)][family]
+                assert target["raw_signed_shapley_by_layer"] == (
+                    source["raw_signed_shapley_by_layer"]
+                )
+                assert target["positive_allocation_target_by_layer"] == (
+                    source["positive_allocation_target_by_layer"]
+                )
+                assert set(target["standardized_signed_shapley_by_layer"]) == {
+                    str(layer) for layer in players
+                }
+                for layer in players:
+                    expected = subject.standardize_signed_shapley(
+                        source["raw_signed_shapley_by_layer"][str(layer)],
+                        normalization,
+                        target_family=family,
+                        prediction_depth=depth,
+                        candidate_layer_id=layer,
+                    )
+                    assert target["standardized_signed_shapley_by_layer"][
+                        str(layer)
+                    ] == pytest.approx(expected, abs=1e-15)
+
+
+def test_access_views_never_mutate_the_source_records(
+    target_records: Any, normalization: Any
+) -> None:
+    training = fixtures.records_by_membership(target_records, "training")
+    before = copy.deepcopy(list(training))
+    subject.load_targets_for_access(
+        training, access_mode="training_only", normalization=normalization
+    )
+    assert list(training) == before

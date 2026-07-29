@@ -1,14 +1,23 @@
-"""B2-04A dual contribution-target mathematics.
+"""B2-04A dual contribution-target mathematics and artifact contracts.
 
-Story 1 scope: frozen mathematical contracts only. Coalition encoding and equal
+Story 1 scope: frozen mathematical contracts. Coalition encoding and equal
 average fusion, source-training-only GT map calibration, the frozen GT and
 teacher utilities, exact Shapley values, and the positive allocation fallback.
+
+Story 2 scope: the per-sample scientific record schema, the GT map calibration
+and Shapley normalization artifacts, the layered scientific identities (split
+coverage, collection, plan), and the pure leakage-access helpers a future DLCM
+loader will use. Every scientific digest comes from an explicit whitelist over
+canonical JSON, so paths, timestamps, Git state, runtime attestation, and
+file-byte hashes can never enter a scientific identity.
 
 The module is deliberately inert: no artifact persistence, no run directories,
 no CLI, no Git or checkpoint inspection, no dataset adapters, and no
 target-domain access. Production math is reused rather than reimplemented:
-Pixel AP comes from ``rad.evaluation.paper_metrics._binary_ap`` and the
-full-depth teacher reference comes from ``rad.models.dlcm.sum_preserving_fusion``.
+Pixel AP comes from ``rad.evaluation.paper_metrics._binary_ap``, the full-depth
+teacher reference comes from ``rad.models.dlcm.sum_preserving_fusion``, and
+tensor provenance digests come from
+``rad.phase_b.b2_teacher_cache.canonical_tensor_digest``.
 
 Spatial maps are logically ``[height, width]``. ``as_spatial_map`` also accepts
 the teacher-cache shapes ``[1, 1, H, W]`` and ``[1, H, W]`` and always returns a
@@ -18,6 +27,8 @@ detached ``float64`` 2-D tensor, so every utility below is evaluated in
 
 from __future__ import annotations
 
+import hashlib
+import json
 import math
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
@@ -27,6 +38,7 @@ from typing import Any, NamedTuple, NoReturn
 import torch
 import torch.nn.functional as functional
 
+import rad.phase_b.b2_teacher_cache as cache_mod
 from rad.evaluation import paper_metrics
 from rad.models import dlcm
 
@@ -54,6 +66,29 @@ COALITION_CONTRACT_VERSION = "b2_04a_coalition_v1"
 UTILITY_CONTRACT_VERSION = "b2_04a_utility_v1"
 SHAPLEY_CONTRACT_VERSION = "b2_04a_shapley_v1"
 ALLOCATION_CONTRACT_VERSION = "b2_04a_allocation_v1"
+RECORD_CONTRACT_VERSION = "b2_04a_record_v1"
+CALIBRATION_CONTRACT_VERSION = "b2_04a_calibration_v1"
+NORMALIZATION_CONTRACT_VERSION = "b2_04a_normalization_v1"
+COLLECTION_CONTRACT_VERSION = "b2_04a_collection_v1"
+PLAN_CONTRACT_VERSION = "b2_04a_plan_v1"
+
+RECORD_SCHEMA_VERSION = 1
+TARGET_FAMILIES: tuple[str, ...] = ("gt_localization", "teacher_fidelity")
+SPLIT_MEMBERSHIPS: tuple[str, ...] = ("training", "calibration", "evaluation")
+REQUIRED_SPLIT_COUNTS: Mapping[str, int] = MappingProxyType(
+    {"training": 16, "calibration": 8, "evaluation": 8}
+)
+ACCESS_MODES: tuple[str, ...] = ("training_only", "calibration_only", "evaluation_only")
+STATISTICS_DTYPE = "float64"
+STANDARD_DEVIATION_DDOF = 0
+QUANTILE_RULE = "nearest_rank_ceiling"
+PRODUCTION_ARTIFACT_KIND = "production"
+TEST_FIXTURE_ARTIFACT_KIND = "test_fixture"
+
+_TEACHER_FUSION_FUNCTION = "rad.models.dlcm.sum_preserving_fusion"
+_MASK_SOURCE_ANOMALOUS = "production_gt_mask"
+_MASK_SOURCE_NORMAL = "normal_all_zero_mask"
+_MASK_ALIGNMENT_MODE = "nearest"
 
 _TRAINING_MEMBERSHIP = "training"
 _STATISTICS_DTYPE = "float64"
@@ -586,13 +621,20 @@ class GtNormalUtility:
 
 
 def soft_dice(calibrated_map: Any, mask: Any) -> float:
-    """Soft Dice on the calibrated map with a linear denominator and ``eps = 1e-6``."""
+    """Soft Dice on the calibrated map.
+
+    Authoritative formula places ``eps = 1e-6`` in both the numerator and the
+    linear denominator::
+
+        (2 * sum(pred * mask) + eps) / (sum(pred) + sum(mask) + eps)
+    """
 
     prediction = as_spatial_map(calibrated_map, role="calibrated map")
     binary = _require_binary_mask(mask, prediction)
     intersection = float((prediction * binary).sum().item())
+    numerator = 2.0 * intersection + SOFT_DICE_EPS
     denominator = float(prediction.sum().item()) + float(binary.sum().item()) + SOFT_DICE_EPS
-    return float(2.0 * intersection / denominator)
+    return float(numerator / denominator)
 
 
 def pixel_ap_raw(raw_map: Any, mask: Any) -> float:
@@ -1022,3 +1064,1280 @@ def positive_allocation(
             f"allocation sums to {total_allocation:.17g} instead of 1",
         )
     return MappingProxyType(allocation)
+
+
+# ---------------------------------------------------------------------------
+# Story 2 — scientific records, identities, and leakage-access helpers
+# ---------------------------------------------------------------------------
+
+
+_SHA256_HEX = frozenset("0123456789abcdef")
+
+_NON_SCIENTIFIC_CALIBRATION_KEYS = frozenset(
+    {
+        "gt_map_calibration_scientific_sha256",
+        "artifact_kind",
+        "absolute_output_path",
+        "timestamp",
+        "calibration_file_sha256",
+        "git_branch",
+        "worktree_path",
+        "runtime_attestation_sha256",
+        "relative_path",
+    }
+)
+_CALIBRATION_SCIENTIFIC_KEYS = (
+    "calibration_contract_version",
+    "statistics_dtype",
+    "quantile_rule",
+    "q_low_quantile",
+    "q_high_quantile",
+    "candidate_layers",
+    "prediction_depths",
+    "training_sample_count",
+    "ordered_training_stable_sample_ids",
+    "source_teacher_record_scientific_sha256_by_id",
+    "by_depth",
+    "teacher_cache_scientific_sha256",
+    "teacher_cache_sample_coverage_sha256",
+    "descriptor_collection_scientific_sha256",
+    "split_scientific_sha256",
+    "checkpoint_sha256",
+    "execution_profile_sha256",
+    "gt_map_calibration_training_coverage_sha256",
+)
+
+_NON_SCIENTIFIC_RECORD_KEYS = frozenset(
+    {
+        "contribution_target_record_scientific_sha256",
+        "artifact_kind",
+        "absolute_output_path",
+        "relative_record_path",
+        "record_file_sha256",
+        "timestamp",
+        "git_branch",
+        "worktree_path",
+        "runtime_attestation_sha256",
+    }
+)
+_RECORD_SCIENTIFIC_KEYS = (
+    "schema_version",
+    "target_record_contract_version",
+    "stable_sample_id",
+    "split_membership",
+    "category",
+    "label",
+    "anomaly_type",
+    "target_families",
+    "candidate_layers",
+    "prediction_depths",
+    "statistics_dtype",
+    "coalition_contract_version",
+    "utility_contract_version",
+    "shapley_contract_version",
+    "allocation_contract_version",
+    "gt_map_calibration_scientific_sha256",
+    "source_teacher_record_scientific_sha256",
+    "descriptor_record_scientific_sha256",
+    "teacher_cache_scientific_sha256",
+    "teacher_cache_sample_coverage_sha256",
+    "descriptor_collection_scientific_sha256",
+    "split_scientific_sha256",
+    "checkpoint_sha256",
+    "execution_profile_sha256",
+    "mask_provenance",
+    "teacher_reference_provenance",
+    "depth_targets",
+)
+
+_NON_SCIENTIFIC_NORMALIZATION_KEYS = frozenset(
+    {
+        "shapley_normalization_scientific_sha256",
+        "artifact_kind",
+        "absolute_output_path",
+        "timestamp",
+        "normalization_file_sha256",
+        "git_branch",
+        "worktree_path",
+        "runtime_attestation_sha256",
+    }
+)
+_NORMALIZATION_SCIENTIFIC_KEYS = (
+    "normalization_contract_version",
+    "statistics_dtype",
+    "standard_deviation_ddof",
+    "target_families",
+    "ordered_training_stable_sample_ids",
+    "contribution_target_record_scientific_sha256_by_id",
+    "axes",
+)
+
+_NON_SCIENTIFIC_PLAN_KEYS = frozenset(
+    {
+        "contribution_plan_scientific_sha256",
+        "absolute_output_path",
+        "timestamp",
+        "git_branch",
+        "worktree_path",
+        "runtime_attestation_sha256",
+        "plan_file_sha256",
+    }
+)
+_PLAN_SCIENTIFIC_KEYS = (
+    "gt_map_calibration_scientific_sha256",
+    "contribution_target_sample_coverage_sha256",
+    "contribution_target_collection_scientific_sha256",
+    "shapley_normalization_scientific_sha256",
+    "training_target_coverage_sha256",
+    "calibration_target_coverage_sha256",
+    "evaluation_target_coverage_sha256",
+    "planned_record_count",
+    "planned_split_counts",
+    "planned_ordered_stable_sample_ids",
+    "candidate_layers",
+    "prediction_depths",
+    "contract_versions",
+    "teacher_forward_count",
+    "official_materialization_enabled",
+    "contribution_target_record_scientific_sha256_by_id",
+    "teacher_cache_scientific_sha256",
+    "descriptor_collection_scientific_sha256",
+    "split_scientific_sha256",
+    "checkpoint_sha256",
+    "execution_profile_sha256",
+)
+
+_ACCESS_MODE_TO_MEMBERSHIP = {
+    "training_only": "training",
+    "calibration_only": "calibration",
+    "evaluation_only": "evaluation",
+}
+
+
+@dataclass(frozen=True)
+class MaskProvenance:
+    """Caller-supplied mask identity and source metadata."""
+
+    mask_identity: str | None
+    mask_source: str
+    alignment_mode: str = _MASK_ALIGNMENT_MODE
+    binarization_threshold: float = MASK_BINARIZATION_THRESHOLD
+
+
+@dataclass(frozen=True)
+class TeacherReferenceProvenance:
+    """Caller-supplied verification of the full-depth teacher reference."""
+
+    cached_full_depth_map_digest: str
+    reconstruction_verified: bool
+    source_candidate_layers: Sequence[int]
+
+
+@dataclass(frozen=True)
+class UpstreamTargetIdentities:
+    """Bound teacher-cache and descriptor scientific identities for one sample."""
+
+    source_teacher_record_scientific_sha256: str
+    descriptor_record_scientific_sha256: str
+    teacher_cache_scientific_sha256: str
+    teacher_cache_sample_coverage_sha256: str
+    descriptor_collection_scientific_sha256: str
+    split_scientific_sha256: str
+    checkpoint_sha256: str
+    execution_profile_sha256: str
+
+
+@dataclass(frozen=True)
+class ContributionTargetSample:
+    """One sample's inputs for building a contribution-target scientific record."""
+
+    stable_sample_id: str
+    split_membership: str
+    category: str
+    label: int
+    anomaly_type: str
+    maps_by_depth: Mapping[int, Mapping[int, Any]]
+    mask: Any
+    teacher_reference_map: Any
+
+
+def _is_sha256(value: Any) -> bool:
+    return (
+        isinstance(value, str)
+        and len(value) == 64
+        and all(character in _SHA256_HEX for character in value)
+    )
+
+
+def _canonical_sha256(value: Mapping[str, Any]) -> str:
+    encoded = json.dumps(
+        value,
+        sort_keys=True,
+        separators=(",", ":"),
+        ensure_ascii=False,
+    ).encode("utf-8")
+    return hashlib.sha256(encoded).hexdigest()
+
+
+def _project_scientific(
+    payload: Mapping[str, Any],
+    *,
+    whitelist: Sequence[str],
+    ignored: frozenset[str],
+    schema_code: str,
+) -> dict[str, Any]:
+    if not isinstance(payload, Mapping):
+        _fail(schema_code, "scientific payload must be a mapping")
+    unknown = [key for key in payload if key not in whitelist and key not in ignored]
+    if unknown:
+        _fail(schema_code, f"undeclared scientific fields: {sorted(unknown)}")
+    missing = [key for key in whitelist if key not in payload]
+    if missing:
+        _fail(schema_code, f"missing scientific fields: {missing}")
+    return {key: payload[key] for key in whitelist}
+
+
+def require_production_artifact_kind(payload: Mapping[str, Any]) -> None:
+    """Fail closed unless ``artifact_kind`` is the production value."""
+
+    if not isinstance(payload, Mapping):
+        _fail("B2_TARGET_ARTIFACT_KIND_INVALID", "artifact payload must be a mapping")
+    kind = payload.get("artifact_kind")
+    if kind == PRODUCTION_ARTIFACT_KIND:
+        return None
+    if kind == TEST_FIXTURE_ARTIFACT_KIND:
+        _fail(
+            "B2_TARGET_TEST_FIXTURE_NOT_ACCEPTED",
+            "test_fixture artifacts are never accepted by production official mode",
+        )
+    _fail("B2_TARGET_ARTIFACT_KIND_INVALID", f"artifact_kind {kind!r} is not accepted")
+
+
+def full_depth_map_digest(tensor: Any) -> str:
+    """Canonical digest of one cached full-depth teacher reference tensor."""
+
+    if not isinstance(tensor, torch.Tensor):
+        _fail("B2_TARGET_TEACHER_REFERENCE_DIGEST_MISMATCH", "full-depth map must be a tensor")
+    semantics = {
+        2: ("height", "width"),
+        3: ("batch", "height", "width"),
+        4: ("batch", "channel", "height", "width"),
+    }.get(int(tensor.ndim))
+    if semantics is None:
+        _fail(
+            "B2_TARGET_TEACHER_REFERENCE_DIGEST_MISMATCH",
+            f"unsupported full-depth map rank {int(tensor.ndim)}",
+        )
+    return cache_mod.canonical_tensor_digest("full_depth_map", tensor, semantics)
+
+
+def _require_lattice(
+    layers: Sequence[int],
+    depths: Sequence[int],
+    *,
+    observed_layers: Any,
+    observed_depths: Any,
+    code: str,
+) -> None:
+    expected_layers = list(_validate_candidate_layers(layers))
+    expected_depths = list(_validate_prediction_depths(depths))
+    if list(observed_layers) != expected_layers or list(observed_depths) != expected_depths:
+        _fail(code, "candidate layers or prediction depths drifted from the requested lattice")
+
+
+def bind_upstream_identities(
+    *,
+    teacher_record: Mapping[str, Any],
+    teacher_record_scientific_sha256: str,
+    teacher_cache_scientific_sha256: str,
+    teacher_cache_sample_coverage_sha256: str,
+    descriptor_record: Mapping[str, Any],
+    descriptor_collection_scientific_sha256: str,
+    candidate_layers: Sequence[int],
+    prediction_depths: Sequence[int],
+) -> UpstreamTargetIdentities:
+    """Bind and cross-check teacher-record and descriptor-record identities."""
+
+    if not isinstance(teacher_record, Mapping) or not isinstance(descriptor_record, Mapping):
+        _fail("B2_TARGET_UPSTREAM_HASH_INVALID", "teacher and descriptor records must be mappings")
+    for digest, label in (
+        (teacher_record_scientific_sha256, "teacher record"),
+        (teacher_cache_scientific_sha256, "teacher cache"),
+        (teacher_cache_sample_coverage_sha256, "teacher coverage"),
+        (descriptor_collection_scientific_sha256, "descriptor collection"),
+    ):
+        if not _is_sha256(digest):
+            _fail("B2_TARGET_UPSTREAM_HASH_INVALID", f"{label} hash is invalid")
+    descriptor_record_hash = descriptor_record.get("descriptor_record_scientific_sha256")
+    if not _is_sha256(descriptor_record_hash):
+        _fail("B2_TARGET_UPSTREAM_HASH_INVALID", "descriptor record hash is invalid")
+
+    if descriptor_record.get("source_teacher_record_scientific_sha256") != (
+        teacher_record_scientific_sha256
+    ):
+        _fail(
+            "B2_TARGET_UPSTREAM_TEACHER_MISMATCH",
+            "descriptor record is not anchored to the supplied teacher record",
+        )
+    if descriptor_record.get("teacher_cache_scientific_sha256") != teacher_cache_scientific_sha256:
+        _fail(
+            "B2_TARGET_UPSTREAM_TEACHER_MISMATCH",
+            "descriptor record teacher-cache identity drifted",
+        )
+
+    teacher_id = teacher_record.get("stable_sample_id")
+    descriptor_id = descriptor_record.get("stable_sample_id")
+    if (
+        not isinstance(teacher_id, str)
+        or not teacher_id
+        or teacher_id != descriptor_id
+    ):
+        _fail(
+            "B2_TARGET_UPSTREAM_SAMPLE_MISMATCH",
+            "teacher and descriptor stable sample IDs disagree",
+        )
+
+    teacher_membership = teacher_record.get("membership")
+    descriptor_membership = descriptor_record.get("split_membership")
+    if teacher_membership != descriptor_membership:
+        _fail(
+            "B2_TARGET_UPSTREAM_SPLIT_MISMATCH",
+            "teacher membership and descriptor split_membership disagree",
+        )
+
+    for field, code in (
+        ("split_scientific_sha256", "B2_TARGET_UPSTREAM_IDENTITY_MISMATCH"),
+        ("checkpoint_sha256", "B2_TARGET_UPSTREAM_IDENTITY_MISMATCH"),
+        ("execution_profile_sha256", "B2_TARGET_UPSTREAM_IDENTITY_MISMATCH"),
+    ):
+        teacher_value = teacher_record.get(field)
+        descriptor_value = descriptor_record.get(field)
+        if not _is_sha256(teacher_value) or not _is_sha256(descriptor_value):
+            _fail("B2_TARGET_UPSTREAM_HASH_INVALID", f"{field} is invalid")
+        if teacher_value != descriptor_value:
+            _fail(code, f"{field} drifted between teacher and descriptor records")
+
+    _require_lattice(
+        candidate_layers,
+        prediction_depths,
+        observed_layers=teacher_record.get("candidate_layers", ()),
+        observed_depths=teacher_record.get("prediction_depths", ()),
+        code="B2_TARGET_UPSTREAM_LATTICE_MISMATCH",
+    )
+    _require_lattice(
+        candidate_layers,
+        prediction_depths,
+        observed_layers=descriptor_record.get("candidate_layers", ()),
+        observed_depths=descriptor_record.get("prediction_depths", ()),
+        code="B2_TARGET_UPSTREAM_LATTICE_MISMATCH",
+    )
+
+    return UpstreamTargetIdentities(
+        source_teacher_record_scientific_sha256=str(teacher_record_scientific_sha256),
+        descriptor_record_scientific_sha256=str(descriptor_record_hash),
+        teacher_cache_scientific_sha256=str(teacher_cache_scientific_sha256),
+        teacher_cache_sample_coverage_sha256=str(teacher_cache_sample_coverage_sha256),
+        descriptor_collection_scientific_sha256=str(descriptor_collection_scientific_sha256),
+        split_scientific_sha256=str(teacher_record["split_scientific_sha256"]),
+        checkpoint_sha256=str(teacher_record["checkpoint_sha256"]),
+        execution_profile_sha256=str(teacher_record["execution_profile_sha256"]),
+    )
+
+
+def gt_map_calibration_scientific_sha256(artifact: Mapping[str, Any]) -> str:
+    """Scientific digest of a GT map calibration artifact over the whitelist."""
+
+    projected = _project_scientific(
+        artifact,
+        whitelist=_CALIBRATION_SCIENTIFIC_KEYS,
+        ignored=_NON_SCIENTIFIC_CALIBRATION_KEYS,
+        schema_code="B2_TARGET_CALIBRATION_HASH_SCHEMA_INVALID",
+    )
+    return _canonical_sha256(projected)
+
+
+def validate_gt_map_calibration_artifact(artifact: Mapping[str, Any]) -> None:
+    """Recompute and require the embedded GT calibration scientific hash."""
+
+    claimed = artifact.get("gt_map_calibration_scientific_sha256")
+    recomputed = gt_map_calibration_scientific_sha256(artifact)
+    if claimed != recomputed:
+        _fail(
+            "B2_TARGET_CALIBRATION_HASH_MISMATCH",
+            "gt_map_calibration_scientific_sha256 does not match scientific content",
+        )
+    return None
+
+
+def build_gt_map_calibration_artifact(
+    calibration: GtMapCalibration,
+    *,
+    source_teacher_record_scientific_sha256_by_id: Mapping[str, str],
+    teacher_cache_scientific_sha256: str,
+    teacher_cache_sample_coverage_sha256: str,
+    descriptor_collection_scientific_sha256: str,
+    split_scientific_sha256: str,
+    checkpoint_sha256: str,
+    execution_profile_sha256: str,
+    expected_training_count: int,
+    artifact_kind: str,
+) -> dict[str, Any]:
+    """Build the scientific GT map calibration artifact with its digest."""
+
+    if not isinstance(calibration, GtMapCalibration):
+        _fail("B2_TARGET_CALIBRATION_COUNT_MISMATCH", "calibration object is invalid")
+    ordered_ids = tuple(sorted(calibration.ordered_training_stable_sample_ids))
+    if len(ordered_ids) != int(expected_training_count):
+        _fail(
+            "B2_TARGET_CALIBRATION_COUNT_MISMATCH",
+            f"expected {expected_training_count} training samples, got {len(ordered_ids)}",
+        )
+    if not isinstance(source_teacher_record_scientific_sha256_by_id, Mapping):
+        _fail("B2_TARGET_CALIBRATION_COVERAGE_MISMATCH", "teacher hash coverage must be a mapping")
+    coverage_ids = set(source_teacher_record_scientific_sha256_by_id)
+    if coverage_ids != set(ordered_ids):
+        _fail(
+            "B2_TARGET_CALIBRATION_COVERAGE_MISMATCH",
+            "source teacher hashes must cover exactly the training sample IDs",
+        )
+    for digest in (
+        teacher_cache_scientific_sha256,
+        teacher_cache_sample_coverage_sha256,
+        descriptor_collection_scientific_sha256,
+        split_scientific_sha256,
+        checkpoint_sha256,
+        execution_profile_sha256,
+    ):
+        if not _is_sha256(digest):
+            _fail("B2_TARGET_UPSTREAM_HASH_INVALID", "calibration upstream hash is invalid")
+    teacher_by_id = {
+        sample_id: str(source_teacher_record_scientific_sha256_by_id[sample_id])
+        for sample_id in ordered_ids
+    }
+    for digest in teacher_by_id.values():
+        if not _is_sha256(digest):
+            _fail("B2_TARGET_UPSTREAM_HASH_INVALID", "source teacher record hash is invalid")
+
+    by_depth: dict[str, dict[str, Any]] = {}
+    for depth in calibration.prediction_depths:
+        entry = calibration.by_depth[depth]
+        nonempty = list(range(1, 1 << len(entry.players)))
+        by_depth[str(depth)] = {
+            "prediction_depth": int(depth),
+            "ordered_player_layers": list(entry.players),
+            "nonempty_coalition_bitmasks": nonempty,
+            "nonempty_coalition_count": int(entry.nonempty_coalition_count),
+            "training_sample_count": int(entry.training_sample_count),
+            "value_count": int(entry.value_count),
+            "q_low": float(entry.q_low),
+            "q_high": float(entry.q_high),
+        }
+
+    training_coverage = _canonical_sha256(
+        {
+            "ordered_training_stable_sample_ids": list(ordered_ids),
+            "source_teacher_record_scientific_sha256_by_id": teacher_by_id,
+        }
+    )
+    artifact: dict[str, Any] = {
+        "calibration_contract_version": CALIBRATION_CONTRACT_VERSION,
+        "statistics_dtype": STATISTICS_DTYPE,
+        "quantile_rule": QUANTILE_RULE,
+        "q_low_quantile": float(calibration.q_low_quantile),
+        "q_high_quantile": float(calibration.q_high_quantile),
+        "candidate_layers": list(calibration.candidate_layers),
+        "prediction_depths": list(calibration.prediction_depths),
+        "training_sample_count": len(ordered_ids),
+        "ordered_training_stable_sample_ids": list(ordered_ids),
+        "source_teacher_record_scientific_sha256_by_id": teacher_by_id,
+        "by_depth": by_depth,
+        "teacher_cache_scientific_sha256": str(teacher_cache_scientific_sha256),
+        "teacher_cache_sample_coverage_sha256": str(teacher_cache_sample_coverage_sha256),
+        "descriptor_collection_scientific_sha256": str(descriptor_collection_scientific_sha256),
+        "split_scientific_sha256": str(split_scientific_sha256),
+        "checkpoint_sha256": str(checkpoint_sha256),
+        "execution_profile_sha256": str(execution_profile_sha256),
+        "gt_map_calibration_training_coverage_sha256": training_coverage,
+        "artifact_kind": str(artifact_kind),
+    }
+    artifact["gt_map_calibration_scientific_sha256"] = gt_map_calibration_scientific_sha256(artifact)
+    return artifact
+
+
+def contribution_target_record_scientific_sha256(record: Mapping[str, Any]) -> str:
+    """Scientific digest of one contribution-target record over the whitelist."""
+
+    projected = _project_scientific(
+        record,
+        whitelist=_RECORD_SCIENTIFIC_KEYS,
+        ignored=_NON_SCIENTIFIC_RECORD_KEYS,
+        schema_code="B2_TARGET_RECORD_HASH_SCHEMA_INVALID",
+    )
+    return _canonical_sha256(projected)
+
+
+def validate_contribution_target_record(
+    record: Mapping[str, Any],
+    *,
+    candidate_layers: Sequence[int],
+    prediction_depths: Sequence[int],
+) -> None:
+    """Require the embedded record hash and the configured depth lattice."""
+
+    claimed = record.get("contribution_target_record_scientific_sha256")
+    recomputed = contribution_target_record_scientific_sha256(record)
+    if claimed != recomputed:
+        _fail(
+            "B2_TARGET_RECORD_HASH_MISMATCH",
+            "contribution_target_record_scientific_sha256 does not match scientific content",
+        )
+    depths = _validate_prediction_depths(prediction_depths)
+    depth_targets = record.get("depth_targets")
+    if not isinstance(depth_targets, Mapping):
+        _fail("B2_TARGET_RECORD_DEPTH_MISSING", "depth_targets must be a mapping")
+    for depth in depths:
+        if str(depth) not in depth_targets:
+            _fail(
+                "B2_TARGET_RECORD_DEPTH_MISSING",
+                f"record is missing prediction depth {depth}",
+            )
+    _ = _validate_candidate_layers(candidate_layers)
+    return None
+
+
+def _mask_digest(mask: torch.Tensor) -> str:
+    semantics = {
+        2: ("height", "width"),
+        3: ("batch", "height", "width"),
+        4: ("batch", "channel", "height", "width"),
+    }[int(mask.ndim)]
+    return cache_mod.canonical_tensor_digest("gt_mask", mask.to(dtype=torch.float32), semantics)
+
+
+def _validate_mask_provenance(
+    provenance: MaskProvenance,
+    *,
+    is_anomalous: bool,
+) -> None:
+    expected_source = _MASK_SOURCE_ANOMALOUS if is_anomalous else _MASK_SOURCE_NORMAL
+    if (
+        provenance.mask_source != expected_source
+        or provenance.alignment_mode != _MASK_ALIGNMENT_MODE
+        or float(provenance.binarization_threshold) != float(MASK_BINARIZATION_THRESHOLD)
+    ):
+        _fail(
+            "B2_TARGET_MASK_PROVENANCE_INVALID",
+            "mask provenance does not match the frozen mask contract for this label",
+        )
+
+
+def _gt_components_abnormal(
+    *,
+    raw_map: torch.Tensor,
+    calibrated_map: torch.Tensor,
+    mask: torch.Tensor,
+) -> tuple[float, dict[str, float | int]]:
+    utility = gt_utility_abnormal(raw_map=raw_map, calibrated_map=calibrated_map, mask=mask)
+    penalty = background_penalty(calibrated_map, mask)
+    components: dict[str, float | int] = {
+        "pixel_ap": float(utility.pixel_ap),
+        "soft_dice": float(utility.soft_dice),
+        "background_penalty": float(utility.background_penalty),
+        "background_pixel_count": int(penalty.background_pixel_count),
+        "background_top1_percent_k": int(penalty.k),
+        "background_top1_percent_mean": float(penalty.top1_percent_mean),
+        "background_global_mean": float(penalty.global_mean),
+    }
+    return float(utility.utility), components
+
+
+def _gt_components_normal(*, calibrated_map: torch.Tensor) -> tuple[float, dict[str, float | int]]:
+    utility = gt_utility_normal(calibrated_map=calibrated_map)
+    components: dict[str, float | int] = {
+        "top1_percent_k": int(utility.k),
+        "top1_percent_mean": float(utility.top1_percent_mean),
+        "global_mean": float(utility.global_mean),
+    }
+    return float(utility.utility), components
+
+
+def _teacher_components(
+    *,
+    fused: torch.Tensor,
+    teacher_reference: Any,
+) -> tuple[float, dict[str, float]]:
+    utility = teacher_utility(fused, teacher_reference)
+    components = {
+        "spearman_raw": float(utility.spearman_raw),
+        "spearman_fidelity": float(utility.spearman_fidelity),
+        "top1_overlap": float(utility.top1_overlap),
+    }
+    return float(utility.utility), components
+
+
+def _family_block(
+    *,
+    players: tuple[int, ...],
+    raw_by_bitmask: Mapping[int, float],
+    utility_mode: str | None,
+) -> dict[str, Any]:
+    centered = center_utilities(raw_by_bitmask)
+    phi = exact_shapley(players, centered)
+    residual = require_shapley_efficiency(phi, centered[(1 << len(players)) - 1])
+    allocation = positive_allocation(phi)
+    block: dict[str, Any] = {
+        "empty_coalition_raw_utility": float(raw_by_bitmask[0]),
+        "grand_coalition_centered_value": float(centered[(1 << len(players)) - 1]),
+        "efficiency_residual": float(residual),
+        "raw_signed_shapley_by_layer": {
+            str(layer): float(phi[layer]) for layer in players
+        },
+        "positive_allocation_target_by_layer": {
+            str(layer): float(allocation[layer]) for layer in players
+        },
+    }
+    if utility_mode is not None:
+        block["utility_mode"] = utility_mode
+    return block
+
+
+def build_contribution_target_record(
+    *,
+    sample: ContributionTargetSample,
+    calibration_artifact: Mapping[str, Any],
+    upstream: UpstreamTargetIdentities,
+    mask_provenance: MaskProvenance,
+    teacher_reference_provenance: TeacherReferenceProvenance,
+    candidate_layers: Sequence[int],
+    prediction_depths: Sequence[int],
+    artifact_kind: str,
+) -> dict[str, Any]:
+    """Build one dual-family contribution-target scientific record in memory."""
+
+    if not isinstance(sample, ContributionTargetSample):
+        _fail("B2_TARGET_RECORD_MEMBERSHIP_INVALID", "sample must be ContributionTargetSample")
+    if sample.split_membership not in SPLIT_MEMBERSHIPS:
+        _fail(
+            "B2_TARGET_RECORD_MEMBERSHIP_INVALID",
+            f"split_membership {sample.split_membership!r} is not allowed",
+        )
+    validate_gt_map_calibration_artifact(calibration_artifact)
+    if not teacher_reference_provenance.reconstruction_verified:
+        _fail(
+            "B2_TARGET_TEACHER_REFERENCE_UNVERIFIED",
+            "teacher reference reconstruction must be verified before target construction",
+        )
+    actual_digest = full_depth_map_digest(sample.teacher_reference_map)
+    if actual_digest != teacher_reference_provenance.cached_full_depth_map_digest:
+        _fail(
+            "B2_TARGET_TEACHER_REFERENCE_DIGEST_MISMATCH",
+            "teacher reference digest does not match the supplied map",
+        )
+    layers = _validate_candidate_layers(candidate_layers)
+    depths = _validate_prediction_depths(prediction_depths)
+    if tuple(teacher_reference_provenance.source_candidate_layers) != layers:
+        _fail(
+            "B2_TARGET_TEACHER_REFERENCE_DIGEST_MISMATCH",
+            "teacher reference source layers drifted from candidate_layers",
+        )
+
+    is_anomalous = int(sample.label) == 1
+    _validate_mask_provenance(mask_provenance, is_anomalous=is_anomalous)
+
+    # Establish authoritative spatial shape from the deepest template map.
+    deepest = max(depths)
+    if not isinstance(sample.maps_by_depth, Mapping) or deepest not in sample.maps_by_depth:
+        _fail("B2_TARGET_RECORD_DEPTH_MISSING", f"maps missing for depth {deepest}")
+    template_players = players_for_depth(layers, deepest)
+    template_maps = sample.maps_by_depth[deepest]
+    if not isinstance(template_maps, Mapping) or tuple(sorted(template_maps)) != template_players:
+        _fail(
+            "B2_TARGET_RECORD_LAYER_SET_INVALID",
+            f"depth {deepest} must provide exactly {template_players}",
+        )
+    template = as_spatial_map(template_maps[template_players[0]], role="template map")
+    map_shape = (int(template.shape[0]), int(template.shape[1]))
+    binary_mask = binarize_and_validate_mask(
+        sample.mask,
+        is_anomalous=is_anomalous,
+        map_shape=map_shape,
+    )
+    positive = int((binary_mask > 0.5).sum().item())
+    background = int(binary_mask.numel()) - positive
+    mask_payload = {
+        "mask_identity": mask_provenance.mask_identity,
+        "mask_source": mask_provenance.mask_source,
+        "alignment_mode": mask_provenance.alignment_mode,
+        "binarization_threshold": float(mask_provenance.binarization_threshold),
+        "mask_shape": [map_shape[0], map_shape[1]],
+        "mask_digest": _mask_digest(
+            sample.mask if isinstance(sample.mask, torch.Tensor) else binary_mask
+        ),
+        "positive_pixel_count": positive,
+        "background_pixel_count": background,
+    }
+    teacher_dtype = (
+        str(sample.teacher_reference_map.dtype).replace("torch.", "")
+        if isinstance(sample.teacher_reference_map, torch.Tensor)
+        else "float32"
+    )
+    teacher_payload = {
+        "fusion_function": _TEACHER_FUSION_FUNCTION,
+        "reconstruction_verified": True,
+        "source_candidate_layers": list(layers),
+        "cached_full_depth_map_digest": str(
+            teacher_reference_provenance.cached_full_depth_map_digest
+        ),
+        "full_depth_map_dtype": teacher_dtype,
+    }
+
+    depth_targets: dict[str, Any] = {}
+    for depth in depths:
+        if depth not in sample.maps_by_depth:
+            _fail("B2_TARGET_RECORD_DEPTH_MISSING", f"maps missing for depth {depth}")
+        players = players_for_depth(layers, depth)
+        layer_maps = sample.maps_by_depth[depth]
+        if not isinstance(layer_maps, Mapping) or tuple(sorted(layer_maps)) != players:
+            _fail(
+                "B2_TARGET_RECORD_LAYER_SET_INVALID",
+                f"depth {depth} must provide exactly {players}",
+            )
+        for layer in players:
+            as_spatial_map(layer_maps[layer], role=f"layer {layer} at depth {depth}")
+
+        bounds = calibration_artifact["by_depth"][str(depth)]
+        q_low = float(bounds["q_low"])
+        q_high = float(bounds["q_high"])
+        coalitions = enumerate_coalitions(players)
+        raw_gt: dict[int, float] = {}
+        raw_teacher: dict[int, float] = {}
+        gt_components: dict[int, dict[str, float | int]] = {}
+        teacher_components: dict[int, dict[str, float]] = {}
+        coalition_table: list[dict[str, Any]] = []
+        for coalition in coalitions:
+            fused = fuse_equal_average(
+                layer_maps, coalition.layer_ids, template=layer_maps[players[0]]
+            )
+            calibrated = apply_gt_calibration(fused, q_low, q_high)
+            if is_anomalous:
+                gt_value, gt_comp = _gt_components_abnormal(
+                    raw_map=fused, calibrated_map=calibrated, mask=binary_mask
+                )
+            else:
+                gt_value, gt_comp = _gt_components_normal(calibrated_map=calibrated)
+            teacher_value, teacher_comp = _teacher_components(
+                fused=fused, teacher_reference=sample.teacher_reference_map
+            )
+            raw_gt[coalition.bitmask] = gt_value
+            raw_teacher[coalition.bitmask] = teacher_value
+            gt_components[coalition.bitmask] = gt_comp
+            teacher_components[coalition.bitmask] = teacher_comp
+            centered_placeholder_gt = 0.0
+            centered_placeholder_teacher = 0.0
+            coalition_table.append(
+                {
+                    "bitmask": int(coalition.bitmask),
+                    "layer_ids": list(coalition.layer_ids),
+                    "coalition_size": int(len(coalition.layer_ids)),
+                    "gt_localization": {
+                        "raw_utility": float(gt_value),
+                        "centered_value": centered_placeholder_gt,
+                        "utility_components": dict(gt_comp),
+                    },
+                    "teacher_fidelity": {
+                        "raw_utility": float(teacher_value),
+                        "centered_value": centered_placeholder_teacher,
+                        "utility_components": dict(teacher_comp),
+                    },
+                }
+            )
+
+        centered_gt = center_utilities(raw_gt)
+        centered_teacher = center_utilities(raw_teacher)
+        for entry in coalition_table:
+            bitmask = int(entry["bitmask"])
+            entry["gt_localization"]["centered_value"] = float(centered_gt[bitmask])
+            entry["teacher_fidelity"]["centered_value"] = float(centered_teacher[bitmask])
+
+        utility_mode = "abnormal" if is_anomalous else "normal"
+        depth_targets[str(depth)] = {
+            "prediction_depth": int(depth),
+            "ordered_player_layers": list(players),
+            "coalition_table": coalition_table,
+            "gt_localization": _family_block(
+                players=players, raw_by_bitmask=raw_gt, utility_mode=utility_mode
+            ),
+            "teacher_fidelity": _family_block(
+                players=players, raw_by_bitmask=raw_teacher, utility_mode=None
+            ),
+        }
+
+    record: dict[str, Any] = {
+        "schema_version": RECORD_SCHEMA_VERSION,
+        "target_record_contract_version": RECORD_CONTRACT_VERSION,
+        "stable_sample_id": str(sample.stable_sample_id),
+        "split_membership": str(sample.split_membership),
+        "category": str(sample.category),
+        "label": int(sample.label),
+        "anomaly_type": str(sample.anomaly_type),
+        "target_families": list(TARGET_FAMILIES),
+        "candidate_layers": list(layers),
+        "prediction_depths": list(depths),
+        "statistics_dtype": STATISTICS_DTYPE,
+        "coalition_contract_version": COALITION_CONTRACT_VERSION,
+        "utility_contract_version": UTILITY_CONTRACT_VERSION,
+        "shapley_contract_version": SHAPLEY_CONTRACT_VERSION,
+        "allocation_contract_version": ALLOCATION_CONTRACT_VERSION,
+        "gt_map_calibration_scientific_sha256": str(
+            calibration_artifact["gt_map_calibration_scientific_sha256"]
+        ),
+        "source_teacher_record_scientific_sha256": (
+            upstream.source_teacher_record_scientific_sha256
+        ),
+        "descriptor_record_scientific_sha256": upstream.descriptor_record_scientific_sha256,
+        "teacher_cache_scientific_sha256": upstream.teacher_cache_scientific_sha256,
+        "teacher_cache_sample_coverage_sha256": upstream.teacher_cache_sample_coverage_sha256,
+        "descriptor_collection_scientific_sha256": (
+            upstream.descriptor_collection_scientific_sha256
+        ),
+        "split_scientific_sha256": upstream.split_scientific_sha256,
+        "checkpoint_sha256": upstream.checkpoint_sha256,
+        "execution_profile_sha256": upstream.execution_profile_sha256,
+        "mask_provenance": mask_payload,
+        "teacher_reference_provenance": teacher_payload,
+        "depth_targets": depth_targets,
+        "artifact_kind": str(artifact_kind),
+    }
+    record["contribution_target_record_scientific_sha256"] = (
+        contribution_target_record_scientific_sha256(record)
+    )
+    return record
+
+
+def shapley_normalization_scientific_sha256(artifact: Mapping[str, Any]) -> str:
+    """Scientific digest of the Shapley normalization artifact."""
+
+    projected = _project_scientific(
+        artifact,
+        whitelist=_NORMALIZATION_SCIENTIFIC_KEYS,
+        ignored=_NON_SCIENTIFIC_NORMALIZATION_KEYS,
+        schema_code="B2_TARGET_NORMALIZATION_HASH_SCHEMA_INVALID",
+    )
+    return _canonical_sha256(projected)
+
+
+def compute_shapley_normalization(
+    records: Sequence[Mapping[str, Any]],
+    *,
+    candidate_layers: Sequence[int],
+    prediction_depths: Sequence[int],
+    expected_training_count: int,
+    artifact_kind: str,
+) -> dict[str, Any]:
+    """Fit training-only Shapley normalization statistics in float64."""
+
+    if not isinstance(records, Sequence) or isinstance(records, str | bytes):
+        _fail("B2_TARGET_NORMALIZATION_COUNT_MISMATCH", "records must be a sequence")
+    for row in records:
+        if not isinstance(row, Mapping):
+            _fail("B2_TARGET_NORMALIZATION_MEMBERSHIP_INVALID", "each record must be a mapping")
+        if row.get("split_membership") != _TRAINING_MEMBERSHIP:
+            _fail(
+                "B2_TARGET_NORMALIZATION_MEMBERSHIP_INVALID",
+                "Shapley normalization admits training records only",
+            )
+    if len(records) != int(expected_training_count):
+        _fail(
+            "B2_TARGET_NORMALIZATION_COUNT_MISMATCH",
+            f"expected {expected_training_count} training records, got {len(records)}",
+        )
+    layers = _validate_candidate_layers(candidate_layers)
+    depths = _validate_prediction_depths(prediction_depths)
+    ordered = sorted(records, key=lambda row: str(row["stable_sample_id"]))
+    ordered_ids = [str(row["stable_sample_id"]) for row in ordered]
+    if len(set(ordered_ids)) != len(ordered_ids):
+        _fail("B2_TARGET_NORMALIZATION_COUNT_MISMATCH", "duplicate training sample IDs")
+    hashes_by_id = {
+        str(row["stable_sample_id"]): str(row["contribution_target_record_scientific_sha256"])
+        for row in ordered
+    }
+
+    axes: dict[str, dict[str, Any]] = {}
+    for family in TARGET_FAMILIES:
+        axes[family] = {}
+        for depth in depths:
+            players = players_for_depth(layers, depth)
+            layer_entries: list[dict[str, Any]] = []
+            for layer in players:
+                values = [
+                    float(
+                        row["depth_targets"][str(depth)][family][
+                            "raw_signed_shapley_by_layer"
+                        ][str(layer)]
+                    )
+                    for row in ordered
+                ]
+                count = len(values)
+                mean = math.fsum(values) / float(count)
+                variance = math.fsum((value - mean) ** 2 for value in values) / float(count)
+                std = math.sqrt(variance)
+                layer_entries.append(
+                    {
+                        "candidate_layer_id": int(layer),
+                        "count": int(count),
+                        "mean": float(mean),
+                        "std": float(std),
+                        "minimum": float(min(values)),
+                        "maximum": float(max(values)),
+                        "zero_variance": bool(std == 0.0),
+                    }
+                )
+            axes[family][str(depth)] = {
+                "prediction_depth": int(depth),
+                "layers": layer_entries,
+            }
+
+    artifact: dict[str, Any] = {
+        "normalization_contract_version": NORMALIZATION_CONTRACT_VERSION,
+        "statistics_dtype": STATISTICS_DTYPE,
+        "standard_deviation_ddof": STANDARD_DEVIATION_DDOF,
+        "target_families": list(TARGET_FAMILIES),
+        "ordered_training_stable_sample_ids": ordered_ids,
+        "contribution_target_record_scientific_sha256_by_id": hashes_by_id,
+        "axes": axes,
+        "artifact_kind": str(artifact_kind),
+    }
+    artifact["shapley_normalization_scientific_sha256"] = (
+        shapley_normalization_scientific_sha256(artifact)
+    )
+    return artifact
+
+
+def standardize_signed_shapley(
+    value: Any,
+    artifact: Mapping[str, Any],
+    *,
+    target_family: str,
+    prediction_depth: int,
+    candidate_layer_id: int,
+) -> float:
+    """Read-time z-score using frozen normalization statistics."""
+
+    if target_family not in TARGET_FAMILIES:
+        _fail("B2_TARGET_FAMILY_INVALID", f"unknown target family {target_family!r}")
+    if not _is_real(value):
+        _fail("B2_TARGET_NORMALIZATION_AXIS_MISSING", "Shapley value must be a finite real")
+    axes = artifact.get("axes")
+    if not isinstance(axes, Mapping) or target_family not in axes:
+        _fail("B2_TARGET_NORMALIZATION_AXIS_MISSING", "normalization axes are incomplete")
+    depth_entry = axes[target_family].get(str(int(prediction_depth)))
+    if not isinstance(depth_entry, Mapping):
+        _fail("B2_TARGET_NORMALIZATION_AXIS_MISSING", "prediction depth axis is missing")
+    layers = depth_entry.get("layers")
+    if not isinstance(layers, Sequence):
+        _fail("B2_TARGET_NORMALIZATION_AXIS_MISSING", "layer statistics are missing")
+    match = None
+    for entry in layers:
+        if int(entry.get("candidate_layer_id", -1)) == int(candidate_layer_id):
+            match = entry
+            break
+    if match is None:
+        _fail(
+            "B2_TARGET_NORMALIZATION_AXIS_MISSING",
+            f"no statistics for layer {candidate_layer_id} at depth {prediction_depth}",
+        )
+    mean = float(match["mean"])
+    std = float(match["std"])
+    if std > 0.0 and not bool(match.get("zero_variance")):
+        return float((float(value) - mean) / std)
+    return 0.0
+
+
+def _ordered_records(records: Sequence[Mapping[str, Any]]) -> list[Mapping[str, Any]]:
+    return sorted(records, key=lambda row: str(row["stable_sample_id"]))
+
+
+def _split_counts(records: Sequence[Mapping[str, Any]]) -> dict[str, int]:
+    counts = {membership: 0 for membership in SPLIT_MEMBERSHIPS}
+    for row in records:
+        membership = row.get("split_membership")
+        if membership not in counts:
+            _fail(
+                "B2_TARGET_COVERAGE_COUNT_MISMATCH",
+                f"unknown split_membership {membership!r}",
+            )
+        counts[str(membership)] += 1
+    return counts
+
+
+def contribution_target_sample_coverage_sha256(records: Sequence[Mapping[str, Any]]) -> str:
+    """Hash the ordered 32-sample coverage with required 16/8/8 split counts."""
+
+    if not isinstance(records, Sequence) or isinstance(records, str | bytes):
+        _fail("B2_TARGET_COVERAGE_COUNT_MISMATCH", "records must be a sequence")
+    counts = _split_counts(records)
+    if counts != dict(REQUIRED_SPLIT_COUNTS) or len(records) != sum(REQUIRED_SPLIT_COUNTS.values()):
+        _fail(
+            "B2_TARGET_COVERAGE_COUNT_MISMATCH",
+            f"contribution-target coverage requires {dict(REQUIRED_SPLIT_COUNTS)}, got {counts}",
+        )
+    ordered = _ordered_records(records)
+    payload = {
+        "ordered_stable_sample_ids": [str(row["stable_sample_id"]) for row in ordered],
+        "split_membership_by_id": {
+            str(row["stable_sample_id"]): str(row["split_membership"]) for row in ordered
+        },
+        "split_counts": dict(REQUIRED_SPLIT_COUNTS),
+    }
+    return _canonical_sha256(payload)
+
+
+def _membership_coverage_sha256(
+    records: Sequence[Mapping[str, Any]],
+    *,
+    membership: str,
+) -> str:
+    if not isinstance(records, Sequence) or isinstance(records, str | bytes):
+        _fail("B2_TARGET_COVERAGE_COUNT_MISMATCH", "records must be a sequence")
+    for row in records:
+        if row.get("split_membership") != membership:
+            _fail(
+                "B2_TARGET_COVERAGE_MEMBERSHIP_INVALID",
+                f"{membership} coverage rejects foreign split membership",
+            )
+    expected = int(REQUIRED_SPLIT_COUNTS[membership])
+    if len(records) != expected:
+        _fail(
+            "B2_TARGET_COVERAGE_COUNT_MISMATCH",
+            f"{membership} coverage requires {expected} records, got {len(records)}",
+        )
+    ordered = _ordered_records(records)
+    return _canonical_sha256(
+        {
+            "membership": membership,
+            "ordered_stable_sample_ids": [str(row["stable_sample_id"]) for row in ordered],
+            "contribution_target_record_scientific_sha256_by_id": {
+                str(row["stable_sample_id"]): str(
+                    row["contribution_target_record_scientific_sha256"]
+                )
+                for row in ordered
+            },
+        }
+    )
+
+
+def training_target_coverage_sha256(records: Sequence[Mapping[str, Any]]) -> str:
+    return _membership_coverage_sha256(records, membership="training")
+
+
+def calibration_target_coverage_sha256(records: Sequence[Mapping[str, Any]]) -> str:
+    return _membership_coverage_sha256(records, membership="calibration")
+
+
+def evaluation_target_coverage_sha256(records: Sequence[Mapping[str, Any]]) -> str:
+    return _membership_coverage_sha256(records, membership="evaluation")
+
+
+def contribution_target_collection_scientific_sha256(
+    *,
+    records: Sequence[Mapping[str, Any]],
+    calibration_artifact: Mapping[str, Any],
+    normalization: Mapping[str, Any],
+    candidate_layers: Sequence[int],
+    prediction_depths: Sequence[int],
+) -> str:
+    """Bind the 32 records to calibration and normalization scientific identities."""
+
+    sample_coverage = contribution_target_sample_coverage_sha256(records)
+    ordered = _ordered_records(records)
+    training = [row for row in ordered if row["split_membership"] == "training"]
+    calibration = [row for row in ordered if row["split_membership"] == "calibration"]
+    evaluation = [row for row in ordered if row["split_membership"] == "evaluation"]
+    layers = list(_validate_candidate_layers(candidate_layers))
+    depths = list(_validate_prediction_depths(prediction_depths))
+    first = ordered[0]
+    return _canonical_sha256(
+        {
+            "collection_contract_version": COLLECTION_CONTRACT_VERSION,
+            "candidate_layers": layers,
+            "prediction_depths": depths,
+            "contribution_target_sample_coverage_sha256": sample_coverage,
+            "training_target_coverage_sha256": training_target_coverage_sha256(training),
+            "calibration_target_coverage_sha256": calibration_target_coverage_sha256(calibration),
+            "evaluation_target_coverage_sha256": evaluation_target_coverage_sha256(evaluation),
+            "ordered_stable_sample_ids": [str(row["stable_sample_id"]) for row in ordered],
+            "contribution_target_record_scientific_sha256_by_id": {
+                str(row["stable_sample_id"]): str(
+                    row["contribution_target_record_scientific_sha256"]
+                )
+                for row in ordered
+            },
+            "gt_map_calibration_scientific_sha256": str(
+                calibration_artifact["gt_map_calibration_scientific_sha256"]
+            ),
+            "shapley_normalization_scientific_sha256": str(
+                normalization["shapley_normalization_scientific_sha256"]
+            ),
+            "teacher_cache_scientific_sha256": str(first["teacher_cache_scientific_sha256"]),
+            "descriptor_collection_scientific_sha256": str(
+                first["descriptor_collection_scientific_sha256"]
+            ),
+            "split_scientific_sha256": str(first["split_scientific_sha256"]),
+            "checkpoint_sha256": str(first["checkpoint_sha256"]),
+            "execution_profile_sha256": str(first["execution_profile_sha256"]),
+        }
+    )
+
+
+def _plan_scientific_sha256(plan: Mapping[str, Any]) -> str:
+    projected = _project_scientific(
+        plan,
+        whitelist=_PLAN_SCIENTIFIC_KEYS,
+        ignored=_NON_SCIENTIFIC_PLAN_KEYS,
+        schema_code="B2_TARGET_RECORD_HASH_SCHEMA_INVALID",
+    )
+    return _canonical_sha256(projected)
+
+
+def build_contribution_plan(
+    *,
+    records: Sequence[Mapping[str, Any]],
+    calibration_artifact: Mapping[str, Any],
+    normalization: Mapping[str, Any],
+    candidate_layers: Sequence[int],
+    prediction_depths: Sequence[int],
+    official_materialization_enabled: bool = False,
+) -> dict[str, Any]:
+    """Pure in-memory contribution plan binding all seven layered identities."""
+
+    layers = list(_validate_candidate_layers(candidate_layers))
+    depths = list(_validate_prediction_depths(prediction_depths))
+    ordered = _ordered_records(records)
+    training = [row for row in ordered if row["split_membership"] == "training"]
+    calibration = [row for row in ordered if row["split_membership"] == "calibration"]
+    evaluation = [row for row in ordered if row["split_membership"] == "evaluation"]
+    sample_coverage = contribution_target_sample_coverage_sha256(records)
+    training_coverage = training_target_coverage_sha256(training)
+    calibration_coverage = calibration_target_coverage_sha256(calibration)
+    evaluation_coverage = evaluation_target_coverage_sha256(evaluation)
+    collection = contribution_target_collection_scientific_sha256(
+        records=records,
+        calibration_artifact=calibration_artifact,
+        normalization=normalization,
+        candidate_layers=layers,
+        prediction_depths=depths,
+    )
+    first = ordered[0]
+    hashes_by_id = {
+        str(row["stable_sample_id"]): str(row["contribution_target_record_scientific_sha256"])
+        for row in ordered
+    }
+    plan: dict[str, Any] = {
+        "gt_map_calibration_scientific_sha256": str(
+            calibration_artifact["gt_map_calibration_scientific_sha256"]
+        ),
+        "contribution_target_sample_coverage_sha256": sample_coverage,
+        "contribution_target_collection_scientific_sha256": collection,
+        "shapley_normalization_scientific_sha256": str(
+            normalization["shapley_normalization_scientific_sha256"]
+        ),
+        "training_target_coverage_sha256": training_coverage,
+        "calibration_target_coverage_sha256": calibration_coverage,
+        "evaluation_target_coverage_sha256": evaluation_coverage,
+        "planned_record_count": len(ordered),
+        "planned_split_counts": {
+            "training": len(training),
+            "calibration": len(calibration),
+            "evaluation": len(evaluation),
+        },
+        "planned_ordered_stable_sample_ids": [str(row["stable_sample_id"]) for row in ordered],
+        "candidate_layers": layers,
+        "prediction_depths": depths,
+        "contract_versions": {
+            "coalition": COALITION_CONTRACT_VERSION,
+            "utility": UTILITY_CONTRACT_VERSION,
+            "shapley": SHAPLEY_CONTRACT_VERSION,
+            "allocation": ALLOCATION_CONTRACT_VERSION,
+            "record": RECORD_CONTRACT_VERSION,
+            "calibration": CALIBRATION_CONTRACT_VERSION,
+            "normalization": NORMALIZATION_CONTRACT_VERSION,
+            "collection": COLLECTION_CONTRACT_VERSION,
+            "plan": PLAN_CONTRACT_VERSION,
+        },
+        "teacher_forward_count": 0,
+        "official_materialization_enabled": bool(official_materialization_enabled),
+        "contribution_target_record_scientific_sha256_by_id": hashes_by_id,
+        "teacher_cache_scientific_sha256": str(first["teacher_cache_scientific_sha256"]),
+        "descriptor_collection_scientific_sha256": str(
+            first["descriptor_collection_scientific_sha256"]
+        ),
+        "split_scientific_sha256": str(first["split_scientific_sha256"]),
+        "checkpoint_sha256": str(first["checkpoint_sha256"]),
+        "execution_profile_sha256": str(first["execution_profile_sha256"]),
+    }
+    plan["contribution_plan_scientific_sha256"] = _plan_scientific_sha256(plan)
+    return plan
+
+
+def load_targets_for_access(
+    records: Sequence[Mapping[str, Any]],
+    *,
+    access_mode: str,
+    normalization: Mapping[str, Any],
+) -> list[dict[str, Any]]:
+    """Return split-gated read views with raw and standardized Shapley values."""
+
+    if access_mode not in ACCESS_MODES:
+        _fail("B2_TARGET_ACCESS_MODE_INVALID", f"unknown access_mode {access_mode!r}")
+    claimed = normalization.get("shapley_normalization_scientific_sha256")
+    recomputed = shapley_normalization_scientific_sha256(normalization)
+    if claimed != recomputed:
+        _fail(
+            "B2_TARGET_NORMALIZATION_HASH_MISMATCH",
+            "normalization artifact scientific hash does not match its content",
+        )
+    expected_membership = _ACCESS_MODE_TO_MEMBERSHIP[access_mode]
+    if not isinstance(records, Sequence) or isinstance(records, str | bytes):
+        _fail("B2_TARGET_ACCESS_LEAKAGE", "records must be a sequence")
+    for row in records:
+        if row.get("split_membership") != expected_membership:
+            _fail(
+                "B2_TARGET_ACCESS_LEAKAGE",
+                f"{access_mode} rejects records outside {expected_membership}",
+            )
+    ordered = _ordered_records(records)
+    views: list[dict[str, Any]] = []
+    for row in ordered:
+        by_depth: dict[str, Any] = {}
+        depth_targets = row["depth_targets"]
+        for depth_key, depth_block in depth_targets.items():
+            depth = int(depth_key)
+            family_views: dict[str, Any] = {}
+            for family in TARGET_FAMILIES:
+                source = depth_block[family]
+                raw = dict(source["raw_signed_shapley_by_layer"])
+                allocation = dict(source["positive_allocation_target_by_layer"])
+                standardized = {
+                    str(layer): standardize_signed_shapley(
+                        raw[str(layer)],
+                        normalization,
+                        target_family=family,
+                        prediction_depth=depth,
+                        candidate_layer_id=int(layer),
+                    )
+                    for layer in raw
+                }
+                family_views[family] = {
+                    "raw_signed_shapley_by_layer": raw,
+                    "positive_allocation_target_by_layer": allocation,
+                    "standardized_signed_shapley_by_layer": standardized,
+                }
+            by_depth[str(depth)] = family_views
+        views.append(
+            {
+                "stable_sample_id": str(row["stable_sample_id"]),
+                "split_membership": str(row["split_membership"]),
+                "by_depth": by_depth,
+            }
+        )
+    return views
