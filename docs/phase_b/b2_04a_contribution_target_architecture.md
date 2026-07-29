@@ -6,7 +6,7 @@ Contract-only increment. Official materialization is disabled. Real Shapley
 targets, DLCM training, residual-gain, LSE, and early-exit policy artifacts are
 out of scope.
 
-Base: annotated tag `b2-descriptor-tokenize-v1` at
+Base: annotated tag `b2-descriptor-artifacts-v1` at
 `bf68a7ba546603535356cfc3222b2bfe9a0b35f8`.
 
 ## Dual-target rationale

@@ -4,7 +4,7 @@
 
 - Worktree: `/root/autodl-tmp/AD-phase-b2-contribution-target-contract`
 - Branch: `phase-b2-contribution-target-contract`
-- Tag: `b2-descriptor-tokenize-v1` → `bf68a7ba546603535356cfc3222b2bfe9a0b35f8`
+- Tag: `b2-descriptor-artifacts-v1` → `bf68a7ba546603535356cfc3222b2bfe9a0b35f8`
 - Python: `/root/miniconda3/envs/rad-visualad/bin/python` (3.10.20)
 
 ## Deliverables
