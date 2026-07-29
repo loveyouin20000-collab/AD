@@ -1,0 +1,304 @@
+{
+  "base": {
+    "branch": "phase-b2-descriptor-real-extraction",
+    "config_id": "b2_descriptor_artifacts_gate_c",
+    "contract_tag": "b2-descriptor-contract-v1",
+    "contract_tag_commit": "c0a48df2305976c5954329d322bb14ddf24a5ef6",
+    "expected_main_integration_commit": "51e18ade0231c7488ef582bde1e9694f933e85eb",
+    "expected_main_integration_tag": "b2-main-integration-v1",
+    "main_commit": "c0a48df2305976c5954329d322bb14ddf24a5ef6"
+  },
+  "distinctions": {
+    "descriptor_collection_identity": "descriptor_collection_scientific_sha256 + descriptor_sample_coverage_sha256 + normalization_* hashes",
+    "scientific_equality": "compare_descriptor_artifact_collections.scientifically_equivalent binds collection hashes, per-record scientific hashes, raw tensors, and normalization scientific content",
+    "serialized_file_byte_equality": "diagnostic only; may differ when timestamps/paths are excluded by contract (observed equal in this dual run)",
+    "source_cache_identity": "teacher-cache cache_scientific_sha256 + sample_coverage_sha256"
+  },
+  "dry_run": {
+    "artifact_written": false,
+    "calibration_samples_for_normalization": 0,
+    "descriptor_dimension": 18,
+    "evaluation_samples_for_normalization": 0,
+    "load_teacher_bundle_calls": 0,
+    "mode": "dry_run",
+    "planned_samples": 32,
+    "prediction_depths": [
+      12,
+      18,
+      24
+    ],
+    "status": "passed",
+    "teacher_forward_count": 0,
+    "training_samples_for_normalization": 16,
+    "visualad_backbone_called": false
+  },
+  "exact_split_counts": {
+    "calibration": 8,
+    "evaluation": 8,
+    "normalization_membership": {
+      "calibration": 0,
+      "evaluation": 0,
+      "training": 16
+    },
+    "training": 16
+  },
+  "final_status": "passed",
+  "frozen_source_identities": {
+    "accepted_teacher_cache_sample_coverage_sha256": "6e538b902795c377f9992258e307e58b5c0ba0f99cbbe6c3853a81947ca3d76c",
+    "accepted_teacher_cache_scientific_sha256": "66d23807e868696a9c4a68ad83399d82df3d33e743a97d97eeb98ac60c0b1b0a",
+    "b2_split_v2_sha256": "91570da1fed6d7859d407196b10403581832ae0ff677a1ea7657ca76b91471f0",
+    "checkpoint_sha256": "97bd461163efb96e36cddb1c3adf677e4c4fc2daabb2521021689f30e799b4f4",
+    "execution_profile_sha256": "7af8dba39633743da0380fef9710940cded655f68c9efa8f84f5a52aeddb3c8d"
+  },
+  "increment": "B2-03B",
+  "limitations": [
+    "No dedicated B2-03B concise-evidence writer module exists; this manifest was assembled from verify_descriptor_artifact_collection and compare_descriptor_artifact_collections outputs plus runtime attestation files.",
+    "Teacher-cache directories retain a leftover partial_manifest.json from generation; production load_and_validate_accepted_teacher_cache_from_disk accepts the caches and samples/ orphan audit passes.",
+    "Manifest-only split_membership cosmetic edits are not independently fail-closed by verify_descriptor_artifact_collection; membership is enforced via scientific records and collection hashes. Negative control 4 mutated the scientific record membership.",
+    "GPU was not used; CUDA_VISIBLE_DEVICES was empty and cuda_available was false."
+  ],
+  "negative_control_summary": {
+    "all_failed_closed": true,
+    "case_count": 14,
+    "cases": [
+      {
+        "case": "descriptor_pt_changed",
+        "code": "B2_DESC_RECORD_FILE_HASH_MISMATCH",
+        "passed_collection": false
+      },
+      {
+        "case": "descriptor_file_sha_changed_in_manifest",
+        "code": "B2_DESC_RECORD_FILE_HASH_MISMATCH",
+        "passed_collection": false
+      },
+      {
+        "case": "descriptor_scientific_hash_changed",
+        "code": "B2_DESC_RECORD_HASH_MISMATCH",
+        "passed_collection": false
+      },
+      {
+        "case": "training_relabelled_as_calibration",
+        "code": "B2_DESC_RECORD_SCHEMA_INVALID",
+        "passed_collection": false
+      },
+      {
+        "case": "calibration_included_in_normalization",
+        "code": "B2_DESC_NORMALIZATION_HASH_MISMATCH",
+        "passed_collection": false
+      },
+      {
+        "case": "one_record_removed",
+        "code": "B2_DESC_CACHE_RECORD_COUNT_MISMATCH",
+        "passed_collection": false
+      },
+      {
+        "case": "extra_pt_added",
+        "code": "B2_DESC_ORPHAN_ARTIFACT",
+        "passed_collection": false
+      },
+      {
+        "case": "descriptor_path_escapes_root",
+        "code": "B2_DESC_RUN_RELATIVE_PATH_INVALID",
+        "passed_collection": false
+      },
+      {
+        "case": "normalization_statistic_changed",
+        "code": "B2_DESC_NORMALIZATION_HASH_MISMATCH",
+        "passed_collection": false
+      },
+      {
+        "case": "final_manifest_receipt_changed",
+        "code": "B2_DESC_MANIFEST_RECEIPT_MISMATCH",
+        "passed_collection": false
+      },
+      {
+        "case": "wrong_teacher_cache_scientific_identity",
+        "code": "B2_DESC_COLLECTION_PROVENANCE_MISMATCH",
+        "passed_collection": false
+      },
+      {
+        "case": "wrong_split_checkpoint_profile_identity",
+        "code": "B2_DESC_COLLECTION_PROVENANCE_MISMATCH",
+        "passed_collection": false
+      },
+      {
+        "case": "output_directory_collision",
+        "code": "FileExistsError: [Errno 17] File exists: '/root/autodl-tmp/AD-phase-b2-descripto",
+        "passed_collection": false
+      },
+      {
+        "case": "resume_or_reuse_completed_run",
+        "code": "e \"/root/miniconda3/envs/rad-visualad/lib/python3.10/pathlib.py\", line 1175, in ",
+        "passed_collection": false
+      }
+    ]
+  },
+  "normalization_audit": {
+    "all_axis_counts_16": true,
+    "application_output_dtype": "float32",
+    "cal_eval_normalized_pairs_equal": 16,
+    "calibration_in_normalization": 0,
+    "ddof": 0,
+    "evaluation_in_normalization": 0,
+    "normalization_training_coverage_sha256": "e940f46bf696d326f8b982f15b8639f81e4548ec31a9b09634729811337e4c90",
+    "ordered_training_ids_count": 16,
+    "statistics_dtype": "float64",
+    "zero_variance_axes_observed": 6
+  },
+  "normalization_ordered_training_id_count": 16,
+  "run_a": {
+    "artifact_run_name": "authoritative-run-a-20260729-013956",
+    "descriptor_collection_scientific_sha256": "eb967822725e730ee2eb8afa3a5c8e28b4657141aa920d6a688ab370c70c6dd9",
+    "descriptor_sample_coverage_sha256": "27d064db21b5c699503be32e414d579bd1aa7158f1d9b141de26555fc79bc6df",
+    "exact_artifact_counts": {
+      "descriptor_pt_records": 32,
+      "final_manifest": 1,
+      "final_manifest_receipt": 1,
+      "normalization_statistics": 1,
+      "total_files": 35
+    },
+    "final_manifest_file_sha256": "8f0b5545a20b953011ef260c736f8515aa718c24330f0898748b355c38bd7326",
+    "normalization_statistics_scientific_sha256": "f77975a94acf87a14b0753aabc9aad6777943ee4e4958b0a2083701cf4528594",
+    "normalization_training_coverage_sha256": "e940f46bf696d326f8b982f15b8639f81e4548ec31a9b09634729811337e4c90",
+    "source_teacher_cache_manifest_file_sha256": "3c20d062b34ddf8041a572a42eae0b72199a241719351016953028c8763535e3",
+    "teacher_forward_count": 0
+  },
+  "run_b": {
+    "artifact_run_name": "authoritative-run-b-20260729-014404",
+    "descriptor_collection_scientific_sha256": "eb967822725e730ee2eb8afa3a5c8e28b4657141aa920d6a688ab370c70c6dd9",
+    "descriptor_sample_coverage_sha256": "27d064db21b5c699503be32e414d579bd1aa7158f1d9b141de26555fc79bc6df",
+    "exact_artifact_counts": {
+      "descriptor_pt_records": 32,
+      "final_manifest": 1,
+      "final_manifest_receipt": 1,
+      "normalization_statistics": 1,
+      "total_files": 35
+    },
+    "final_manifest_file_sha256": "8f0b5545a20b953011ef260c736f8515aa718c24330f0898748b355c38bd7326",
+    "normalization_statistics_scientific_sha256": "f77975a94acf87a14b0753aabc9aad6777943ee4e4958b0a2083701cf4528594",
+    "normalization_training_coverage_sha256": "e940f46bf696d326f8b982f15b8639f81e4548ec31a9b09634729811337e4c90",
+    "source_teacher_cache_manifest_file_sha256": "3c20d062b34ddf8041a572a42eae0b72199a241719351016953028c8763535e3",
+    "teacher_forward_count": 0
+  },
+  "runtime_summary": {
+    "gpu_execution_claimed": false,
+    "note": "CUDA_VISIBLE_DEVICES empty; no GPU ops; peak GPU memory recorded as 0",
+    "run_a": {
+      "cuda_available": false,
+      "cuda_device_visibility": "",
+      "elapsed_seconds": 60.13242296036333,
+      "end_time": "2026-07-29T01:40:57.166697+00:00",
+      "peak_cpu_memory_kb": 594836,
+      "peak_gpu_allocated_bytes": 0,
+      "peak_gpu_reserved_bytes": 0,
+      "start_time": "2026-07-29T01:39:57.034277+00:00",
+      "teacher_forward_count": 0
+    },
+    "run_b": {
+      "cuda_available": false,
+      "cuda_device_visibility": "",
+      "elapsed_seconds": 61.982364462688565,
+      "end_time": "2026-07-29T01:45:08.597623+00:00",
+      "peak_cpu_memory_kb": 584236,
+      "peak_gpu_allocated_bytes": 0,
+      "peak_gpu_reserved_bytes": 0,
+      "start_time": "2026-07-29T01:44:06.615255+00:00",
+      "teacher_forward_count": 0
+    }
+  },
+  "schema_version": 1,
+  "scientific_equality": {
+    "comparison_reasons": [],
+    "four_collection_identities_equal": true,
+    "normalization_value_comparison": {
+      "scientific_content_equal": true
+    },
+    "raw_tensor_digest_comparison": {
+      "all_equal": true,
+      "mismatches": []
+    },
+    "scientifically_equivalent": true,
+    "thirty_two_record_scientific_hash_comparison": {
+      "all_equal": true,
+      "compared_records": 32
+    }
+  },
+  "scope_exclusions": {
+    "dlcm_training": false,
+    "lse_training": false,
+    "policy_calibration_artifacts": false,
+    "production_code_modified": false,
+    "residual_gain_artifacts": false,
+    "shapley_targets": false
+  },
+  "semantic_spot_checks": {
+    "anomalous_training": {
+      "all_equal": true,
+      "exact_tensor_equality_by_depth": {
+        "12": true,
+        "18": true,
+        "24": true
+      },
+      "stable_sample_id": "ce4c220fe047beb3dc5f8ccf8f913b5a935eb494f15e500125dfbb5c94d3f68c"
+    },
+    "calibration": {
+      "all_equal": true,
+      "exact_tensor_equality_by_depth": {
+        "12": true,
+        "18": true,
+        "24": true
+      },
+      "stable_sample_id": "8f68b6aad99aa55fce3a1cebe2a63ead6f84fec6073c6ab86cc684409c6335a8"
+    },
+    "evaluation": {
+      "all_equal": true,
+      "exact_tensor_equality_by_depth": {
+        "12": true,
+        "18": true,
+        "24": true
+      },
+      "stable_sample_id": "21e574b912c19b6cc865795240bb63b590e49bc8c282b45ee4be86612518dc67"
+    },
+    "normal_training": {
+      "all_equal": true,
+      "exact_tensor_equality_by_depth": {
+        "12": true,
+        "18": true,
+        "24": true
+      },
+      "stable_sample_id": "0b2f3b31acc9e921f27741ce925748e51fc5ae9bafde688df4fdfa56d06c0568"
+    }
+  },
+  "serialized_file_byte_equality_diagnostics": {
+    "descriptor_records": true,
+    "final_manifest": true,
+    "normalization_artifact": true,
+    "note": "file-byte equality is diagnostic only; not required for scientific acceptance",
+    "overall_file_byte_equal": true
+  },
+  "source_only_audit": {
+    "example_image_identities": [
+      "bottle/test/good/009.png",
+      "bottle/test/broken_large/014.png"
+    ],
+    "mvtec_source_only": true,
+    "sample_count": 32,
+    "target_hits": [],
+    "visa_hits": []
+  },
+  "source_teacher_cache": {
+    "both_runs_consume_same_canonical_source": true,
+    "cache_scientific_sha256": "66d23807e868696a9c4a68ad83399d82df3d33e743a97d97eeb98ac60c0b1b0a",
+    "canonical_manifest_file_sha256": "3c20d062b34ddf8041a572a42eae0b72199a241719351016953028c8763535e3",
+    "canonical_run_name": "authoritative-run-a-20260723-155404",
+    "control_manifest_file_sha256": "3c20d062b34ddf8041a572a42eae0b72199a241719351016953028c8763535e3",
+    "control_run_name": "authoritative-run-b-20260723-155404",
+    "sample_coverage_sha256": "6e538b902795c377f9992258e307e58b5c0ba0f99cbbe6c3853a81947ca3d76c",
+    "selection_rule": "first_authoritative_clean_worktree_cache_whose_complete_validation_passes"
+  },
+  "status": "deterministic_descriptor_artifact_reproduction",
+  "teacher_forward_count": {
+    "run_a": 0,
+    "run_b": 0
+  }
+}
