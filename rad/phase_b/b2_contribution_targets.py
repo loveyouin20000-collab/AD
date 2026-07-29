@@ -1,4 +1,4 @@
-"""B2-04A dual contribution-target mathematics and artifact contracts.
+"""B2-04A dual contribution-target mathematics, artifact contracts, and dry-run.
 
 Story 1 scope: frozen mathematical contracts. Coalition encoding and equal
 average fusion, source-training-only GT map calibration, the frozen GT and
@@ -11,9 +11,13 @@ loader will use. Every scientific digest comes from an explicit whitelist over
 canonical JSON, so paths, timestamps, Git state, runtime attestation, and
 file-byte hashes can never enter a scientific identity.
 
-The module is deliberately inert: no artifact persistence, no run directories,
-no CLI, no Git or checkpoint inspection, no dataset adapters, and no
-target-domain access. Production math is reused rather than reimplemented:
+Story 3 scope: configuration loading, the shared in-memory collection /
+dry-run path, atomic dual-hash persistence, the final-manifest receipt, and the
+official-materialization gate (disabled for the tracked Gate-C configuration).
+
+The module never loads a teacher checkpoint, never runs a backbone, never
+accesses a held-out target-domain dataset, never inspects Git, and never mutates
+runtime backend settings. Production math is reused rather than reimplemented:
 Pixel AP comes from ``rad.evaluation.paper_metrics._binary_ap``, the full-depth
 teacher reference comes from ``rad.models.dlcm.sum_preserving_fusion``, and
 tensor provenance digests come from
@@ -30,8 +34,11 @@ from __future__ import annotations
 import hashlib
 import json
 import math
+import os
+import tempfile
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
+from pathlib import Path, PurePath, PurePosixPath
 from types import MappingProxyType
 from typing import Any, NamedTuple, NoReturn
 
@@ -39,6 +46,8 @@ import torch
 import torch.nn.functional as functional
 
 import rad.phase_b.b2_teacher_cache as cache_mod
+from rad.artifacts import atomic_write_json, refuse_existing_run
+from rad.errors import OutputProtectionError
 from rad.evaluation import paper_metrics
 from rad.models import dlcm
 
@@ -2341,3 +2350,1841 @@ def load_targets_for_access(
             }
         )
     return views
+
+
+# ---------------------------------------------------------------------------
+# Story 3 — configuration, shared orchestration, dry run, atomic persistence
+# ---------------------------------------------------------------------------
+#
+# Everything below stays inside the same inert boundary as Stories 1 and 2: no
+# checkpoint load, no teacher or backbone forward, no dataset adapter, no
+# repository inspection, no machine-local path selection, and no backend
+# mutation. The only I/O is (a) reading a declared configuration file, (b)
+# reading declared upstream artifact roots, and (c) writing a fresh run
+# directory during official materialization, which B2-04A keeps disabled.
+
+TRACKED_CONFIGURATION_ID = "b2_contribution_targets_gate_c"
+CONTRACT_STAGE = "b2_04a"
+CONFIG_SCHEMA_VERSION = 1
+MANIFEST_SCHEMA_VERSION = 1
+
+RECORDS_DIRECTORY = "records"
+CALIBRATION_RELATIVE_PATH = "gt_map_calibration.pt"
+NORMALIZATION_RELATIVE_PATH = "shapley_normalization.pt"
+FINAL_MANIFEST_NAME = "final_manifest.json"
+FINAL_MANIFEST_RECEIPT_NAME = "final_manifest.json.sha256"
+
+RECORD_PAYLOAD_KEYS = frozenset(
+    {"scientific_record", "contribution_target_record_scientific_sha256"}
+)
+CALIBRATION_PAYLOAD_KEYS = frozenset(
+    {"scientific_calibration_record", "gt_map_calibration_scientific_sha256"}
+)
+NORMALIZATION_PAYLOAD_KEYS = frozenset(
+    {"scientific_normalization_record", "shapley_normalization_scientific_sha256"}
+)
+
+SEVEN_LAYERED_IDENTITY_KEYS: tuple[str, ...] = (
+    "gt_map_calibration_scientific_sha256",
+    "contribution_target_sample_coverage_sha256",
+    "contribution_target_collection_scientific_sha256",
+    "shapley_normalization_scientific_sha256",
+    "training_target_coverage_sha256",
+    "calibration_target_coverage_sha256",
+    "evaluation_target_coverage_sha256",
+)
+
+_RECORD_FILE_HASH_FIELD = "contribution_target_record_file_sha256"
+
+# Pinned Gate-C scientific expectations. Drift in any of them fails closed.
+_EXPECTED_EXECUTION_PROFILE_SHA256 = (
+    "7af8dba39633743da0380fef9710940cded655f68c9efa8f84f5a52aeddb3c8d"
+)
+_EXPECTED_SPLIT_SCIENTIFIC_SHA256 = (
+    "91570da1fed6d7859d407196b10403581832ae0ff677a1ea7657ca76b91471f0"
+)
+_EXPECTED_CHECKPOINT_SHA256 = (
+    "97bd461163efb96e36cddb1c3adf677e4c4fc2daabb2521021689f30e799b4f4"
+)
+_EXPECTED_TEACHER_CACHE_SCIENTIFIC_SHA256 = (
+    "66d23807e868696a9c4a68ad83399d82df3d33e743a97d97eeb98ac60c0b1b0a"
+)
+_EXPECTED_TEACHER_CACHE_SAMPLE_COVERAGE_SHA256 = (
+    "6e538b902795c377f9992258e307e58b5c0ba0f99cbbe6c3853a81947ca3d76c"
+)
+_EXPECTED_DESCRIPTOR_COLLECTION_SCIENTIFIC_SHA256 = (
+    "eb967822725e730ee2eb8afa3a5c8e28b4657141aa920d6a688ab370c70c6dd9"
+)
+_EXPECTED_DESCRIPTOR_SAMPLE_COVERAGE_SHA256 = (
+    "27d064db21b5c699503be32e414d579bd1aa7158f1d9b141de26555fc79bc6df"
+)
+_EXPECTED_DESCRIPTOR_NORMALIZATION_SCIENTIFIC_SHA256 = (
+    "f77975a94acf87a14b0753aabc9aad6777943ee4e4958b0a2083701cf4528594"
+)
+_EXPECTED_DESCRIPTOR_NORMALIZATION_TRAINING_COVERAGE_SHA256 = (
+    "e940f46bf696d326f8b982f15b8639f81e4548ec31a9b09634729811337e4c90"
+)
+
+_EXPECTED_GT_CALIBRATION = {
+    "quantile_low": 0.01,
+    "quantile_high": 0.995,
+    "quantile_algorithm": QUANTILE_RULE,
+    "per_depth": True,
+    "training_only": True,
+}
+_EXPECTED_ABNORMAL_GT_WEIGHTS = {
+    "pixel_ap": 0.4,
+    "soft_dice": 0.4,
+    "background_penalty": 0.2,
+}
+_EXPECTED_FALSE_POSITIVE_WEIGHTS = {"top1": 0.7, "global_mean": 0.3}
+_EXPECTED_TEACHER_FIDELITY = {
+    "spearman_weight": 0.5,
+    "top1_overlap_weight": 0.5,
+    "top_fraction": TOP_PERCENT_FRACTION,
+    "overlap": "intersection_over_k",
+}
+_EXPECTED_SHAPLEY = {
+    "exact": True,
+    "float_dtype": STATISTICS_DTYPE,
+    "tolerance": EFFICIENCY_TOLERANCE,
+    "empty_coalition_centering": True,
+}
+_EXPECTED_ALLOCATION = {
+    "positive_threshold": TAU,
+    "fallback": "minimum_harm_equal_ties",
+}
+_EXPECTED_COALITION_FUSION = "equal_average"
+_EXPECTED_COALITION_ENCODING = "depth_local_bitmask_ascending"
+_ACCEPTED_INPUT_ARTIFACT_KINDS = (PRODUCTION_ARTIFACT_KIND, TEST_FIXTURE_ARTIFACT_KIND)
+
+
+@dataclass(frozen=True)
+class ContributionTargetsConfig:
+    """The frozen, fully declared contribution-target configuration."""
+
+    schema_version: int
+    configuration_id: str
+    contract_stage: str
+    official_materialization_enabled: bool
+    expected_input_artifact_kind: str
+    expected_execution_profile_sha256: str
+    expected_split_scientific_sha256: str
+    expected_checkpoint_sha256: str
+    expected_teacher_cache_scientific_sha256: str
+    expected_teacher_cache_sample_coverage_sha256: str
+    expected_descriptor_collection_scientific_sha256: str
+    expected_descriptor_sample_coverage_sha256: str
+    expected_descriptor_normalization_scientific_sha256: str
+    expected_descriptor_normalization_training_coverage_sha256: str
+    candidate_layers: tuple[int, ...]
+    prediction_depths: tuple[int, ...]
+    target_families: tuple[str, ...]
+    coalition_fusion: str
+    coalition_encoding: str
+    gt_calibration: Mapping[str, Any]
+    abnormal_gt_weights: Mapping[str, float]
+    false_positive_weights: Mapping[str, float]
+    teacher_fidelity: Mapping[str, Any]
+    soft_dice_epsilon: float
+    shapley: Mapping[str, Any]
+    allocation: Mapping[str, Any]
+    split_counts: Mapping[str, int]
+    resume_enabled: bool
+    dry_run_complete_compute: bool
+    expected_plan_sha_required_for_official: bool
+    primary_target_dtype: str
+    repository_identity_gate_enabled: bool
+    expected_contribution_contract_tag: str | None
+    expected_contribution_contract_commit: str | None
+
+
+def _config_int(value: Any, field: str) -> int:
+    if not _is_int(value):
+        _fail("B2_CONTRIBUTION_CONFIG_INVALID", f"{field} must be an integer")
+    return int(value)
+
+
+def _config_str(value: Any, field: str) -> str:
+    if not isinstance(value, str) or not value:
+        _fail("B2_CONTRIBUTION_CONFIG_INVALID", f"{field} must be a non-empty string")
+    return value
+
+
+def _config_bool(value: Any, field: str) -> bool:
+    if not isinstance(value, bool):
+        _fail("B2_CONTRIBUTION_CONFIG_INVALID", f"{field} must be a boolean")
+    return value
+
+
+def _config_real(value: Any, field: str) -> float:
+    if not _is_real(value):
+        _fail("B2_CONTRIBUTION_CONFIG_INVALID", f"{field} must be a finite number")
+    return float(value)
+
+
+def _config_int_tuple(value: Any, field: str) -> tuple[int, ...]:
+    if not isinstance(value, list | tuple) or not value:
+        _fail("B2_CONTRIBUTION_CONFIG_INVALID", f"{field} must be a non-empty list")
+    return tuple(_config_int(item, f"{field} entry") for item in value)
+
+
+def _config_str_tuple(value: Any, field: str) -> tuple[str, ...]:
+    if not isinstance(value, list | tuple) or not value:
+        _fail("B2_CONTRIBUTION_CONFIG_INVALID", f"{field} must be a non-empty list")
+    return tuple(_config_str(item, f"{field} entry") for item in value)
+
+
+def _config_mapping(value: Any, field: str) -> dict[str, Any]:
+    if not isinstance(value, Mapping):
+        _fail("B2_CONTRIBUTION_CONFIG_INVALID", f"{field} must be an object")
+    return {str(key): item for key, item in value.items()}
+
+
+def _config_optional_str(value: Any, field: str) -> str | None:
+    if value is None:
+        return None
+    return _config_str(value, field)
+
+
+def _numeric_mapping_equal(actual: Mapping[str, Any], expected: Mapping[str, Any]) -> bool:
+    if set(actual) != set(expected):
+        return False
+    for key, reference in expected.items():
+        observed = actual[key]
+        if isinstance(reference, bool) or isinstance(observed, bool):
+            if observed is not reference:
+                return False
+        elif isinstance(reference, str):
+            if observed != reference:
+                return False
+        elif not _is_real(observed) or float(observed) != float(reference):
+            return False
+    return True
+
+
+def _validate_pinned_contribution_config(config: ContributionTargetsConfig) -> None:
+    tracked = config.configuration_id == TRACKED_CONFIGURATION_ID
+    if (
+        config.schema_version != CONFIG_SCHEMA_VERSION
+        or config.contract_stage != CONTRACT_STAGE
+        or config.expected_input_artifact_kind not in _ACCEPTED_INPUT_ARTIFACT_KINDS
+        or config.expected_execution_profile_sha256 != _EXPECTED_EXECUTION_PROFILE_SHA256
+        or config.expected_split_scientific_sha256 != _EXPECTED_SPLIT_SCIENTIFIC_SHA256
+        or config.expected_checkpoint_sha256 != _EXPECTED_CHECKPOINT_SHA256
+        or config.expected_teacher_cache_scientific_sha256
+        != _EXPECTED_TEACHER_CACHE_SCIENTIFIC_SHA256
+        or config.expected_teacher_cache_sample_coverage_sha256
+        != _EXPECTED_TEACHER_CACHE_SAMPLE_COVERAGE_SHA256
+        or config.expected_descriptor_collection_scientific_sha256
+        != _EXPECTED_DESCRIPTOR_COLLECTION_SCIENTIFIC_SHA256
+        or config.expected_descriptor_sample_coverage_sha256
+        != _EXPECTED_DESCRIPTOR_SAMPLE_COVERAGE_SHA256
+        or config.expected_descriptor_normalization_scientific_sha256
+        != _EXPECTED_DESCRIPTOR_NORMALIZATION_SCIENTIFIC_SHA256
+        or config.expected_descriptor_normalization_training_coverage_sha256
+        != _EXPECTED_DESCRIPTOR_NORMALIZATION_TRAINING_COVERAGE_SHA256
+        or config.candidate_layers != DEFAULT_CANDIDATE_LAYERS
+        or config.prediction_depths != DEFAULT_PREDICTION_DEPTHS
+        or config.target_families != TARGET_FAMILIES
+        or config.coalition_fusion != _EXPECTED_COALITION_FUSION
+        or config.coalition_encoding != _EXPECTED_COALITION_ENCODING
+        or not _numeric_mapping_equal(config.gt_calibration, _EXPECTED_GT_CALIBRATION)
+        or not _numeric_mapping_equal(
+            config.abnormal_gt_weights, _EXPECTED_ABNORMAL_GT_WEIGHTS
+        )
+        or not _numeric_mapping_equal(
+            config.false_positive_weights, _EXPECTED_FALSE_POSITIVE_WEIGHTS
+        )
+        or not _numeric_mapping_equal(config.teacher_fidelity, _EXPECTED_TEACHER_FIDELITY)
+        or float(config.soft_dice_epsilon) != SOFT_DICE_EPS
+        or not _numeric_mapping_equal(config.shapley, _EXPECTED_SHAPLEY)
+        or not _numeric_mapping_equal(config.allocation, _EXPECTED_ALLOCATION)
+        or dict(config.split_counts) != dict(REQUIRED_SPLIT_COUNTS)
+        or config.resume_enabled is not False
+        or config.dry_run_complete_compute is not True
+        or config.expected_plan_sha_required_for_official is not True
+        or config.primary_target_dtype != STATISTICS_DTYPE
+        or config.repository_identity_gate_enabled is not False
+        or config.expected_contribution_contract_tag is not None
+        or config.expected_contribution_contract_commit is not None
+        or (tracked and config.official_materialization_enabled is not False)
+        or (tracked and config.expected_input_artifact_kind != PRODUCTION_ARTIFACT_KIND)
+    ):
+        _fail("B2_CONTRIBUTION_CONFIG_DRIFT", "contribution-target Gate-C config drifted")
+    return None
+
+
+def load_contribution_targets_config(path: Any) -> ContributionTargetsConfig:
+    """Load, type-check, and pin one contribution-target configuration file."""
+
+    config_path = Path(path)
+    try:
+        raw_text = config_path.read_text(encoding="utf-8")
+    except FileNotFoundError:
+        _fail("B2_CONTRIBUTION_CONFIG_MISSING", f"path does not exist: {config_path}")
+    except OSError as exc:
+        _fail("B2_CONTRIBUTION_CONFIG_INVALID", f"cannot read {config_path}: {exc}")
+    try:
+        raw = json.loads(raw_text)
+    except (json.JSONDecodeError, UnicodeError) as exc:
+        _fail("B2_CONTRIBUTION_CONFIG_INVALID", f"invalid JSON at {config_path}: {exc}")
+    if not isinstance(raw, Mapping):
+        _fail("B2_CONTRIBUTION_CONFIG_INVALID", "config root must be an object")
+
+    split_counts = {
+        str(key): _config_int(value, f"split_counts.{key}")
+        for key, value in _config_mapping(raw.get("split_counts"), "split_counts").items()
+    }
+    config = ContributionTargetsConfig(
+        schema_version=_config_int(raw.get("schema_version"), "schema_version"),
+        configuration_id=_config_str(raw.get("configuration_id"), "configuration_id"),
+        contract_stage=_config_str(raw.get("contract_stage"), "contract_stage"),
+        official_materialization_enabled=_config_bool(
+            raw.get("official_materialization_enabled"), "official_materialization_enabled"
+        ),
+        expected_input_artifact_kind=_config_str(
+            raw.get("expected_input_artifact_kind", PRODUCTION_ARTIFACT_KIND),
+            "expected_input_artifact_kind",
+        ),
+        expected_execution_profile_sha256=_config_str(
+            raw.get("expected_execution_profile_sha256"),
+            "expected_execution_profile_sha256",
+        ),
+        expected_split_scientific_sha256=_config_str(
+            raw.get("expected_split_scientific_sha256"), "expected_split_scientific_sha256"
+        ),
+        expected_checkpoint_sha256=_config_str(
+            raw.get("expected_checkpoint_sha256"), "expected_checkpoint_sha256"
+        ),
+        expected_teacher_cache_scientific_sha256=_config_str(
+            raw.get("expected_teacher_cache_scientific_sha256"),
+            "expected_teacher_cache_scientific_sha256",
+        ),
+        expected_teacher_cache_sample_coverage_sha256=_config_str(
+            raw.get("expected_teacher_cache_sample_coverage_sha256"),
+            "expected_teacher_cache_sample_coverage_sha256",
+        ),
+        expected_descriptor_collection_scientific_sha256=_config_str(
+            raw.get("expected_descriptor_collection_scientific_sha256"),
+            "expected_descriptor_collection_scientific_sha256",
+        ),
+        expected_descriptor_sample_coverage_sha256=_config_str(
+            raw.get("expected_descriptor_sample_coverage_sha256"),
+            "expected_descriptor_sample_coverage_sha256",
+        ),
+        expected_descriptor_normalization_scientific_sha256=_config_str(
+            raw.get("expected_descriptor_normalization_scientific_sha256"),
+            "expected_descriptor_normalization_scientific_sha256",
+        ),
+        expected_descriptor_normalization_training_coverage_sha256=_config_str(
+            raw.get("expected_descriptor_normalization_training_coverage_sha256"),
+            "expected_descriptor_normalization_training_coverage_sha256",
+        ),
+        candidate_layers=_config_int_tuple(raw.get("candidate_layers"), "candidate_layers"),
+        prediction_depths=_config_int_tuple(
+            raw.get("prediction_depths"), "prediction_depths"
+        ),
+        target_families=_config_str_tuple(raw.get("target_families"), "target_families"),
+        coalition_fusion=_config_str(raw.get("coalition_fusion"), "coalition_fusion"),
+        coalition_encoding=_config_str(raw.get("coalition_encoding"), "coalition_encoding"),
+        gt_calibration=MappingProxyType(
+            _config_mapping(raw.get("gt_calibration"), "gt_calibration")
+        ),
+        abnormal_gt_weights=MappingProxyType(
+            _config_mapping(raw.get("abnormal_gt_weights"), "abnormal_gt_weights")
+        ),
+        false_positive_weights=MappingProxyType(
+            _config_mapping(raw.get("false_positive_weights"), "false_positive_weights")
+        ),
+        teacher_fidelity=MappingProxyType(
+            _config_mapping(raw.get("teacher_fidelity"), "teacher_fidelity")
+        ),
+        soft_dice_epsilon=_config_real(raw.get("soft_dice_epsilon"), "soft_dice_epsilon"),
+        shapley=MappingProxyType(_config_mapping(raw.get("shapley"), "shapley")),
+        allocation=MappingProxyType(_config_mapping(raw.get("allocation"), "allocation")),
+        split_counts=MappingProxyType(split_counts),
+        resume_enabled=_config_bool(raw.get("resume_enabled"), "resume_enabled"),
+        dry_run_complete_compute=_config_bool(
+            raw.get("dry_run_complete_compute"), "dry_run_complete_compute"
+        ),
+        expected_plan_sha_required_for_official=_config_bool(
+            raw.get("expected_plan_sha_required_for_official"),
+            "expected_plan_sha_required_for_official",
+        ),
+        primary_target_dtype=_config_str(
+            raw.get("primary_target_dtype"), "primary_target_dtype"
+        ),
+        repository_identity_gate_enabled=_config_bool(
+            raw.get("repository_identity_gate_enabled"), "repository_identity_gate_enabled"
+        ),
+        expected_contribution_contract_tag=_config_optional_str(
+            raw.get("expected_contribution_contract_tag"),
+            "expected_contribution_contract_tag",
+        ),
+        expected_contribution_contract_commit=_config_optional_str(
+            raw.get("expected_contribution_contract_commit"),
+            "expected_contribution_contract_commit",
+        ),
+    )
+    _validate_pinned_contribution_config(config)
+    return config
+
+
+# ---------------------------------------------------------------------------
+# Shared input bundle and collection construction
+# ---------------------------------------------------------------------------
+
+
+@dataclass(frozen=True)
+class ContributionInputSample:
+    """One upstream-bound sample the shared collection path consumes."""
+
+    stable_sample_id: str
+    split_membership: str
+    category: str
+    label: int
+    anomaly_type: str
+    mask_identity: str | None
+    maps_by_depth: Mapping[int, Mapping[int, Any]]
+    mask: Any
+    full_depth_map: Any
+    teacher_record: Mapping[str, Any]
+    teacher_record_scientific_sha256: str
+    descriptor_record: Mapping[str, Any]
+
+
+@dataclass(frozen=True)
+class ContributionInputBundle:
+    """The complete accepted upstream boundary for one contribution-target run."""
+
+    artifact_kind: str
+    candidate_layers: tuple[int, ...]
+    prediction_depths: tuple[int, ...]
+    samples: tuple[ContributionInputSample, ...]
+    teacher_cache_scientific_sha256: str
+    teacher_cache_sample_coverage_sha256: str
+    descriptor_collection_scientific_sha256: str
+    split_scientific_sha256: str
+    checkpoint_sha256: str
+    execution_profile_sha256: str
+
+
+@dataclass(frozen=True)
+class ContributionTargetCollection:
+    """The complete in-memory scientific result of one contribution-target run."""
+
+    artifact_kind: str
+    candidate_layers: tuple[int, ...]
+    prediction_depths: tuple[int, ...]
+    calibration_artifact: Mapping[str, Any]
+    records: tuple[Mapping[str, Any], ...]
+    normalization: Mapping[str, Any]
+    plan: Mapping[str, Any]
+
+
+def _effective_lattice(
+    config: ContributionTargetsConfig,
+    candidate_layers: Sequence[int] | None,
+    prediction_depths: Sequence[int] | None,
+) -> tuple[tuple[int, ...], tuple[int, ...]]:
+    layers = _validate_candidate_layers(
+        config.candidate_layers if candidate_layers is None else candidate_layers
+    )
+    depths = _validate_prediction_depths(
+        config.prediction_depths if prediction_depths is None else prediction_depths
+    )
+    return layers, depths
+
+
+def _validate_input_bundle(
+    inputs: Any,
+    *,
+    candidate_layers: tuple[int, ...],
+    prediction_depths: tuple[int, ...],
+    split_counts: Mapping[str, int],
+) -> ContributionInputBundle:
+    if not isinstance(inputs, ContributionInputBundle):
+        _fail("B2_CONTRIBUTION_INPUT_BUNDLE_INVALID", "inputs must be a ContributionInputBundle")
+    if inputs.artifact_kind not in _ACCEPTED_INPUT_ARTIFACT_KINDS:
+        _fail(
+            "B2_TARGET_ARTIFACT_KIND_INVALID",
+            f"artifact_kind {inputs.artifact_kind!r} is not accepted",
+        )
+    if (
+        tuple(inputs.candidate_layers) != candidate_layers
+        or tuple(inputs.prediction_depths) != prediction_depths
+    ):
+        _fail(
+            "B2_CONTRIBUTION_INPUT_LATTICE_MISMATCH",
+            "input bundle lattice differs from the requested candidate layers or depths",
+        )
+    observed: dict[str, int] = {membership: 0 for membership in SPLIT_MEMBERSHIPS}
+    seen: set[str] = set()
+    for sample in inputs.samples:
+        if not isinstance(sample, ContributionInputSample):
+            _fail(
+                "B2_CONTRIBUTION_INPUT_BUNDLE_INVALID",
+                "every input sample must be a ContributionInputSample",
+            )
+        if sample.split_membership not in observed:
+            _fail(
+                "B2_TARGET_RECORD_MEMBERSHIP_INVALID",
+                f"split_membership {sample.split_membership!r} is not allowed",
+            )
+        if sample.stable_sample_id in seen:
+            _fail(
+                "B2_CONTRIBUTION_INPUT_DUPLICATE_SAMPLE",
+                f"sample {sample.stable_sample_id} appears more than once",
+            )
+        seen.add(sample.stable_sample_id)
+        observed[sample.split_membership] += 1
+    if observed != dict(split_counts):
+        _fail(
+            "B2_TARGET_COVERAGE_COUNT_MISMATCH",
+            f"input split counts {observed} do not match the configured {dict(split_counts)}",
+        )
+    return inputs
+
+
+def _ordered_input_samples(
+    inputs: ContributionInputBundle,
+) -> tuple[ContributionInputSample, ...]:
+    return tuple(sorted(inputs.samples, key=lambda sample: str(sample.stable_sample_id)))
+
+
+def run_contribution_target_collection(
+    *,
+    config: ContributionTargetsConfig,
+    inputs: Any,
+    candidate_layers: Sequence[int] | None = None,
+    prediction_depths: Sequence[int] | None = None,
+) -> ContributionTargetCollection:
+    """Compute the complete contribution-target collection purely in memory.
+
+    This is the single shared construction path used by the dry run and by
+    official materialization, so the two can never drift: source-training-only
+    GT calibration, all dual-family sample records, the training-only Shapley
+    normalization, the layered coverage identities, and the plan hash.
+    """
+
+    layers, depths = _effective_lattice(config, candidate_layers, prediction_depths)
+    bundle = _validate_input_bundle(
+        inputs,
+        candidate_layers=layers,
+        prediction_depths=depths,
+        split_counts=config.split_counts,
+    )
+    ordered_samples = _ordered_input_samples(bundle)
+    training_samples = tuple(
+        sample for sample in ordered_samples if sample.split_membership == _TRAINING_MEMBERSHIP
+    )
+
+    calibration = fit_gt_map_calibration(
+        tuple(
+            GtCalibrationSample(
+                stable_sample_id=sample.stable_sample_id,
+                membership=sample.split_membership,
+                maps_by_depth=sample.maps_by_depth,
+            )
+            for sample in training_samples
+        ),
+        candidate_layers=layers,
+        prediction_depths=depths,
+        quantiles=(
+            float(config.gt_calibration["quantile_low"]),
+            float(config.gt_calibration["quantile_high"]),
+        ),
+    )
+    calibration_artifact = build_gt_map_calibration_artifact(
+        calibration,
+        source_teacher_record_scientific_sha256_by_id={
+            sample.stable_sample_id: sample.teacher_record_scientific_sha256
+            for sample in training_samples
+        },
+        teacher_cache_scientific_sha256=bundle.teacher_cache_scientific_sha256,
+        teacher_cache_sample_coverage_sha256=bundle.teacher_cache_sample_coverage_sha256,
+        descriptor_collection_scientific_sha256=(
+            bundle.descriptor_collection_scientific_sha256
+        ),
+        split_scientific_sha256=bundle.split_scientific_sha256,
+        checkpoint_sha256=bundle.checkpoint_sha256,
+        execution_profile_sha256=bundle.execution_profile_sha256,
+        expected_training_count=int(config.split_counts[_TRAINING_MEMBERSHIP]),
+        artifact_kind=bundle.artifact_kind,
+    )
+
+    records: list[Mapping[str, Any]] = []
+    for sample in ordered_samples:
+        deepest_maps = sample.maps_by_depth[max(depths)]
+        reconstructed = reconstruct_full_depth_teacher(
+            deepest_maps, candidate_layers=layers
+        )
+        verify_full_depth_teacher_bitexact(reconstructed, sample.full_depth_map)
+        upstream = bind_upstream_identities(
+            teacher_record=sample.teacher_record,
+            teacher_record_scientific_sha256=sample.teacher_record_scientific_sha256,
+            teacher_cache_scientific_sha256=bundle.teacher_cache_scientific_sha256,
+            teacher_cache_sample_coverage_sha256=(
+                bundle.teacher_cache_sample_coverage_sha256
+            ),
+            descriptor_record=sample.descriptor_record,
+            descriptor_collection_scientific_sha256=(
+                bundle.descriptor_collection_scientific_sha256
+            ),
+            candidate_layers=layers,
+            prediction_depths=depths,
+        )
+        is_anomalous = int(sample.label) == 1
+        records.append(
+            build_contribution_target_record(
+                sample=ContributionTargetSample(
+                    stable_sample_id=sample.stable_sample_id,
+                    split_membership=sample.split_membership,
+                    category=sample.category,
+                    label=sample.label,
+                    anomaly_type=sample.anomaly_type,
+                    maps_by_depth=sample.maps_by_depth,
+                    mask=sample.mask,
+                    teacher_reference_map=sample.full_depth_map,
+                ),
+                calibration_artifact=calibration_artifact,
+                upstream=upstream,
+                mask_provenance=MaskProvenance(
+                    mask_identity=sample.mask_identity,
+                    mask_source=(
+                        _MASK_SOURCE_ANOMALOUS if is_anomalous else _MASK_SOURCE_NORMAL
+                    ),
+                ),
+                teacher_reference_provenance=TeacherReferenceProvenance(
+                    cached_full_depth_map_digest=full_depth_map_digest(
+                        sample.full_depth_map
+                    ),
+                    reconstruction_verified=True,
+                    source_candidate_layers=layers,
+                ),
+                candidate_layers=layers,
+                prediction_depths=depths,
+                artifact_kind=bundle.artifact_kind,
+            )
+        )
+
+    normalization = compute_shapley_normalization(
+        [row for row in records if row["split_membership"] == _TRAINING_MEMBERSHIP],
+        candidate_layers=layers,
+        prediction_depths=depths,
+        expected_training_count=int(config.split_counts[_TRAINING_MEMBERSHIP]),
+        artifact_kind=bundle.artifact_kind,
+    )
+    plan = build_contribution_plan(
+        records=records,
+        calibration_artifact=calibration_artifact,
+        normalization=normalization,
+        candidate_layers=layers,
+        prediction_depths=depths,
+        official_materialization_enabled=config.official_materialization_enabled,
+    )
+    return ContributionTargetCollection(
+        artifact_kind=bundle.artifact_kind,
+        candidate_layers=layers,
+        prediction_depths=depths,
+        calibration_artifact=calibration_artifact,
+        records=tuple(records),
+        normalization=normalization,
+        plan=plan,
+    )
+
+
+def coalition_counts_by_depth(
+    candidate_layers: Sequence[int],
+    prediction_depths: Sequence[int],
+) -> dict[int, int]:
+    """Total coalition count (including the empty coalition) per prediction depth."""
+
+    layers = _validate_candidate_layers(candidate_layers)
+    return {
+        int(depth): 1 << len(players_for_depth(layers, depth))
+        for depth in _validate_prediction_depths(prediction_depths)
+    }
+
+
+def dry_run_contribution_targets(
+    *,
+    config: ContributionTargetsConfig,
+    inputs: Any,
+    candidate_layers: Sequence[int] | None = None,
+    prediction_depths: Sequence[int] | None = None,
+    seed: int = 0,
+    output_dir: Any = None,
+) -> dict[str, Any]:
+    """Compute the complete plan and report it without touching the filesystem.
+
+    ``seed`` and ``output_dir`` are accepted for CLI parity and are reported
+    back verbatim; neither participates in any scientific identity and
+    ``output_dir`` is never created, probed, or locked.
+    """
+
+    collection = run_contribution_target_collection(
+        config=config,
+        inputs=inputs,
+        candidate_layers=candidate_layers,
+        prediction_depths=prediction_depths,
+    )
+    plan = collection.plan
+    split_counts = dict(plan["planned_split_counts"])
+    result: dict[str, Any] = {
+        "mode": "dry_run",
+        "status": "passed",
+        "artifact_written": False,
+        "run_directory_created": False,
+        "teacher_forward_count": 0,
+        "planned_samples": int(plan["planned_record_count"]),
+        "training_targets": int(split_counts["training"]),
+        "calibration_targets": int(split_counts["calibration"]),
+        "evaluation_targets": int(split_counts["evaluation"]),
+        "training_samples_for_gt_calibration": int(
+            collection.calibration_artifact["training_sample_count"]
+        ),
+        "calibration_samples_for_gt_calibration": 0,
+        "evaluation_samples_for_gt_calibration": 0,
+        "training_samples_for_shapley_normalization": len(
+            collection.normalization["ordered_training_stable_sample_ids"]
+        ),
+        "calibration_samples_for_shapley_normalization": 0,
+        "evaluation_samples_for_shapley_normalization": 0,
+        "prediction_depths": list(collection.prediction_depths),
+        "candidate_layers": list(collection.candidate_layers),
+        "coalition_counts": coalition_counts_by_depth(
+            collection.candidate_layers, collection.prediction_depths
+        ),
+        "contribution_plan_scientific_sha256": str(
+            plan["contribution_plan_scientific_sha256"]
+        ),
+        "official_materialization_enabled": bool(config.official_materialization_enabled),
+        "configuration_id": config.configuration_id,
+        "contract_stage": config.contract_stage,
+        "artifact_kind": collection.artifact_kind,
+        "planned_ordered_stable_sample_ids": list(
+            plan["planned_ordered_stable_sample_ids"]
+        ),
+        "seed": int(seed),
+        "output_dir": None if output_dir is None else str(output_dir),
+    }
+    for identity in SEVEN_LAYERED_IDENTITY_KEYS:
+        result[identity] = str(plan[identity])
+    return result
+
+
+# ---------------------------------------------------------------------------
+# Declared upstream roots
+# ---------------------------------------------------------------------------
+
+
+def _sha256_file(path: Path) -> str:
+    digest = hashlib.sha256()
+    with path.open("rb") as handle:
+        while True:
+            chunk = handle.read(1024 * 1024)
+            if not chunk:
+                break
+            digest.update(chunk)
+    return digest.hexdigest()
+
+
+def _normalized_relative_path(relative_path: Any, *, code: str) -> str:
+    if not isinstance(relative_path, str) or not relative_path:
+        _fail(code, "path must be a non-empty relative path")
+    raw = PurePosixPath(relative_path)
+    if raw.is_absolute() or PurePath(relative_path).is_absolute():
+        _fail(code, f"path must be relative: {relative_path}")
+    parts = tuple(part for part in raw.parts if part != ".")
+    if not parts or any(part in {"", ".."} for part in parts):
+        _fail(code, f"path escapes the root or is malformed: {relative_path}")
+    return PurePosixPath(*parts).as_posix()
+
+
+def _resolve_within_root(
+    root: Path,
+    relative_path: str,
+    *,
+    expected_kind: str,
+    path_code: str,
+    missing_code: str,
+    escape_code: str,
+) -> Path:
+    normalized = _normalized_relative_path(relative_path, code=path_code)
+    resolved_root = Path(root).resolve()
+    try:
+        resolved = (resolved_root / normalized).resolve(strict=True)
+    except OSError as exc:
+        _fail(missing_code, f"{expected_kind} missing or unreadable at {normalized}: {exc}")
+    try:
+        resolved.relative_to(resolved_root)
+    except ValueError:
+        _fail(escape_code, f"{expected_kind} escapes the authoritative root: {normalized}")
+    if not resolved.is_file():
+        _fail(missing_code, f"{expected_kind} must be a regular file: {normalized}")
+    return resolved
+
+
+def _load_input_manifest(
+    *,
+    manifest_path: Path,
+    root: Path,
+    label: str,
+) -> dict[str, Any]:
+    resolved_root = Path(root).resolve()
+    try:
+        resolved_manifest = Path(manifest_path).resolve(strict=True)
+    except OSError as exc:
+        _fail(
+            "B2_CONTRIBUTION_INPUT_MANIFEST_MISSING",
+            f"{label} manifest missing or unreadable: {exc}",
+        )
+    try:
+        resolved_manifest.relative_to(resolved_root)
+    except ValueError:
+        _fail(
+            "B2_CONTRIBUTION_INPUT_MANIFEST_OUTSIDE_ROOT",
+            f"{label} manifest must resolve inside its declared root",
+        )
+    try:
+        payload = json.loads(resolved_manifest.read_text(encoding="utf-8"))
+    except (OSError, UnicodeError, json.JSONDecodeError) as exc:
+        _fail("B2_CONTRIBUTION_INPUT_MANIFEST_INVALID", f"invalid {label} manifest: {exc}")
+    if not isinstance(payload, Mapping):
+        _fail("B2_CONTRIBUTION_INPUT_MANIFEST_INVALID", f"{label} manifest must be an object")
+    if payload.get("status") != "passed":
+        _fail(
+            "B2_CONTRIBUTION_INPUT_MANIFEST_NOT_PASSED",
+            f"{label} manifest status must be 'passed'",
+        )
+    kind = payload.get("artifact_kind")
+    if kind not in _ACCEPTED_INPUT_ARTIFACT_KINDS:
+        _fail(
+            "B2_TARGET_ARTIFACT_KIND_INVALID",
+            f"{label} manifest artifact_kind {kind!r} is not accepted",
+        )
+    return dict(payload)
+
+
+def _load_pt_payload(path: Path, *, code: str) -> Mapping[str, Any]:
+    try:
+        loaded = torch.load(path, map_location="cpu", weights_only=True)
+    except Exception as exc:  # noqa: BLE001 - any unpickling failure is fail-closed
+        _fail(code, f"cannot load artifact payload at {path.name}: {exc}")
+    if not isinstance(loaded, Mapping):
+        _fail(code, f"artifact payload at {path.name} must be a mapping")
+    return loaded
+
+
+def load_contribution_inputs_from_disk(
+    *,
+    config: ContributionTargetsConfig,
+    teacher_cache_manifest_path: Any,
+    teacher_cache_root: Any,
+    descriptor_manifest_path: Any,
+    descriptor_root: Any,
+) -> ContributionInputBundle:
+    """Read a declared teacher-cache and descriptor collection into one bundle.
+
+    Production inputs are bound to the configured upstream identities. Hermetic
+    ``test_fixture`` inputs skip that binding but may never reach official
+    materialization unless the configuration explicitly declares fixture inputs,
+    which the tracked Gate-C configuration can never do.
+    """
+
+    teacher_root = Path(teacher_cache_root)
+    descriptor_root_path = Path(descriptor_root)
+    teacher_manifest = _load_input_manifest(
+        manifest_path=Path(teacher_cache_manifest_path),
+        root=teacher_root,
+        label="teacher-cache",
+    )
+    descriptor_manifest = _load_input_manifest(
+        manifest_path=Path(descriptor_manifest_path),
+        root=descriptor_root_path,
+        label="descriptor",
+    )
+    artifact_kind = str(teacher_manifest["artifact_kind"])
+    if descriptor_manifest["artifact_kind"] != artifact_kind:
+        _fail(
+            "B2_TARGET_ARTIFACT_KIND_INVALID",
+            "teacher-cache and descriptor manifests declare different artifact kinds",
+        )
+    if artifact_kind == TEST_FIXTURE_ARTIFACT_KIND and (
+        config.official_materialization_enabled
+        and config.expected_input_artifact_kind != TEST_FIXTURE_ARTIFACT_KIND
+    ):
+        _fail(
+            "B2_TARGET_TEST_FIXTURE_NOT_ACCEPTED",
+            "test_fixture artifacts are never accepted by production official mode",
+        )
+
+    teacher_cache_hash = str(teacher_manifest.get("cache_scientific_sha256", ""))
+    teacher_coverage_hash = str(teacher_manifest.get("sample_coverage_sha256", ""))
+    descriptor_collection_hash = str(
+        descriptor_manifest.get("descriptor_collection_scientific_sha256", "")
+    )
+    split_hash = str(teacher_manifest.get("split_scientific_sha256", ""))
+    checkpoint_hash = str(teacher_manifest.get("checkpoint_sha256", ""))
+    profile_hash = str(teacher_manifest.get("execution_profile_sha256", ""))
+    for digest, label in (
+        (teacher_cache_hash, "teacher cache"),
+        (teacher_coverage_hash, "teacher cache coverage"),
+        (descriptor_collection_hash, "descriptor collection"),
+        (split_hash, "split manifest"),
+        (checkpoint_hash, "checkpoint"),
+        (profile_hash, "execution profile"),
+    ):
+        if not _is_sha256(digest):
+            _fail("B2_TARGET_UPSTREAM_HASH_INVALID", f"{label} hash is invalid")
+    if artifact_kind == PRODUCTION_ARTIFACT_KIND and (
+        teacher_cache_hash != config.expected_teacher_cache_scientific_sha256
+        or teacher_coverage_hash != config.expected_teacher_cache_sample_coverage_sha256
+        or descriptor_collection_hash
+        != config.expected_descriptor_collection_scientific_sha256
+        or split_hash != config.expected_split_scientific_sha256
+        or checkpoint_hash != config.expected_checkpoint_sha256
+        or profile_hash != config.expected_execution_profile_sha256
+    ):
+        _fail(
+            "B2_CONTRIBUTION_UPSTREAM_IDENTITY_MISMATCH",
+            "declared upstream identities drifted from the configured expectations",
+        )
+
+    descriptor_rows = descriptor_manifest.get("samples")
+    teacher_rows = teacher_manifest.get("samples")
+    if not isinstance(teacher_rows, Sequence) or not isinstance(descriptor_rows, Sequence):
+        _fail("B2_CONTRIBUTION_INPUT_MANIFEST_INVALID", "manifest samples must be lists")
+    descriptor_by_id = {str(row["stable_sample_id"]): row for row in descriptor_rows}
+
+    samples: list[ContributionInputSample] = []
+    for row in teacher_rows:
+        stable_sample_id = str(row["stable_sample_id"])
+        record_path = _resolve_within_root(
+            teacher_root,
+            str(row["relative_path"]),
+            expected_kind=f"teacher record {stable_sample_id}",
+            path_code="B2_CONTRIBUTION_INPUT_RELATIVE_PATH_INVALID",
+            missing_code="B2_CONTRIBUTION_MISSING_ARTIFACT",
+            escape_code="B2_CONTRIBUTION_INPUT_ROOT_ESCAPE",
+        )
+        if _sha256_file(record_path) != str(row["record_file_sha256"]):
+            _fail(
+                "B2_CONTRIBUTION_RECORD_FILE_HASH_MISMATCH",
+                f"teacher record file hash mismatch for {stable_sample_id}",
+            )
+        payload = _load_pt_payload(
+            record_path, code="B2_CONTRIBUTION_INPUT_PAYLOAD_INVALID"
+        )
+        teacher_record = payload["scientific_record"]
+        maps_by_depth = {
+            int(depth_key): {
+                int(layer_key): tensor for layer_key, tensor in layer_maps.items()
+            }
+            for depth_key, layer_maps in payload["maps_by_depth"].items()
+        }
+        descriptor_row = descriptor_by_id.get(stable_sample_id)
+        if descriptor_row is None:
+            _fail(
+                "B2_TARGET_UPSTREAM_SAMPLE_MISMATCH",
+                f"descriptor collection has no record for {stable_sample_id}",
+            )
+        descriptor_path = _resolve_within_root(
+            descriptor_root_path,
+            str(descriptor_row["relative_record_path"]),
+            expected_kind=f"descriptor record {stable_sample_id}",
+            path_code="B2_CONTRIBUTION_INPUT_RELATIVE_PATH_INVALID",
+            missing_code="B2_CONTRIBUTION_MISSING_ARTIFACT",
+            escape_code="B2_CONTRIBUTION_INPUT_ROOT_ESCAPE",
+        )
+        descriptor_payload = _load_pt_payload(
+            descriptor_path, code="B2_CONTRIBUTION_INPUT_PAYLOAD_INVALID"
+        )
+        samples.append(
+            ContributionInputSample(
+                stable_sample_id=stable_sample_id,
+                split_membership=str(row["membership"]),
+                category=str(teacher_record["category"]),
+                label=int(teacher_record["image_label"]),
+                anomaly_type=str(teacher_record["anomaly_type"]),
+                mask_identity=teacher_record.get("mask_identity"),
+                maps_by_depth=maps_by_depth,
+                mask=payload["mask"],
+                full_depth_map=payload["full_depth_map"],
+                teacher_record=teacher_record,
+                teacher_record_scientific_sha256=str(row["record_scientific_sha256"]),
+                descriptor_record=descriptor_payload["scientific_record"],
+            )
+        )
+
+    return ContributionInputBundle(
+        artifact_kind=artifact_kind,
+        candidate_layers=tuple(int(layer) for layer in teacher_manifest["candidate_layers"]),
+        prediction_depths=tuple(
+            int(depth) for depth in teacher_manifest["prediction_depths"]
+        ),
+        samples=tuple(samples),
+        teacher_cache_scientific_sha256=teacher_cache_hash,
+        teacher_cache_sample_coverage_sha256=teacher_coverage_hash,
+        descriptor_collection_scientific_sha256=descriptor_collection_hash,
+        split_scientific_sha256=split_hash,
+        checkpoint_sha256=checkpoint_hash,
+        execution_profile_sha256=profile_hash,
+    )
+
+
+def dry_run_contribution_targets_from_roots(
+    *,
+    config: ContributionTargetsConfig,
+    teacher_cache_manifest_path: Any,
+    teacher_cache_root: Any,
+    descriptor_manifest_path: Any,
+    descriptor_root: Any,
+    seed: int = 0,
+    output_dir: Any = None,
+) -> dict[str, Any]:
+    """Read declared upstream roots and produce the complete no-write dry run."""
+
+    inputs = load_contribution_inputs_from_disk(
+        config=config,
+        teacher_cache_manifest_path=teacher_cache_manifest_path,
+        teacher_cache_root=teacher_cache_root,
+        descriptor_manifest_path=descriptor_manifest_path,
+        descriptor_root=descriptor_root,
+    )
+    return dry_run_contribution_targets(
+        config=config, inputs=inputs, seed=seed, output_dir=output_dir
+    )
+
+
+def dry_run_contribution_targets_from_fixture_roots(
+    *,
+    config: ContributionTargetsConfig,
+    teacher_cache_manifest_path: Any,
+    teacher_cache_root: Any,
+    descriptor_manifest_path: Any,
+    descriptor_root: Any,
+    seed: int = 0,
+    output_dir: Any = None,
+) -> dict[str, Any]:
+    """Hermetic dry run over ``test_fixture`` upstream roots."""
+
+    inputs = load_contribution_inputs_from_disk(
+        config=config,
+        teacher_cache_manifest_path=teacher_cache_manifest_path,
+        teacher_cache_root=teacher_cache_root,
+        descriptor_manifest_path=descriptor_manifest_path,
+        descriptor_root=descriptor_root,
+    )
+    if inputs.artifact_kind != TEST_FIXTURE_ARTIFACT_KIND:
+        _fail(
+            "B2_TARGET_ARTIFACT_KIND_INVALID",
+            "the fixture dry-run entry point only accepts test_fixture inputs",
+        )
+    return dry_run_contribution_targets(
+        config=config, inputs=inputs, seed=seed, output_dir=output_dir
+    )
+
+
+# ---------------------------------------------------------------------------
+# Atomic dual-hash persistence
+# ---------------------------------------------------------------------------
+
+
+@dataclass(frozen=True)
+class PersistedTargetRecordEntry:
+    """One verified on-disk contribution-target record."""
+
+    stable_sample_id: str
+    relative_record_path: str
+    contribution_target_record_scientific_sha256: str
+    contribution_target_record_file_sha256: str
+    verification_status: str = "verified"
+
+
+@dataclass(frozen=True)
+class PersistedStatisticsEntry:
+    """One verified on-disk calibration or normalization artifact."""
+
+    relative_path: str
+    scientific_sha256: str
+    file_sha256: str
+    verification_status: str = "verified"
+
+
+@dataclass(frozen=True)
+class ContributionTargetMaterializationResult:
+    """The outcome of one official contribution-target materialization."""
+
+    run_dir: Path
+    manifest: Mapping[str, Any]
+    contribution_plan_scientific_sha256: str
+    teacher_forward_count: int
+
+
+@dataclass(frozen=True)
+class VerifiedContributionTargetCollection:
+    """A disk-verified contribution-target collection."""
+
+    run_dir: Path
+    manifest: Mapping[str, Any]
+    records_by_id: Mapping[str, Mapping[str, Any]]
+    calibration_artifact: Mapping[str, Any]
+    normalization: Mapping[str, Any]
+    teacher_forward_count: int
+
+
+def contribution_record_relative_path(stable_sample_id: Any) -> str:
+    """Run-relative path of one contribution-target record artifact."""
+
+    if not _is_sha256(stable_sample_id):
+        _fail("B2_CONTRIBUTION_SAMPLE_ID_INVALID", "stable_sample_id must be sha256 hex")
+    return f"{RECORDS_DIRECTORY}/{stable_sample_id}.pt"
+
+
+def _atomic_torch_save(path: Path, payload: Mapping[str, Any]) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    handle_fd, tmp_name = tempfile.mkstemp(
+        prefix=f".{path.name}.", suffix=".tmp", dir=path.parent
+    )
+    tmp_path = Path(tmp_name)
+    try:
+        with os.fdopen(handle_fd, "wb") as handle:
+            torch.save(dict(payload), handle)
+            handle.flush()
+            os.fsync(handle.fileno())
+        os.replace(tmp_path, path)
+    except Exception:
+        tmp_path.unlink(missing_ok=True)
+        raise
+
+
+def _refuse_overwrite(path: Path) -> None:
+    if path.exists() or path.is_symlink():
+        _fail("B2_CONTRIBUTION_OVERWRITE_FORBIDDEN", f"refusing to overwrite {path.name}")
+
+
+def write_contribution_target_record_atomic(
+    destination: Any,
+    record: Mapping[str, Any],
+    *,
+    candidate_layers: Sequence[int],
+    prediction_depths: Sequence[int],
+) -> PersistedTargetRecordEntry:
+    """Persist one record atomically, then reload, rehash, and revalidate it."""
+
+    path = Path(destination)
+    stable_sample_id = str(record["stable_sample_id"])
+    if path.name != f"{stable_sample_id}.pt":
+        _fail(
+            "B2_CONTRIBUTION_SAMPLE_ID_INVALID",
+            "destination filename must equal the stable sample ID",
+        )
+    _refuse_overwrite(path)
+    claimed = str(record["contribution_target_record_scientific_sha256"])
+    if claimed != contribution_target_record_scientific_sha256(record):
+        _fail(
+            "B2_TARGET_RECORD_HASH_MISMATCH",
+            "contribution_target_record_scientific_sha256 does not match content before write",
+        )
+    persistable = {
+        key: value for key, value in dict(record).items() if key != _RECORD_FILE_HASH_FIELD
+    }
+    _atomic_torch_save(
+        path,
+        {
+            "scientific_record": persistable,
+            "contribution_target_record_scientific_sha256": claimed,
+        },
+    )
+    file_digest = _sha256_file(path)
+    entry = PersistedTargetRecordEntry(
+        stable_sample_id=stable_sample_id,
+        relative_record_path=contribution_record_relative_path(stable_sample_id),
+        contribution_target_record_scientific_sha256=claimed,
+        contribution_target_record_file_sha256=file_digest,
+        verification_status="unverified",
+    )
+    _verify_record_payload(
+        path,
+        entry=entry,
+        candidate_layers=candidate_layers,
+        prediction_depths=prediction_depths,
+    )
+    return PersistedTargetRecordEntry(
+        stable_sample_id=stable_sample_id,
+        relative_record_path=entry.relative_record_path,
+        contribution_target_record_scientific_sha256=claimed,
+        contribution_target_record_file_sha256=file_digest,
+        verification_status="verified",
+    )
+
+
+def _verify_record_payload(
+    path: Path,
+    *,
+    entry: PersistedTargetRecordEntry,
+    candidate_layers: Sequence[int],
+    prediction_depths: Sequence[int],
+) -> Mapping[str, Any]:
+    if _sha256_file(path) != entry.contribution_target_record_file_sha256:
+        _fail(
+            "B2_CONTRIBUTION_RECORD_FILE_HASH_MISMATCH",
+            f"record file hash mismatch for {entry.stable_sample_id}",
+        )
+    loaded = _load_pt_payload(path, code="B2_CONTRIBUTION_PT_PAYLOAD_INVALID")
+    if set(loaded) != set(RECORD_PAYLOAD_KEYS):
+        _fail("B2_CONTRIBUTION_PT_PAYLOAD_INVALID", "record payload keys are not exact")
+    scientific_record = loaded["scientific_record"]
+    if not isinstance(scientific_record, Mapping):
+        _fail("B2_CONTRIBUTION_PT_PAYLOAD_INVALID", "scientific_record must be a mapping")
+    if _RECORD_FILE_HASH_FIELD in scientific_record:
+        _fail(
+            "B2_CONTRIBUTION_FILE_HASH_IN_PAYLOAD",
+            "the record file hash must never live inside the persisted payload",
+        )
+    if "depth_targets" not in scientific_record:
+        _fail(
+            "B2_CONTRIBUTION_DIGEST_ONLY_RECORD",
+            f"record payload for {entry.stable_sample_id} carries no depth targets",
+        )
+    recomputed = contribution_target_record_scientific_sha256(scientific_record)
+    if (
+        loaded["contribution_target_record_scientific_sha256"]
+        != entry.contribution_target_record_scientific_sha256
+        or recomputed != entry.contribution_target_record_scientific_sha256
+    ):
+        _fail(
+            "B2_TARGET_RECORD_HASH_MISMATCH",
+            f"record scientific hash drifted for {entry.stable_sample_id}",
+        )
+    validate_contribution_target_record(
+        scientific_record,
+        candidate_layers=candidate_layers,
+        prediction_depths=prediction_depths,
+    )
+    return scientific_record
+
+
+def verify_persisted_contribution_target_record(
+    *,
+    run_dir: Any,
+    entry: PersistedTargetRecordEntry,
+    candidate_layers: Sequence[int],
+    prediction_depths: Sequence[int],
+) -> Mapping[str, Any]:
+    """Re-verify one persisted record from disk against its manifest entry."""
+
+    normalized = _normalized_relative_path(
+        entry.relative_record_path, code="B2_CONTRIBUTION_RUN_RELATIVE_PATH_INVALID"
+    )
+    if normalized != contribution_record_relative_path(entry.stable_sample_id):
+        _fail(
+            "B2_CONTRIBUTION_RUN_RELATIVE_PATH_INVALID",
+            f"record path drifted for {entry.stable_sample_id}",
+        )
+    path = _resolve_within_root(
+        Path(run_dir),
+        normalized,
+        expected_kind=f"contribution-target record {entry.stable_sample_id}",
+        path_code="B2_CONTRIBUTION_RUN_RELATIVE_PATH_INVALID",
+        missing_code="B2_CONTRIBUTION_MISSING_ARTIFACT",
+        escape_code="B2_CONTRIBUTION_RUN_ROOT_ESCAPE",
+    )
+    return _verify_record_payload(
+        path,
+        entry=entry,
+        candidate_layers=candidate_layers,
+        prediction_depths=prediction_depths,
+    )
+
+
+def write_gt_map_calibration_atomic(
+    destination: Any,
+    artifact: Mapping[str, Any],
+) -> PersistedStatisticsEntry:
+    """Persist the GT map calibration artifact atomically and re-verify it."""
+
+    path = Path(destination)
+    _refuse_overwrite(path)
+    validate_gt_map_calibration_artifact(artifact)
+    digest = str(artifact["gt_map_calibration_scientific_sha256"])
+    _atomic_torch_save(
+        path,
+        {
+            "scientific_calibration_record": dict(artifact),
+            "gt_map_calibration_scientific_sha256": digest,
+        },
+    )
+    entry = PersistedStatisticsEntry(
+        relative_path=CALIBRATION_RELATIVE_PATH,
+        scientific_sha256=digest,
+        file_sha256=_sha256_file(path),
+        verification_status="unverified",
+    )
+    _verify_calibration_payload(path, entry=entry)
+    return PersistedStatisticsEntry(
+        relative_path=entry.relative_path,
+        scientific_sha256=entry.scientific_sha256,
+        file_sha256=entry.file_sha256,
+        verification_status="verified",
+    )
+
+
+def _verify_calibration_payload(
+    path: Path, *, entry: PersistedStatisticsEntry
+) -> Mapping[str, Any]:
+    if _sha256_file(path) != entry.file_sha256:
+        _fail(
+            "B2_CONTRIBUTION_CALIBRATION_FILE_HASH_MISMATCH",
+            "GT map calibration file hash mismatch",
+        )
+    loaded = _load_pt_payload(path, code="B2_CONTRIBUTION_PT_PAYLOAD_INVALID")
+    if set(loaded) != set(CALIBRATION_PAYLOAD_KEYS):
+        _fail("B2_CONTRIBUTION_PT_PAYLOAD_INVALID", "calibration payload keys are not exact")
+    scientific = loaded["scientific_calibration_record"]
+    if not isinstance(scientific, Mapping):
+        _fail("B2_CONTRIBUTION_PT_PAYLOAD_INVALID", "calibration record must be a mapping")
+    validate_gt_map_calibration_artifact(scientific)
+    if (
+        loaded["gt_map_calibration_scientific_sha256"] != entry.scientific_sha256
+        or scientific["gt_map_calibration_scientific_sha256"] != entry.scientific_sha256
+    ):
+        _fail(
+            "B2_TARGET_CALIBRATION_HASH_MISMATCH",
+            "GT map calibration scientific hash drifted after reload",
+        )
+    return scientific
+
+
+def write_shapley_normalization_atomic(
+    destination: Any,
+    artifact: Mapping[str, Any],
+) -> PersistedStatisticsEntry:
+    """Persist the Shapley normalization artifact atomically and re-verify it."""
+
+    path = Path(destination)
+    _refuse_overwrite(path)
+    digest = str(artifact["shapley_normalization_scientific_sha256"])
+    if digest != shapley_normalization_scientific_sha256(artifact):
+        _fail(
+            "B2_TARGET_NORMALIZATION_HASH_MISMATCH",
+            "shapley_normalization_scientific_sha256 does not match content before write",
+        )
+    _atomic_torch_save(
+        path,
+        {
+            "scientific_normalization_record": dict(artifact),
+            "shapley_normalization_scientific_sha256": digest,
+        },
+    )
+    entry = PersistedStatisticsEntry(
+        relative_path=NORMALIZATION_RELATIVE_PATH,
+        scientific_sha256=digest,
+        file_sha256=_sha256_file(path),
+        verification_status="unverified",
+    )
+    _verify_normalization_payload(path, entry=entry)
+    return PersistedStatisticsEntry(
+        relative_path=entry.relative_path,
+        scientific_sha256=entry.scientific_sha256,
+        file_sha256=entry.file_sha256,
+        verification_status="verified",
+    )
+
+
+def _verify_normalization_payload(
+    path: Path, *, entry: PersistedStatisticsEntry
+) -> Mapping[str, Any]:
+    if _sha256_file(path) != entry.file_sha256:
+        _fail(
+            "B2_CONTRIBUTION_NORMALIZATION_FILE_HASH_MISMATCH",
+            "Shapley normalization file hash mismatch",
+        )
+    loaded = _load_pt_payload(path, code="B2_CONTRIBUTION_PT_PAYLOAD_INVALID")
+    if set(loaded) != set(NORMALIZATION_PAYLOAD_KEYS):
+        _fail(
+            "B2_CONTRIBUTION_PT_PAYLOAD_INVALID", "normalization payload keys are not exact"
+        )
+    scientific = loaded["scientific_normalization_record"]
+    if not isinstance(scientific, Mapping):
+        _fail("B2_CONTRIBUTION_PT_PAYLOAD_INVALID", "normalization record must be a mapping")
+    recomputed = shapley_normalization_scientific_sha256(scientific)
+    if (
+        loaded["shapley_normalization_scientific_sha256"] != entry.scientific_sha256
+        or recomputed != entry.scientific_sha256
+    ):
+        _fail(
+            "B2_TARGET_NORMALIZATION_HASH_MISMATCH",
+            "Shapley normalization scientific hash drifted after reload",
+        )
+    return scientific
+
+
+def write_final_manifest_with_receipt_atomic(
+    run_dir: Any,
+    manifest: Mapping[str, Any],
+) -> str:
+    """Atomically write ``final_manifest.json`` and its non-self-referential receipt."""
+
+    root = Path(run_dir)
+    root.mkdir(parents=True, exist_ok=True)
+    manifest_path = root / FINAL_MANIFEST_NAME
+    receipt_path = root / FINAL_MANIFEST_RECEIPT_NAME
+    _refuse_overwrite(manifest_path)
+    _refuse_overwrite(receipt_path)
+    payload = {
+        key: value
+        for key, value in dict(manifest).items()
+        if key != "final_manifest_file_sha256"
+    }
+    atomic_write_json(manifest_path, payload)
+    digest = _sha256_file(manifest_path)
+    handle_fd, tmp_name = tempfile.mkstemp(
+        prefix=f".{receipt_path.name}.", suffix=".tmp", dir=root
+    )
+    tmp_path = Path(tmp_name)
+    try:
+        with os.fdopen(handle_fd, "w", encoding="utf-8") as handle:
+            handle.write(digest + "\n")
+            handle.flush()
+            os.fsync(handle.fileno())
+        os.replace(tmp_path, receipt_path)
+    except Exception:
+        tmp_path.unlink(missing_ok=True)
+        raise
+    return digest
+
+
+def verify_final_manifest_receipt(run_dir: Any) -> str:
+    """Require the receipt to match the manifest bytes exactly."""
+
+    root = Path(run_dir)
+    manifest_path = _resolve_within_root(
+        root,
+        FINAL_MANIFEST_NAME,
+        expected_kind="final manifest",
+        path_code="B2_CONTRIBUTION_RUN_RELATIVE_PATH_INVALID",
+        missing_code="B2_CONTRIBUTION_MISSING_ARTIFACT",
+        escape_code="B2_CONTRIBUTION_RUN_ROOT_ESCAPE",
+    )
+    receipt_path = _resolve_within_root(
+        root,
+        FINAL_MANIFEST_RECEIPT_NAME,
+        expected_kind="final manifest receipt",
+        path_code="B2_CONTRIBUTION_RUN_RELATIVE_PATH_INVALID",
+        missing_code="B2_CONTRIBUTION_MISSING_ARTIFACT",
+        escape_code="B2_CONTRIBUTION_RUN_ROOT_ESCAPE",
+    )
+    actual = _sha256_file(manifest_path)
+    claimed = receipt_path.read_text(encoding="utf-8").strip()
+    if claimed != actual:
+        _fail(
+            "B2_CONTRIBUTION_MANIFEST_RECEIPT_MISMATCH",
+            "final_manifest.json.sha256 does not match the manifest bytes",
+        )
+    return actual
+
+
+def _is_temporary_artifact(path: Path) -> bool:
+    name = path.name
+    return name.endswith(".tmp") or (name.startswith(".") and name != ".gitkeep")
+
+
+def audit_contribution_target_integrity(
+    *,
+    run_dir: Any,
+    manifest: Mapping[str, Any],
+    planned_ids: Sequence[str],
+) -> None:
+    """Structural fail-closed audit of one run directory against its plan."""
+
+    root = Path(run_dir)
+    planned = [str(item) for item in planned_ids]
+    planned_set = set(planned)
+    if len(planned_set) != len(planned):
+        _fail("B2_CONTRIBUTION_PLAN_DUPLICATE", "planned sample IDs contain duplicates")
+
+    for path in sorted(root.rglob("*")):
+        if path.is_file() and _is_temporary_artifact(path):
+            _fail(
+                "B2_CONTRIBUTION_TEMP_ARTIFACT_PRESENT",
+                f"temporary artifact left behind: {path.name}",
+            )
+
+    records_dir = root / RECORDS_DIRECTORY
+    on_disk: dict[str, Path] = {}
+    if records_dir.is_dir():
+        for path in sorted(records_dir.iterdir()):
+            if path.suffix != ".pt" or not path.is_file():
+                _fail(
+                    "B2_CONTRIBUTION_ORPHAN_ARTIFACT",
+                    f"unexpected entry in the records directory: {path.name}",
+                )
+            if path.stem not in planned_set:
+                _fail(
+                    "B2_CONTRIBUTION_ORPHAN_ARTIFACT",
+                    f"orphan contribution-target record: {path.name}",
+                )
+            on_disk[path.stem] = path
+
+    missing = [stable_id for stable_id in planned if stable_id not in on_disk]
+    if missing:
+        if manifest.get("status") == "passed":
+            _fail(
+                "B2_CONTRIBUTION_PARTIAL_CLAIMING_PASSED",
+                f"manifest claims passed while {len(missing)} records are missing",
+            )
+        _fail(
+            "B2_CONTRIBUTION_MISSING_ARTIFACT",
+            f"missing contribution-target records: {missing[:3]}",
+        )
+    return None
+
+
+def _statistics_entry_from_manifest(
+    manifest: Mapping[str, Any],
+    key: str,
+    *,
+    expected_relative_path: str,
+) -> PersistedStatisticsEntry:
+    block = manifest.get(key)
+    if not isinstance(block, Mapping):
+        _fail(
+            "B2_CONTRIBUTION_MANIFEST_INVALID",
+            f"final manifest is missing the {key} block",
+        )
+    return PersistedStatisticsEntry(
+        relative_path=str(block.get("relative_path", expected_relative_path)),
+        scientific_sha256=str(block["scientific_sha256"]),
+        file_sha256=str(block["file_sha256"]),
+        verification_status=str(block.get("verification_status", "verified")),
+    )
+
+
+def build_contribution_targets_manifest(
+    *,
+    config: ContributionTargetsConfig,
+    collection: ContributionTargetCollection,
+    record_entries: Sequence[PersistedTargetRecordEntry],
+    calibration_entry: PersistedStatisticsEntry | None,
+    normalization_entry: PersistedStatisticsEntry | None,
+) -> dict[str, Any]:
+    """Build the passed final manifest from dual-hash verified disk entries."""
+
+    ordered_records = sorted(
+        collection.records, key=lambda row: str(row["stable_sample_id"])
+    )
+    by_id = {entry.stable_sample_id: entry for entry in record_entries}
+    if (
+        calibration_entry is None
+        or normalization_entry is None
+        or len(record_entries) != len(ordered_records)
+        or set(by_id) != {str(row["stable_sample_id"]) for row in ordered_records}
+    ):
+        _fail(
+            "B2_CONTRIBUTION_PASSED_MANIFEST_REQUIRES_VERIFIED_RECORDS",
+            "a passed manifest requires one verified entry per record plus both statistics",
+        )
+    for entry in record_entries:
+        if (
+            entry.verification_status != "verified"
+            or not _is_sha256(entry.contribution_target_record_scientific_sha256)
+            or not _is_sha256(entry.contribution_target_record_file_sha256)
+        ):
+            _fail(
+                "B2_CONTRIBUTION_PASSED_MANIFEST_REQUIRES_VERIFIED_RECORDS",
+                "every record entry must be dual-hash verified",
+            )
+    for statistics in (calibration_entry, normalization_entry):
+        if (
+            statistics.verification_status != "verified"
+            or not _is_sha256(statistics.scientific_sha256)
+            or not _is_sha256(statistics.file_sha256)
+        ):
+            _fail(
+                "B2_CONTRIBUTION_PASSED_MANIFEST_REQUIRES_VERIFIED_RECORDS",
+                "both statistics artifacts must be dual-hash verified",
+            )
+
+    plan = collection.plan
+    manifest: dict[str, Any] = {
+        "schema_version": MANIFEST_SCHEMA_VERSION,
+        "status": "passed",
+        "configuration_id": config.configuration_id,
+        "contract_stage": config.contract_stage,
+        "artifact_kind": collection.artifact_kind,
+        "candidate_layers": list(collection.candidate_layers),
+        "prediction_depths": list(collection.prediction_depths),
+        "target_families": list(TARGET_FAMILIES),
+        "split_counts": dict(plan["planned_split_counts"]),
+        "planned_ordered_stable_sample_ids": list(
+            plan["planned_ordered_stable_sample_ids"]
+        ),
+        "contribution_plan_scientific_sha256": str(
+            plan["contribution_plan_scientific_sha256"]
+        ),
+        "official_materialization_enabled": bool(config.official_materialization_enabled),
+        "teacher_forward_count": 0,
+        "teacher_cache_scientific_sha256": str(plan["teacher_cache_scientific_sha256"]),
+        "descriptor_collection_scientific_sha256": str(
+            plan["descriptor_collection_scientific_sha256"]
+        ),
+        "split_scientific_sha256": str(plan["split_scientific_sha256"]),
+        "checkpoint_sha256": str(plan["checkpoint_sha256"]),
+        "execution_profile_sha256": str(plan["execution_profile_sha256"]),
+        "records": [
+            {
+                "stable_sample_id": by_id[str(row["stable_sample_id"])].stable_sample_id,
+                "split_membership": str(row["split_membership"]),
+                "relative_record_path": by_id[
+                    str(row["stable_sample_id"])
+                ].relative_record_path,
+                "contribution_target_record_scientific_sha256": by_id[
+                    str(row["stable_sample_id"])
+                ].contribution_target_record_scientific_sha256,
+                "contribution_target_record_file_sha256": by_id[
+                    str(row["stable_sample_id"])
+                ].contribution_target_record_file_sha256,
+                "verification_status": by_id[
+                    str(row["stable_sample_id"])
+                ].verification_status,
+            }
+            for row in ordered_records
+        ],
+        "gt_map_calibration": {
+            "relative_path": calibration_entry.relative_path,
+            "scientific_sha256": calibration_entry.scientific_sha256,
+            "file_sha256": calibration_entry.file_sha256,
+            "verification_status": calibration_entry.verification_status,
+        },
+        "shapley_normalization": {
+            "relative_path": normalization_entry.relative_path,
+            "scientific_sha256": normalization_entry.scientific_sha256,
+            "file_sha256": normalization_entry.file_sha256,
+            "verification_status": normalization_entry.verification_status,
+        },
+    }
+    for identity in SEVEN_LAYERED_IDENTITY_KEYS:
+        manifest[identity] = str(plan[identity])
+    return manifest
+
+
+def require_official_materialization_enabled(config: ContributionTargetsConfig) -> None:
+    """Fail closed unless the configuration explicitly enables materialization."""
+
+    if not config.official_materialization_enabled:
+        _fail(
+            "B2_CONTRIBUTION_OFFICIAL_MATERIALIZATION_NOT_ENABLED",
+            "official contribution-target materialization is disabled by configuration",
+        )
+    return None
+
+
+def _require_expected_plan_sha256(
+    config: ContributionTargetsConfig, expected_plan_sha256: Any
+) -> str:
+    if not config.expected_plan_sha_required_for_official:
+        _fail(
+            "B2_CONTRIBUTION_CONFIG_DRIFT",
+            "official materialization must always require an expected plan hash",
+        )
+    if expected_plan_sha256 is None:
+        _fail(
+            "B2_CONTRIBUTION_EXPECTED_PLAN_SHA_MISSING",
+            "official materialization requires --expected-plan-sha256",
+        )
+    if not _is_sha256(expected_plan_sha256):
+        _fail(
+            "B2_CONTRIBUTION_EXPECTED_PLAN_SHA_MALFORMED",
+            "the expected plan hash must be 64 lowercase hex characters",
+        )
+    return str(expected_plan_sha256)
+
+
+def materialize_contribution_target_collection(
+    *,
+    config: ContributionTargetsConfig,
+    inputs: Any,
+    output_run_dir: Any,
+    expected_plan_sha256: Any,
+    candidate_layers: Sequence[int] | None = None,
+    prediction_depths: Sequence[int] | None = None,
+) -> ContributionTargetMaterializationResult:
+    """Materialize one fresh, fully verified contribution-target run directory."""
+
+    require_official_materialization_enabled(config)
+    if config.expected_input_artifact_kind == PRODUCTION_ARTIFACT_KIND:
+        require_production_artifact_kind(
+            {"artifact_kind": getattr(inputs, "artifact_kind", None)}
+        )
+    elif getattr(inputs, "artifact_kind", None) != config.expected_input_artifact_kind:
+        _fail(
+            "B2_TARGET_ARTIFACT_KIND_INVALID",
+            "input artifact kind does not match the configured expectation",
+        )
+    expected = _require_expected_plan_sha256(config, expected_plan_sha256)
+
+    collection = run_contribution_target_collection(
+        config=config,
+        inputs=inputs,
+        candidate_layers=candidate_layers,
+        prediction_depths=prediction_depths,
+    )
+    recomputed = str(collection.plan["contribution_plan_scientific_sha256"])
+    if recomputed != expected:
+        _fail(
+            "B2_CONTRIBUTION_EXPECTED_PLAN_SHA_MISMATCH",
+            f"recomputed plan hash {recomputed} does not match the expected {expected}",
+        )
+
+    run_dir = Path(output_run_dir)
+    try:
+        refuse_existing_run(run_dir)
+    except OutputProtectionError as exc:
+        _fail("B2_CONTRIBUTION_OUTPUT_DIR_EXISTS", str(exc))
+    run_dir.mkdir(parents=True, exist_ok=False)
+    (run_dir / RECORDS_DIRECTORY).mkdir(parents=True, exist_ok=False)
+
+    record_entries = [
+        write_contribution_target_record_atomic(
+            run_dir / contribution_record_relative_path(record["stable_sample_id"]),
+            record,
+            candidate_layers=collection.candidate_layers,
+            prediction_depths=collection.prediction_depths,
+        )
+        for record in collection.records
+    ]
+    calibration_entry = write_gt_map_calibration_atomic(
+        run_dir / CALIBRATION_RELATIVE_PATH, collection.calibration_artifact
+    )
+    normalization_entry = write_shapley_normalization_atomic(
+        run_dir / NORMALIZATION_RELATIVE_PATH, collection.normalization
+    )
+    manifest = build_contribution_targets_manifest(
+        config=config,
+        collection=collection,
+        record_entries=record_entries,
+        calibration_entry=calibration_entry,
+        normalization_entry=normalization_entry,
+    )
+    write_final_manifest_with_receipt_atomic(run_dir, manifest)
+    verify_contribution_target_collection(config=config, run_dir=run_dir)
+    return ContributionTargetMaterializationResult(
+        run_dir=run_dir,
+        manifest=MappingProxyType(dict(manifest)),
+        contribution_plan_scientific_sha256=recomputed,
+        teacher_forward_count=0,
+    )
+
+
+def verify_contribution_target_collection(
+    *,
+    config: ContributionTargetsConfig,
+    run_dir: Any,
+) -> VerifiedContributionTargetCollection:
+    """Verify one materialized contribution-target run directory from disk only."""
+
+    root = Path(run_dir)
+    verify_final_manifest_receipt(root)
+    manifest_path = root / FINAL_MANIFEST_NAME
+    try:
+        manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+    except (OSError, UnicodeError, json.JSONDecodeError) as exc:
+        _fail("B2_CONTRIBUTION_MANIFEST_INVALID", f"invalid final manifest: {exc}")
+    if not isinstance(manifest, Mapping):
+        _fail("B2_CONTRIBUTION_MANIFEST_INVALID", "final manifest must be an object")
+
+    rows = manifest.get("records")
+    if not isinstance(rows, Sequence) or not rows:
+        _fail("B2_CONTRIBUTION_MANIFEST_INVALID", "final manifest carries no record entries")
+    planned_ids = [str(row["stable_sample_id"]) for row in rows]
+    audit_contribution_target_integrity(
+        run_dir=root, manifest=manifest, planned_ids=planned_ids
+    )
+
+    layers = tuple(int(layer) for layer in manifest["candidate_layers"])
+    depths = tuple(int(depth) for depth in manifest["prediction_depths"])
+    records_by_id: dict[str, Mapping[str, Any]] = {}
+    for row in rows:
+        entry = PersistedTargetRecordEntry(
+            stable_sample_id=str(row["stable_sample_id"]),
+            relative_record_path=str(row["relative_record_path"]),
+            contribution_target_record_scientific_sha256=str(
+                row["contribution_target_record_scientific_sha256"]
+            ),
+            contribution_target_record_file_sha256=str(
+                row["contribution_target_record_file_sha256"]
+            ),
+            verification_status=str(row.get("verification_status", "verified")),
+        )
+        records_by_id[entry.stable_sample_id] = verify_persisted_contribution_target_record(
+            run_dir=root,
+            entry=entry,
+            candidate_layers=layers,
+            prediction_depths=depths,
+        )
+
+    calibration_entry = _statistics_entry_from_manifest(
+        manifest, "gt_map_calibration", expected_relative_path=CALIBRATION_RELATIVE_PATH
+    )
+    calibration_path = _resolve_within_root(
+        root,
+        calibration_entry.relative_path,
+        expected_kind="GT map calibration artifact",
+        path_code="B2_CONTRIBUTION_RUN_RELATIVE_PATH_INVALID",
+        missing_code="B2_CONTRIBUTION_MISSING_ARTIFACT",
+        escape_code="B2_CONTRIBUTION_RUN_ROOT_ESCAPE",
+    )
+    calibration_artifact = _verify_calibration_payload(
+        calibration_path, entry=calibration_entry
+    )
+    normalization_entry = _statistics_entry_from_manifest(
+        manifest, "shapley_normalization", expected_relative_path=NORMALIZATION_RELATIVE_PATH
+    )
+    normalization_path = _resolve_within_root(
+        root,
+        normalization_entry.relative_path,
+        expected_kind="Shapley normalization artifact",
+        path_code="B2_CONTRIBUTION_RUN_RELATIVE_PATH_INVALID",
+        missing_code="B2_CONTRIBUTION_MISSING_ARTIFACT",
+        escape_code="B2_CONTRIBUTION_RUN_ROOT_ESCAPE",
+    )
+    normalization = _verify_normalization_payload(
+        normalization_path, entry=normalization_entry
+    )
+
+    replayed = build_contribution_plan(
+        records=[records_by_id[stable_id] for stable_id in sorted(records_by_id)],
+        calibration_artifact=calibration_artifact,
+        normalization=normalization,
+        candidate_layers=layers,
+        prediction_depths=depths,
+        official_materialization_enabled=bool(
+            manifest.get("official_materialization_enabled", False)
+        ),
+    )
+    if str(replayed["contribution_plan_scientific_sha256"]) != str(
+        manifest["contribution_plan_scientific_sha256"]
+    ):
+        _fail(
+            "B2_CONTRIBUTION_PLAN_HASH_MISMATCH",
+            "the replayed plan hash does not match the persisted manifest",
+        )
+    if bool(manifest.get("official_materialization_enabled")) != bool(
+        config.official_materialization_enabled
+    ):
+        _fail(
+            "B2_CONTRIBUTION_MANIFEST_INVALID",
+            "manifest official-materialization flag disagrees with the configuration",
+        )
+    return VerifiedContributionTargetCollection(
+        run_dir=root,
+        manifest=MappingProxyType(dict(manifest)),
+        records_by_id=MappingProxyType(records_by_id),
+        calibration_artifact=calibration_artifact,
+        normalization=normalization,
+        teacher_forward_count=0,
+    )

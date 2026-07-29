@@ -67,8 +67,10 @@ Contract assumed by the Story 2 tests in this file (artifacts only):
 from __future__ import annotations
 
 import copy
+import hashlib
 import inspect
 import math
+import os
 from pathlib import Path
 from typing import Any
 
@@ -124,9 +126,24 @@ def test_contract_constants_are_frozen() -> None:
         assert isinstance(version, str) and version
 
 
-def test_module_avoids_teacher_loading_writes_and_target_domain() -> None:
+def test_module_avoids_teacher_loading_and_target_domain() -> None:
+    """Story 3 adds run-directory persistence; the other boundaries still hold.
+
+    Persistence is now an explicit Story 3 deliverable, so ``torch.save``,
+    ``atomic_write_json``, and ``mkdir`` are expected. Loading a teacher bundle,
+    running a backbone, driving a CLI, or reaching the target domain from the
+    domain module never becomes acceptable.
+    """
+
     source = Path(subject.__file__).read_text(encoding="utf-8").lower()
-    for forbidden in ("load_teacher_bundle", "torch.save", "atomic_write", "visa", "mkdir"):
+    for forbidden in (
+        "load_teacher_bundle",
+        "build_backbone",
+        "visa",
+        "argparse",
+        "subprocess",
+        "torch.backends",
+    ):
         assert forbidden not in source
 
 
@@ -1271,16 +1288,16 @@ def test_story2_contract_constants_are_frozen() -> None:
         assert isinstance(version, str) and version
 
 
-def test_story2_module_still_has_no_persistence_or_target_domain() -> None:
+def test_domain_module_never_loads_teacher_or_target_domain_or_cli() -> None:
+    """Story 3 adds persistence, but the domain module stays teacher/CLI free."""
+
     source = Path(subject.__file__).read_text(encoding="utf-8").lower()
     for forbidden in (
         "load_teacher_bundle",
-        "torch.save",
-        "atomic_write",
         "visa",
-        "mkdir",
-        "open(",
         "argparse",
+        "build_backbone",
+        "set_grad_enabled",
     ):
         assert forbidden not in source
 
@@ -2817,3 +2834,747 @@ def test_access_views_never_mutate_the_source_records(
         training, access_mode="training_only", normalization=normalization
     )
     assert list(training) == before
+
+
+# ---------------------------------------------------------------------------
+# Story 3 — configuration, dry-run orchestration, and atomic persistence
+# ---------------------------------------------------------------------------
+#
+# Contract assumed by the Story 3 tests below:
+#
+# * ``load_contribution_targets_config`` pins every scientific value of the
+#   tracked Gate-C configuration and fails closed on drift. The tracked
+#   configuration keeps ``official_materialization_enabled == false`` and only
+#   ever accepts ``production`` input artifacts.
+#
+# * ``run_contribution_target_collection`` is the single shared plan-construction
+#   path: source-training-only GT calibration, all 32 dual-family records, the
+#   training-only Shapley normalization, all seven layered identities, and the
+#   plan hash. It performs no I/O whatsoever.
+#
+# * ``dry_run_contribution_targets`` returns the complete plan with
+#   ``artifact_written`` / ``run_directory_created`` false and
+#   ``teacher_forward_count == 0``, and creates no file, directory, lock, or
+#   temporary artifact.
+#
+# * Persistence is atomic and dual-hash: the ``.pt`` payload carries the
+#   scientific record plus its embedded scientific hash, the file byte hash lives
+#   only in the final manifest, and every write is followed by reload, rehash,
+#   and revalidation before it may be marked verified. Runs are fresh-run only.
+
+
+@pytest.fixture(scope="module")
+def tracked_config() -> Any:
+    return subject.load_contribution_targets_config(fixtures.TRACKED_CONFIG_PATH)
+
+
+@pytest.fixture(scope="module")
+def input_bundle(target_fixture: Any) -> Any:
+    return fixtures.fixture_input_bundle(target_fixture)
+
+
+@pytest.fixture(scope="module")
+def collection(tracked_config: Any, input_bundle: Any) -> Any:
+    return subject.run_contribution_target_collection(
+        config=tracked_config, inputs=input_bundle
+    )
+
+
+def _snapshot_tree(root: Path) -> dict[str, str]:
+    snapshot: dict[str, str] = {}
+    if not root.exists():
+        return snapshot
+    for path in sorted(root.rglob("*")):
+        relative = path.relative_to(root).as_posix()
+        if path.is_symlink():
+            snapshot[relative] = f"symlink:{os.readlink(path)}"
+        elif path.is_dir():
+            snapshot[relative] = "dir"
+        else:
+            snapshot[relative] = hashlib.sha256(path.read_bytes()).hexdigest()
+    return snapshot
+
+
+def _official_config(tmp_path: Path, **overrides: Any) -> Any:
+    return subject.load_contribution_targets_config(
+        fixtures.write_controlled_official_config(tmp_path, **overrides)
+    )
+
+
+def _materialize(
+    tmp_path: Path,
+    config: Any,
+    inputs: Any,
+    *,
+    run_name: str = "run",
+    expected_plan_sha256: str | None = None,
+) -> Any:
+    run_dir = tmp_path / run_name
+    if expected_plan_sha256 is None:
+        expected_plan_sha256 = subject.run_contribution_target_collection(
+            config=config, inputs=inputs
+        ).plan["contribution_plan_scientific_sha256"]
+    return subject.materialize_contribution_target_collection(
+        config=config,
+        inputs=inputs,
+        output_run_dir=run_dir,
+        expected_plan_sha256=expected_plan_sha256,
+    )
+
+
+# --- configuration ----------------------------------------------------------
+
+
+def test_tracked_gate_c_config_loads_with_official_materialization_disabled(
+    tracked_config: Any,
+) -> None:
+    assert tracked_config.configuration_id == "b2_contribution_targets_gate_c"
+    assert tracked_config.contract_stage == "b2_04a"
+    assert tracked_config.official_materialization_enabled is False
+    assert tracked_config.expected_input_artifact_kind == subject.PRODUCTION_ARTIFACT_KIND
+    assert tracked_config.candidate_layers == (6, 12, 18, 24)
+    assert tracked_config.prediction_depths == (12, 18, 24)
+    assert tracked_config.target_families == subject.TARGET_FAMILIES
+    assert dict(tracked_config.split_counts) == {
+        "training": 16,
+        "calibration": 8,
+        "evaluation": 8,
+    }
+    assert tracked_config.primary_target_dtype == "float64"
+    assert tracked_config.resume_enabled is False
+    assert tracked_config.dry_run_complete_compute is True
+    assert tracked_config.expected_plan_sha_required_for_official is True
+
+
+def test_tracked_config_carries_no_machine_local_paths() -> None:
+    raw = fixtures.TRACKED_CONFIG_PATH.read_text(encoding="utf-8")
+    for forbidden in ("/root", "/home", "/mnt", "autodl", "C:\\", "visa", "VisA"):
+        assert forbidden not in raw
+
+
+def test_config_missing_and_malformed_fail_closed(tmp_path: Path) -> None:
+    with pytest.raises(subject.ContributionTargetError) as excinfo:
+        subject.load_contribution_targets_config(tmp_path / "absent.json")
+    assert _error_code(excinfo) == "B2_CONTRIBUTION_CONFIG_MISSING"
+    broken = tmp_path / "broken.json"
+    broken.write_text("{not json", encoding="utf-8")
+    with pytest.raises(subject.ContributionTargetError) as excinfo:
+        subject.load_contribution_targets_config(broken)
+    assert _error_code(excinfo) == "B2_CONTRIBUTION_CONFIG_INVALID"
+
+
+@pytest.mark.parametrize(
+    "overrides",
+    [
+        {"candidate_layers": [6, 12, 18]},
+        {"prediction_depths": [12, 24]},
+        {"gt_calibration": {"quantile_low": 0.05, "quantile_high": 0.995}},
+        {"abnormal_gt_weights": {"pixel_ap": 0.5, "soft_dice": 0.4, "background_penalty": 0.1}},
+        {"soft_dice_epsilon": 1e-3},
+        {"split_counts": {"training": 24, "calibration": 4, "evaluation": 4}},
+        {"primary_target_dtype": "float32"},
+        {"coalition_fusion": "sum_preserving"},
+        {"target_families": ["gt_localization"]},
+        {"resume_enabled": True},
+        {"expected_split_scientific_sha256": "0" * 64},
+    ],
+)
+def test_config_drift_fails_closed(tmp_path: Path, overrides: dict[str, Any]) -> None:
+    path = fixtures.write_config(
+        tmp_path, {**fixtures.tracked_config_payload(), **overrides}, name="drift.json"
+    )
+    with pytest.raises(subject.ContributionTargetError) as excinfo:
+        subject.load_contribution_targets_config(path)
+    assert _error_code(excinfo) == "B2_CONTRIBUTION_CONFIG_DRIFT"
+
+
+def test_tracked_configuration_id_may_never_enable_official_materialization(
+    tmp_path: Path,
+) -> None:
+    payload = fixtures.tracked_config_payload()
+    payload["official_materialization_enabled"] = True
+    path = fixtures.write_config(tmp_path, payload, name="tracked_official.json")
+    with pytest.raises(subject.ContributionTargetError) as excinfo:
+        subject.load_contribution_targets_config(path)
+    assert _error_code(excinfo) == "B2_CONTRIBUTION_CONFIG_DRIFT"
+
+
+def test_tracked_configuration_id_may_never_accept_fixture_inputs(tmp_path: Path) -> None:
+    payload = fixtures.tracked_config_payload()
+    payload["expected_input_artifact_kind"] = "test_fixture"
+    path = fixtures.write_config(tmp_path, payload, name="tracked_fixture.json")
+    with pytest.raises(subject.ContributionTargetError) as excinfo:
+        subject.load_contribution_targets_config(path)
+    assert _error_code(excinfo) == "B2_CONTRIBUTION_CONFIG_DRIFT"
+
+
+# --- shared collection path -------------------------------------------------
+
+
+def test_collection_reproduces_the_independent_story_two_identities(
+    collection: Any,
+    target_fixture: Any,
+    calibration_artifact: Any,
+    target_records: Any,
+    normalization: Any,
+) -> None:
+    assert collection.calibration_artifact["gt_map_calibration_scientific_sha256"] == (
+        calibration_artifact["gt_map_calibration_scientific_sha256"]
+    )
+    assert [row["contribution_target_record_scientific_sha256"] for row in collection.records] == [
+        row["contribution_target_record_scientific_sha256"]
+        for row in sorted(target_records, key=lambda item: str(item["stable_sample_id"]))
+    ]
+    assert collection.normalization["shapley_normalization_scientific_sha256"] == (
+        normalization["shapley_normalization_scientific_sha256"]
+    )
+    expected_plan = subject.build_contribution_plan(
+        records=target_records,
+        calibration_artifact=calibration_artifact,
+        normalization=normalization,
+        candidate_layers=target_fixture.candidate_layers,
+        prediction_depths=target_fixture.prediction_depths,
+        official_materialization_enabled=False,
+    )
+    assert collection.plan["contribution_plan_scientific_sha256"] == (
+        expected_plan["contribution_plan_scientific_sha256"]
+    )
+
+
+def test_collection_uses_training_only_for_calibration_and_normalization(
+    collection: Any, target_fixture: Any
+) -> None:
+    training_ids = sorted(
+        sample.stable_sample_id for sample in target_fixture.by_membership("training")
+    )
+    assert list(
+        collection.calibration_artifact["ordered_training_stable_sample_ids"]
+    ) == training_ids
+    assert list(
+        collection.normalization["ordered_training_stable_sample_ids"]
+    ) == training_ids
+
+
+def test_collection_rejects_incomplete_split_coverage(
+    tracked_config: Any, target_fixture: Any
+) -> None:
+    truncated = fixtures.fixture_input_bundle(
+        target_fixture, samples=target_fixture.samples[:31]
+    )
+    with pytest.raises(subject.ContributionTargetError):
+        subject.run_contribution_target_collection(config=tracked_config, inputs=truncated)
+
+
+# --- dry run ----------------------------------------------------------------
+
+
+def test_dry_run_returns_the_frozen_plan_semantics(
+    tracked_config: Any, input_bundle: Any, collection: Any
+) -> None:
+    result = subject.dry_run_contribution_targets(
+        config=tracked_config, inputs=input_bundle
+    )
+    assert result["mode"] == "dry_run"
+    assert result["status"] == "passed"
+    assert result["artifact_written"] is False
+    assert result["run_directory_created"] is False
+    assert result["teacher_forward_count"] == 0
+    assert result["planned_samples"] == 32
+    assert result["training_targets"] == 16
+    assert result["calibration_targets"] == 8
+    assert result["evaluation_targets"] == 8
+    assert result["training_samples_for_gt_calibration"] == 16
+    assert result["calibration_samples_for_gt_calibration"] == 0
+    assert result["evaluation_samples_for_gt_calibration"] == 0
+    assert result["training_samples_for_shapley_normalization"] == 16
+    assert result["calibration_samples_for_shapley_normalization"] == 0
+    assert result["evaluation_samples_for_shapley_normalization"] == 0
+    assert list(result["prediction_depths"]) == [12, 18, 24]
+    assert dict(result["coalition_counts"]) == {12: 4, 18: 8, 24: 16}
+    assert result["contribution_plan_scientific_sha256"] == (
+        collection.plan["contribution_plan_scientific_sha256"]
+    )
+    assert result["official_materialization_enabled"] is False
+
+
+def test_dry_run_exposes_all_seven_layered_identities(
+    tracked_config: Any, input_bundle: Any, collection: Any
+) -> None:
+    result = subject.dry_run_contribution_targets(
+        config=tracked_config, inputs=input_bundle
+    )
+    for identity in subject.SEVEN_LAYERED_IDENTITY_KEYS:
+        assert result[identity] == collection.plan[identity]
+    assert len(subject.SEVEN_LAYERED_IDENTITY_KEYS) == 7
+    assert set(subject.SEVEN_LAYERED_IDENTITY_KEYS) == {
+        "gt_map_calibration_scientific_sha256",
+        "contribution_target_sample_coverage_sha256",
+        "contribution_target_collection_scientific_sha256",
+        "shapley_normalization_scientific_sha256",
+        "training_target_coverage_sha256",
+        "calibration_target_coverage_sha256",
+        "evaluation_target_coverage_sha256",
+    }
+
+
+def test_dry_run_creates_no_file_directory_lock_or_temporary(
+    tracked_config: Any, input_bundle: Any, tmp_path: Path
+) -> None:
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+    before = _snapshot_tree(workspace)
+    subject.dry_run_contribution_targets(
+        config=tracked_config,
+        inputs=input_bundle,
+        seed=0,
+        output_dir=workspace / "never_created",
+    )
+    assert _snapshot_tree(workspace) == before
+    assert not (workspace / "never_created").exists()
+
+
+def test_dry_run_from_fixture_roots_matches_the_in_memory_dry_run(
+    tracked_config: Any, target_fixture: Any, input_bundle: Any, tmp_path: Path
+) -> None:
+    layout = fixtures.prepare_hermetic_contribution_inputs(tmp_path, fixture=target_fixture)
+    before = _snapshot_tree(tmp_path)
+    result = subject.dry_run_contribution_targets_from_fixture_roots(
+        config=tracked_config,
+        teacher_cache_manifest_path=layout.teacher_cache_manifest,
+        teacher_cache_root=layout.teacher_cache_root,
+        descriptor_manifest_path=layout.descriptor_manifest,
+        descriptor_root=layout.descriptor_root,
+    )
+    expected = subject.dry_run_contribution_targets(
+        config=tracked_config, inputs=input_bundle
+    )
+    assert result["contribution_plan_scientific_sha256"] == (
+        expected["contribution_plan_scientific_sha256"]
+    )
+    for identity in subject.SEVEN_LAYERED_IDENTITY_KEYS:
+        assert result[identity] == expected[identity]
+    assert result["artifact_written"] is False
+    assert _snapshot_tree(tmp_path) == before
+
+
+def test_fixture_inputs_are_refused_when_the_config_expects_production(
+    tmp_path: Path, input_bundle: Any
+) -> None:
+    config = _official_config(
+        tmp_path, expected_input_artifact_kind=subject.PRODUCTION_ARTIFACT_KIND
+    )
+    with pytest.raises(subject.ContributionTargetError) as excinfo:
+        _materialize(tmp_path, config, input_bundle)
+    assert _error_code(excinfo) == "B2_TARGET_TEST_FIXTURE_NOT_ACCEPTED"
+    assert not (tmp_path / "run").exists()
+
+
+# --- official materialization gate -----------------------------------------
+
+
+def test_non_dry_run_is_refused_while_official_materialization_is_disabled(
+    tracked_config: Any, input_bundle: Any, tmp_path: Path
+) -> None:
+    with pytest.raises(subject.ContributionTargetError) as excinfo:
+        subject.materialize_contribution_target_collection(
+            config=tracked_config,
+            inputs=input_bundle,
+            output_run_dir=tmp_path / "run",
+            expected_plan_sha256="0" * 64,
+        )
+    assert _error_code(excinfo) == "B2_CONTRIBUTION_OFFICIAL_MATERIALIZATION_NOT_ENABLED"
+    assert not (tmp_path / "run").exists()
+
+
+def test_official_materialization_requires_the_expected_plan_hash(
+    tmp_path: Path, input_bundle: Any
+) -> None:
+    config = _official_config(tmp_path)
+    with pytest.raises(subject.ContributionTargetError) as excinfo:
+        subject.materialize_contribution_target_collection(
+            config=config,
+            inputs=input_bundle,
+            output_run_dir=tmp_path / "run",
+            expected_plan_sha256=None,
+        )
+    assert _error_code(excinfo) == "B2_CONTRIBUTION_EXPECTED_PLAN_SHA_MISSING"
+    assert not (tmp_path / "run").exists()
+
+
+def test_official_materialization_rejects_a_malformed_expected_plan_hash(
+    tmp_path: Path, input_bundle: Any
+) -> None:
+    config = _official_config(tmp_path)
+    with pytest.raises(subject.ContributionTargetError) as excinfo:
+        subject.materialize_contribution_target_collection(
+            config=config,
+            inputs=input_bundle,
+            output_run_dir=tmp_path / "run",
+            expected_plan_sha256="not-a-sha",
+        )
+    assert _error_code(excinfo) == "B2_CONTRIBUTION_EXPECTED_PLAN_SHA_MALFORMED"
+    assert not (tmp_path / "run").exists()
+
+
+def test_expected_plan_hash_mismatch_fails_before_any_write(
+    tmp_path: Path, input_bundle: Any
+) -> None:
+    config = _official_config(tmp_path)
+    before = _snapshot_tree(tmp_path)
+    with pytest.raises(subject.ContributionTargetError) as excinfo:
+        subject.materialize_contribution_target_collection(
+            config=config,
+            inputs=input_bundle,
+            output_run_dir=tmp_path / "run",
+            expected_plan_sha256="a" * 64,
+        )
+    assert _error_code(excinfo) == "B2_CONTRIBUTION_EXPECTED_PLAN_SHA_MISMATCH"
+    assert not (tmp_path / "run").exists()
+    assert _snapshot_tree(tmp_path) == before
+
+
+def test_controlled_official_materialization_produces_a_verified_collection(
+    tmp_path: Path, input_bundle: Any
+) -> None:
+    config = _official_config(tmp_path)
+    expected = subject.run_contribution_target_collection(
+        config=config, inputs=input_bundle
+    )
+    result = _materialize(
+        tmp_path,
+        config,
+        input_bundle,
+        expected_plan_sha256=expected.plan["contribution_plan_scientific_sha256"],
+    )
+    run_dir = tmp_path / "run"
+    assert result.run_dir == run_dir
+    assert result.teacher_forward_count == 0
+    assert sorted(path.name for path in (run_dir / "records").glob("*.pt")) == sorted(
+        f"{row['stable_sample_id']}.pt" for row in expected.records
+    )
+    assert (run_dir / subject.CALIBRATION_RELATIVE_PATH).is_file()
+    assert (run_dir / subject.NORMALIZATION_RELATIVE_PATH).is_file()
+    assert (run_dir / "final_manifest.json").is_file()
+    assert (run_dir / "final_manifest.json.sha256").is_file()
+    assert result.manifest["status"] == "passed"
+    assert result.manifest["contribution_plan_scientific_sha256"] == (
+        expected.plan["contribution_plan_scientific_sha256"]
+    )
+    assert result.manifest["artifact_kind"] == "test_fixture"
+    verified = subject.verify_contribution_target_collection(config=config, run_dir=run_dir)
+    assert len(verified.records_by_id) == 32
+    assert verified.teacher_forward_count == 0
+    assert not list(run_dir.rglob("*.tmp"))
+
+
+# --- persistence ------------------------------------------------------------
+
+
+def test_record_payload_is_dual_hash_and_excludes_the_file_hash(
+    tmp_path: Path, tracked_config: Any, collection: Any
+) -> None:
+    record = dict(collection.records[0])
+    destination = tmp_path / subject.contribution_record_relative_path(
+        record["stable_sample_id"]
+    )
+    entry = subject.write_contribution_target_record_atomic(
+        destination,
+        record,
+        candidate_layers=tracked_config.candidate_layers,
+        prediction_depths=tracked_config.prediction_depths,
+    )
+    assert entry.verification_status == "verified"
+    payload = torch.load(destination, map_location="cpu", weights_only=True)
+    assert set(payload) == {
+        "scientific_record",
+        "contribution_target_record_scientific_sha256",
+    }
+    assert "contribution_target_record_file_sha256" not in payload["scientific_record"]
+    assert payload["contribution_target_record_scientific_sha256"] == (
+        record["contribution_target_record_scientific_sha256"]
+    )
+    assert entry.contribution_target_record_file_sha256 == hashlib.sha256(
+        destination.read_bytes()
+    ).hexdigest()
+    assert not list(tmp_path.rglob("*.tmp"))
+
+
+def test_record_write_refuses_to_overwrite_an_existing_artifact(
+    tmp_path: Path, tracked_config: Any, collection: Any
+) -> None:
+    record = dict(collection.records[0])
+    destination = tmp_path / subject.contribution_record_relative_path(
+        record["stable_sample_id"]
+    )
+    subject.write_contribution_target_record_atomic(
+        destination,
+        record,
+        candidate_layers=tracked_config.candidate_layers,
+        prediction_depths=tracked_config.prediction_depths,
+    )
+    with pytest.raises(subject.ContributionTargetError) as excinfo:
+        subject.write_contribution_target_record_atomic(
+            destination,
+            record,
+            candidate_layers=tracked_config.candidate_layers,
+            prediction_depths=tracked_config.prediction_depths,
+        )
+    assert _error_code(excinfo) == "B2_CONTRIBUTION_OVERWRITE_FORBIDDEN"
+
+
+def test_record_write_rejects_a_scientific_hash_that_does_not_match_content(
+    tmp_path: Path, tracked_config: Any, collection: Any
+) -> None:
+    record = copy.deepcopy(dict(collection.records[0]))
+    record["category"] = "tampered_category"
+    destination = tmp_path / subject.contribution_record_relative_path(
+        record["stable_sample_id"]
+    )
+    with pytest.raises(subject.ContributionTargetError) as excinfo:
+        subject.write_contribution_target_record_atomic(
+            destination,
+            record,
+            candidate_layers=tracked_config.candidate_layers,
+            prediction_depths=tracked_config.prediction_depths,
+        )
+    assert _error_code(excinfo) == "B2_TARGET_RECORD_HASH_MISMATCH"
+    assert not destination.exists()
+    assert not list(tmp_path.rglob("*.tmp"))
+
+
+def test_output_collision_and_resume_fail_closed(
+    tmp_path: Path, input_bundle: Any
+) -> None:
+    config = _official_config(tmp_path)
+    _materialize(tmp_path, config, input_bundle)
+    with pytest.raises(subject.ContributionTargetError) as excinfo:
+        _materialize(tmp_path, config, input_bundle)
+    assert _error_code(excinfo) == "B2_CONTRIBUTION_OUTPUT_DIR_EXISTS"
+
+    partial = tmp_path / "partial"
+    (partial / "records").mkdir(parents=True)
+    with pytest.raises(subject.ContributionTargetError) as excinfo:
+        subject.materialize_contribution_target_collection(
+            config=config,
+            inputs=input_bundle,
+            output_run_dir=partial,
+            expected_plan_sha256=subject.run_contribution_target_collection(
+                config=config, inputs=input_bundle
+            ).plan["contribution_plan_scientific_sha256"],
+        )
+    assert _error_code(excinfo) == "B2_CONTRIBUTION_OUTPUT_DIR_EXISTS"
+    assert config.resume_enabled is False
+
+
+def test_digest_only_record_payload_is_rejected_on_verification(
+    tmp_path: Path, input_bundle: Any
+) -> None:
+    config = _official_config(tmp_path)
+    result = _materialize(tmp_path, config, input_bundle)
+    run_dir = result.run_dir
+    stable_id = str(result.manifest["records"][0]["stable_sample_id"])
+    victim = run_dir / subject.contribution_record_relative_path(stable_id)
+    payload = torch.load(victim, map_location="cpu", weights_only=True)
+    stripped = dict(payload["scientific_record"])
+    stripped.pop("depth_targets")
+    victim.unlink()
+    torch.save(
+        {
+            "scientific_record": stripped,
+            "contribution_target_record_scientific_sha256": payload[
+                "contribution_target_record_scientific_sha256"
+            ],
+        },
+        victim,
+    )
+    with pytest.raises(subject.ContributionTargetError) as excinfo:
+        subject.verify_contribution_target_collection(config=config, run_dir=run_dir)
+    assert _error_code(excinfo) in {
+        "B2_CONTRIBUTION_DIGEST_ONLY_RECORD",
+        "B2_CONTRIBUTION_RECORD_FILE_HASH_MISMATCH",
+    }
+
+
+def test_record_file_hash_mismatch_is_detected(tmp_path: Path, input_bundle: Any) -> None:
+    config = _official_config(tmp_path)
+    result = _materialize(tmp_path, config, input_bundle)
+    run_dir = result.run_dir
+    stable_id = str(result.manifest["records"][0]["stable_sample_id"])
+    victim = run_dir / subject.contribution_record_relative_path(stable_id)
+    victim.write_bytes(victim.read_bytes() + b"\x00")
+    with pytest.raises(subject.ContributionTargetError) as excinfo:
+        subject.verify_contribution_target_collection(config=config, run_dir=run_dir)
+    assert _error_code(excinfo) == "B2_CONTRIBUTION_RECORD_FILE_HASH_MISMATCH"
+
+
+def test_record_scientific_hash_mismatch_is_detected(
+    tmp_path: Path, input_bundle: Any
+) -> None:
+    config = _official_config(tmp_path)
+    result = _materialize(tmp_path, config, input_bundle)
+    run_dir = result.run_dir
+    stable_id = str(result.manifest["records"][0]["stable_sample_id"])
+    entry = subject.PersistedTargetRecordEntry(
+        stable_sample_id=stable_id,
+        relative_record_path=subject.contribution_record_relative_path(stable_id),
+        contribution_target_record_scientific_sha256="b" * 64,
+        contribution_target_record_file_sha256=hashlib.sha256(
+            (run_dir / subject.contribution_record_relative_path(stable_id)).read_bytes()
+        ).hexdigest(),
+    )
+    with pytest.raises(subject.ContributionTargetError) as excinfo:
+        subject.verify_persisted_contribution_target_record(
+            run_dir=run_dir,
+            entry=entry,
+            candidate_layers=config.candidate_layers,
+            prediction_depths=config.prediction_depths,
+        )
+    assert _error_code(excinfo) == "B2_TARGET_RECORD_HASH_MISMATCH"
+
+
+def test_missing_shapley_normalization_statistics_fail_closed(
+    tmp_path: Path, input_bundle: Any
+) -> None:
+    config = _official_config(tmp_path)
+    result = _materialize(tmp_path, config, input_bundle)
+    (result.run_dir / subject.NORMALIZATION_RELATIVE_PATH).unlink()
+    with pytest.raises(subject.ContributionTargetError) as excinfo:
+        subject.verify_contribution_target_collection(config=config, run_dir=result.run_dir)
+    assert _error_code(excinfo) == "B2_CONTRIBUTION_MISSING_ARTIFACT"
+
+
+def test_tampered_shapley_normalization_statistics_fail_closed(
+    tmp_path: Path, input_bundle: Any
+) -> None:
+    config = _official_config(tmp_path)
+    result = _materialize(tmp_path, config, input_bundle)
+    victim = result.run_dir / subject.NORMALIZATION_RELATIVE_PATH
+    victim.write_bytes(victim.read_bytes() + b"\x00")
+    with pytest.raises(subject.ContributionTargetError) as excinfo:
+        subject.verify_contribution_target_collection(config=config, run_dir=result.run_dir)
+    assert _error_code(excinfo) == "B2_CONTRIBUTION_NORMALIZATION_FILE_HASH_MISMATCH"
+
+
+def test_tampered_gt_map_calibration_statistics_fail_closed(
+    tmp_path: Path, input_bundle: Any
+) -> None:
+    config = _official_config(tmp_path)
+    result = _materialize(tmp_path, config, input_bundle)
+    victim = result.run_dir / subject.CALIBRATION_RELATIVE_PATH
+    victim.write_bytes(victim.read_bytes() + b"\x00")
+    with pytest.raises(subject.ContributionTargetError) as excinfo:
+        subject.verify_contribution_target_collection(config=config, run_dir=result.run_dir)
+    assert _error_code(excinfo) == "B2_CONTRIBUTION_CALIBRATION_FILE_HASH_MISMATCH"
+
+
+def test_missing_and_mismatched_final_manifest_receipt_fail_closed(
+    tmp_path: Path, input_bundle: Any
+) -> None:
+    config = _official_config(tmp_path)
+    result = _materialize(tmp_path, config, input_bundle)
+    receipt = result.run_dir / "final_manifest.json.sha256"
+    receipt.write_text("c" * 64 + "\n", encoding="utf-8")
+    with pytest.raises(subject.ContributionTargetError) as excinfo:
+        subject.verify_final_manifest_receipt(result.run_dir)
+    assert _error_code(excinfo) == "B2_CONTRIBUTION_MANIFEST_RECEIPT_MISMATCH"
+    receipt.unlink()
+    with pytest.raises(subject.ContributionTargetError) as excinfo:
+        subject.verify_final_manifest_receipt(result.run_dir)
+    assert _error_code(excinfo) == "B2_CONTRIBUTION_MISSING_ARTIFACT"
+
+
+def test_orphan_extra_and_temporary_artifacts_fail_the_integrity_audit(
+    tmp_path: Path, input_bundle: Any
+) -> None:
+    config = _official_config(tmp_path)
+    result = _materialize(tmp_path, config, input_bundle)
+    run_dir = result.run_dir
+    planned = [str(row["stable_sample_id"]) for row in result.manifest["records"]]
+    subject.audit_contribution_target_integrity(
+        run_dir=run_dir, manifest=result.manifest, planned_ids=planned
+    )
+
+    orphan = run_dir / "records" / f"{'f' * 64}.pt"
+    orphan.write_bytes(b"orphan")
+    with pytest.raises(subject.ContributionTargetError) as excinfo:
+        subject.audit_contribution_target_integrity(
+            run_dir=run_dir, manifest=result.manifest, planned_ids=planned
+        )
+    assert _error_code(excinfo) == "B2_CONTRIBUTION_ORPHAN_ARTIFACT"
+    orphan.unlink()
+
+    temporary = run_dir / "records" / ".leftover.pt.tmp"
+    temporary.write_bytes(b"temp")
+    with pytest.raises(subject.ContributionTargetError) as excinfo:
+        subject.audit_contribution_target_integrity(
+            run_dir=run_dir, manifest=result.manifest, planned_ids=planned
+        )
+    assert _error_code(excinfo) == "B2_CONTRIBUTION_TEMP_ARTIFACT_PRESENT"
+    temporary.unlink()
+
+    missing = run_dir / subject.contribution_record_relative_path(planned[0])
+    missing.unlink()
+    with pytest.raises(subject.ContributionTargetError) as excinfo:
+        subject.audit_contribution_target_integrity(
+            run_dir=run_dir, manifest=result.manifest, planned_ids=planned
+        )
+    assert _error_code(excinfo) == "B2_CONTRIBUTION_PARTIAL_CLAIMING_PASSED"
+
+
+@pytest.mark.parametrize(
+    "relative",
+    ["../escape.pt", "records/../../escape.pt", "/absolute/escape.pt", "records/./"],
+)
+def test_run_relative_paths_reject_traversal(
+    tmp_path: Path, input_bundle: Any, relative: str
+) -> None:
+    config = _official_config(tmp_path)
+    result = _materialize(tmp_path, config, input_bundle)
+    stable_id = str(result.manifest["records"][0]["stable_sample_id"])
+    entry = subject.PersistedTargetRecordEntry(
+        stable_sample_id=stable_id,
+        relative_record_path=relative,
+        contribution_target_record_scientific_sha256="d" * 64,
+        contribution_target_record_file_sha256="e" * 64,
+    )
+    with pytest.raises(subject.ContributionTargetError) as excinfo:
+        subject.verify_persisted_contribution_target_record(
+            run_dir=result.run_dir,
+            entry=entry,
+            candidate_layers=config.candidate_layers,
+            prediction_depths=config.prediction_depths,
+        )
+    assert _error_code(excinfo) == "B2_CONTRIBUTION_RUN_RELATIVE_PATH_INVALID"
+
+
+def test_symlink_escape_from_the_run_directory_is_rejected(
+    tmp_path: Path, input_bundle: Any
+) -> None:
+    config = _official_config(tmp_path)
+    result = _materialize(tmp_path, config, input_bundle)
+    run_dir = result.run_dir
+    outside = tmp_path / "outside.pt"
+    stable_id = str(result.manifest["records"][0]["stable_sample_id"])
+    victim = run_dir / subject.contribution_record_relative_path(stable_id)
+    outside.write_bytes(victim.read_bytes())
+    victim.unlink()
+    victim.symlink_to(outside)
+    with pytest.raises(subject.ContributionTargetError) as excinfo:
+        subject.verify_contribution_target_collection(config=config, run_dir=run_dir)
+    assert _error_code(excinfo) == "B2_CONTRIBUTION_RUN_ROOT_ESCAPE"
+
+
+def test_passed_manifest_requires_verified_record_entries(
+    tmp_path: Path, tracked_config: Any, collection: Any
+) -> None:
+    with pytest.raises(subject.ContributionTargetError) as excinfo:
+        subject.build_contribution_targets_manifest(
+            config=tracked_config,
+            collection=collection,
+            record_entries=(),
+            calibration_entry=None,
+            normalization_entry=None,
+        )
+    assert _error_code(excinfo) == (
+        "B2_CONTRIBUTION_PASSED_MANIFEST_REQUIRES_VERIFIED_RECORDS"
+    )

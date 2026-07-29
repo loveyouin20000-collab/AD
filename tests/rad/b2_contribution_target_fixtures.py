@@ -23,14 +23,21 @@ from __future__ import annotations
 
 import copy
 import hashlib
+import json
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
+from pathlib import Path
 from typing import Any
 
 import torch
 
 import rad.phase_b.b2_contribution_targets as targets
 from rad.models import dlcm
+
+REPO_ROOT = Path(__file__).resolve().parents[2]
+TRACKED_CONFIG_PATH = (
+    REPO_ROOT / "configs" / "phase_b" / "b2_contribution_targets_gate_c.json"
+)
 
 FIXTURE_ARTIFACT_KIND = "test_fixture"
 FIXTURE_CANDIDATE_LAYERS: tuple[int, ...] = (6, 12, 18, 24)
@@ -439,4 +446,228 @@ def build_fixture_normalization(
         prediction_depths=fixture.prediction_depths,
         expected_training_count=int(fixture.split_counts["training"]),
         artifact_kind=fixture.artifact_kind,
+    )
+
+
+def tracked_config_payload() -> dict[str, Any]:
+    """Deep-copied tracked Gate-C configuration object."""
+
+    return json.loads(TRACKED_CONFIG_PATH.read_text(encoding="utf-8"))
+
+
+def write_config(
+    tmp_path: Path,
+    payload: Mapping[str, Any],
+    *,
+    name: str = "config.json",
+) -> Path:
+    """Write one JSON configuration under ``tmp_path`` and return its path."""
+
+    path = Path(tmp_path) / name
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(
+        json.dumps(dict(payload), indent=2, sort_keys=True) + "\n",
+        encoding="utf-8",
+    )
+    return path
+
+
+def write_controlled_official_config(tmp_path: Path, **overrides: Any) -> Path:
+    """Write a non-tracked config that may enable official materialization in tests."""
+
+    return write_config(
+        tmp_path,
+        controlled_official_config_payload(**overrides),
+        name="controlled_official.json",
+    )
+
+
+def controlled_official_config_payload(**overrides: Any) -> dict[str, Any]:
+    """Non-tracked Gate-C payload that may enable official materialization."""
+
+    payload = tracked_config_payload()
+    payload["configuration_id"] = "b2_contribution_targets_controlled_official"
+    payload["official_materialization_enabled"] = True
+    payload["expected_input_artifact_kind"] = FIXTURE_ARTIFACT_KIND
+    payload.update(overrides)
+    return payload
+
+
+def fixture_input_bundle(
+    fixture: ContributionTargetFixture,
+    *,
+    samples: Sequence[FixtureSample] | None = None,
+) -> targets.ContributionInputBundle:
+    """Convert an in-memory fixture into the shared ``ContributionInputBundle``."""
+
+    selected = tuple(fixture.samples if samples is None else samples)
+    return targets.ContributionInputBundle(
+        artifact_kind=fixture.artifact_kind,
+        candidate_layers=fixture.candidate_layers,
+        prediction_depths=fixture.prediction_depths,
+        samples=tuple(
+            targets.ContributionInputSample(
+                stable_sample_id=sample.stable_sample_id,
+                split_membership=sample.membership,
+                category=sample.category,
+                label=sample.label,
+                anomaly_type=sample.anomaly_type,
+                mask_identity=sample.mask_identity,
+                maps_by_depth=sample.maps_by_depth,
+                mask=sample.mask,
+                full_depth_map=sample.full_depth_map,
+                teacher_record=sample.teacher_record,
+                teacher_record_scientific_sha256=sample.teacher_record_scientific_sha256,
+                descriptor_record=sample.descriptor_record,
+            )
+            for sample in selected
+        ),
+        teacher_cache_scientific_sha256=fixture.teacher_cache_scientific_sha256,
+        teacher_cache_sample_coverage_sha256=fixture.teacher_cache_sample_coverage_sha256,
+        descriptor_collection_scientific_sha256=(
+            fixture.descriptor_collection_scientific_sha256
+        ),
+        split_scientific_sha256=fixture.split_scientific_sha256,
+        checkpoint_sha256=fixture.checkpoint_sha256,
+        execution_profile_sha256=fixture.execution_profile_sha256,
+    )
+
+
+def _sha256_file(path: Path) -> str:
+    digest = hashlib.sha256()
+    with path.open("rb") as handle:
+        while True:
+            chunk = handle.read(1024 * 1024)
+            if not chunk:
+                break
+            digest.update(chunk)
+    return digest.hexdigest()
+
+
+@dataclass(frozen=True)
+class HermeticContributionLayout:
+    """Disk layout consumed by CLI / from-roots dry-run helpers."""
+
+    root: Path
+    teacher_cache_root: Path
+    teacher_cache_manifest: Path
+    descriptor_root: Path
+    descriptor_manifest: Path
+    mvtec_root: Path
+
+
+def prepare_hermetic_contribution_inputs(
+    tmp_path: Path,
+    *,
+    fixture: ContributionTargetFixture | None = None,
+) -> HermeticContributionLayout:
+    """Materialize a temporary teacher-cache + descriptor layout for CLI tests.
+
+    Every artifact is marked ``artifact_kind == "test_fixture"``. Official
+    production mode must refuse this layout.
+    """
+
+    fixture = fixture or build_contribution_target_fixture()
+    root = Path(tmp_path) / "hermetic_contribution_inputs"
+    if root.exists():
+        raise AssertionError(f"hermetic contribution input root already exists: {root}")
+    teacher_root = root / "teacher_cache"
+    descriptor_root = root / "descriptor_collection"
+    mvtec_root = root / "mvtec_source_stub"
+    teacher_samples_dir = teacher_root / "samples"
+    descriptor_dir = descriptor_root / "descriptors"
+    teacher_samples_dir.mkdir(parents=True, exist_ok=False)
+    descriptor_dir.mkdir(parents=True, exist_ok=False)
+    mvtec_root.mkdir(parents=True, exist_ok=False)
+    (mvtec_root / "README").write_text(
+        "hermetic mvtec stub — never a real target-domain path\n",
+        encoding="utf-8",
+    )
+
+    teacher_rows: list[dict[str, Any]] = []
+    descriptor_rows: list[dict[str, Any]] = []
+    for sample in fixture.samples:
+        teacher_relative = f"samples/{sample.stable_sample_id}.pt"
+        teacher_path = teacher_root / teacher_relative
+        torch.save(
+            {
+                "scientific_record": dict(sample.teacher_record),
+                "maps_by_depth": {
+                    int(depth): {
+                        int(layer): tensor.detach().cpu().clone()
+                        for layer, tensor in layer_maps.items()
+                    }
+                    for depth, layer_maps in sample.maps_by_depth.items()
+                },
+                "mask": sample.mask.detach().cpu().clone(),
+                "full_depth_map": sample.full_depth_map.detach().cpu().clone(),
+            },
+            teacher_path,
+        )
+        teacher_rows.append(
+            {
+                "stable_sample_id": sample.stable_sample_id,
+                "membership": sample.membership,
+                "relative_path": teacher_relative,
+                "record_scientific_sha256": sample.teacher_record_scientific_sha256,
+                "record_file_sha256": _sha256_file(teacher_path),
+            }
+        )
+
+        descriptor_relative = f"descriptors/{sample.stable_sample_id}.pt"
+        descriptor_path = descriptor_root / descriptor_relative
+        torch.save(
+            {"scientific_record": dict(sample.descriptor_record)},
+            descriptor_path,
+        )
+        descriptor_rows.append(
+            {
+                "stable_sample_id": sample.stable_sample_id,
+                "relative_record_path": descriptor_relative,
+                "descriptor_record_scientific_sha256": sample.descriptor_record[
+                    "descriptor_record_scientific_sha256"
+                ],
+                "descriptor_record_file_sha256": _sha256_file(descriptor_path),
+            }
+        )
+
+    teacher_manifest = {
+        "status": "passed",
+        "artifact_kind": fixture.artifact_kind,
+        "cache_scientific_sha256": fixture.teacher_cache_scientific_sha256,
+        "sample_coverage_sha256": fixture.teacher_cache_sample_coverage_sha256,
+        "split_scientific_sha256": fixture.split_scientific_sha256,
+        "checkpoint_sha256": fixture.checkpoint_sha256,
+        "execution_profile_sha256": fixture.execution_profile_sha256,
+        "candidate_layers": list(fixture.candidate_layers),
+        "prediction_depths": list(fixture.prediction_depths),
+        "samples": teacher_rows,
+    }
+    descriptor_manifest = {
+        "status": "passed",
+        "artifact_kind": fixture.artifact_kind,
+        "descriptor_collection_scientific_sha256": (
+            fixture.descriptor_collection_scientific_sha256
+        ),
+        "candidate_layers": list(fixture.candidate_layers),
+        "prediction_depths": list(fixture.prediction_depths),
+        "samples": descriptor_rows,
+    }
+    teacher_manifest_path = teacher_root / "final_manifest.json"
+    descriptor_manifest_path = descriptor_root / "final_manifest.json"
+    teacher_manifest_path.write_text(
+        json.dumps(teacher_manifest, indent=2, sort_keys=True) + "\n",
+        encoding="utf-8",
+    )
+    descriptor_manifest_path.write_text(
+        json.dumps(descriptor_manifest, indent=2, sort_keys=True) + "\n",
+        encoding="utf-8",
+    )
+    return HermeticContributionLayout(
+        root=root,
+        teacher_cache_root=teacher_root,
+        teacher_cache_manifest=teacher_manifest_path,
+        descriptor_root=descriptor_root,
+        descriptor_manifest=descriptor_manifest_path,
+        mvtec_root=mvtec_root,
     )
