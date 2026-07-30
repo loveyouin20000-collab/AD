@@ -764,132 +764,157 @@ def test_qualification_writer_rejects_a_nonzero_teacher_forward_count(
         assert "teacher forward" in str(excinfo.value)
 
 
-NEGATIVE_CONTROL_TEST_MAP: dict[str, tuple[Any, str | None]] = {
-    "record_file_byte_drift": (domain_tests.test_record_file_hash_mismatch_is_detected, None),
+# Each negative-control ID binds to the concrete domain test case (plus the
+# parametrize case ids, when the behavior lives in specific parameters) that
+# actually exercises it.
+NEGATIVE_CONTROL_TEST_MAP: dict[str, tuple[Any, tuple[str, ...]]] = {
+    "record_file_byte_drift": (domain_tests.test_record_file_hash_mismatch_is_detected, ()),
     "record_scientific_hash_drift": (
         domain_tests.test_record_scientific_hash_mismatch_is_detected,
-        None,
+        (),
     ),
     "coalition_utility_component_drift": (
         domain_tests.test_comparison_categorizes_every_scientific_mismatch,
-        "coalition_utility_component_drift",
+        ("coalition_utility_component_drift",),
     ),
     "raw_utility_drift": (
         domain_tests.test_comparison_categorizes_every_scientific_mismatch,
-        "raw_utility_drift",
+        ("raw_utility_drift", "empty_coalition_raw_utility_drift"),
     ),
     "centered_value_drift": (
         domain_tests.test_comparison_categorizes_every_scientific_mismatch,
-        "centered_value_drift",
+        ("centered_value_drift", "grand_coalition_centered_value_drift"),
     ),
     "signed_shapley_drift": (
         domain_tests.test_comparison_categorizes_every_scientific_mismatch,
-        "signed_shapley_drift",
+        ("signed_shapley_drift", "efficiency_residual_drift"),
     ),
     "allocation_drift": (
         domain_tests.test_comparison_categorizes_every_scientific_mismatch,
-        "allocation_drift",
+        ("allocation_drift",),
     ),
     "efficiency_residual_above_tolerance": (
         domain_tests.test_build_target_record_fails_closed_on_efficiency_violation,
-        None,
+        (),
     ),
     "changed_split_membership": (
         domain_tests.test_comparison_categorizes_every_scientific_mismatch,
-        "changed_split_membership",
+        ("changed_split_membership",),
     ),
     "training_record_moved_to_calibration": (
         domain_tests.test_training_access_mode_fails_closed_on_calibration_or_evaluation_records,
-        None,
+        (),
     ),
     "calibration_record_in_gt_fitting": (
         domain_tests.test_gt_map_calibration_rejects_non_training_samples_from_the_fixture,
-        None,
+        (),
     ),
     "evaluation_record_in_normalization": (
         domain_tests.test_shapley_normalization_uses_only_the_sixteen_training_records,
-        None,
+        (),
     ),
     "gt_calibration_statistic_drift": (
         domain_tests.test_tampered_gt_map_calibration_statistics_fail_closed,
-        None,
+        (),
     ),
     "shapley_normalization_statistic_drift": (
         domain_tests.test_tampered_shapley_normalization_statistics_fail_closed,
-        None,
+        (),
     ),
     "teacher_cache_identity_drift": (
-        domain_tests.test_bind_upstream_identities_rejects_upstream_hash_drift,
-        None,
+        domain_tests.test_comparison_categorizes_every_scientific_mismatch,
+        ("teacher_cache_identity_drift",),
     ),
     "descriptor_collection_identity_drift": (
-        domain_tests.test_bind_upstream_identities_rejects_teacher_descriptor_mismatch,
-        None,
+        domain_tests.test_comparison_categorizes_every_scientific_mismatch,
+        ("descriptor_collection_identity_drift",),
     ),
     "descriptor_record_identity_drift": (
         domain_tests.test_comparison_categorizes_every_scientific_mismatch,
-        "descriptor_record_identity_drift",
+        ("descriptor_record_identity_drift",),
     ),
     "wrong_split_checkpoint_profile": (
-        domain_tests.test_bind_upstream_identities_rejects_sample_and_split_mismatch,
-        None,
+        domain_tests.test_bind_upstream_identities_rejects_upstream_hash_drift,
+        ("split_scientific_sha256", "checkpoint_sha256", "execution_profile_sha256"),
     ),
     "target_domain_or_visa_source": (
         domain_tests.test_module_avoids_teacher_loading_and_target_domain,
-        None,
+        (),
     ),
     "missing_record": (
         domain_tests.test_orphan_extra_and_temporary_artifacts_fail_the_integrity_audit,
-        None,
+        (),
     ),
     "extra_record": (
         domain_tests.test_orphan_extra_and_temporary_artifacts_fail_the_integrity_audit,
-        None,
+        (),
     ),
     "orphan_pt": (
         domain_tests.test_orphan_extra_and_temporary_artifacts_fail_the_integrity_audit,
-        None,
+        (),
     ),
-    "path_traversal": (domain_tests.test_run_relative_paths_reject_traversal, "../escape.pt"),
+    "path_traversal": (
+        domain_tests.test_run_relative_paths_reject_traversal,
+        ("../escape.pt", "records/../../escape.pt", "/absolute/escape.pt", "records/./"),
+    ),
     "symlink_escape": (
         domain_tests.test_symlink_escape_from_the_run_directory_is_rejected,
-        None,
+        (),
     ),
     "missing_receipt": (
         domain_tests.test_missing_and_mismatched_final_manifest_receipt_fail_closed,
-        None,
+        (),
     ),
     "receipt_mismatch": (
         domain_tests.test_missing_and_mismatched_final_manifest_receipt_fail_closed,
-        None,
+        (),
     ),
     "output_directory_collision": (
         domain_tests.test_output_collision_and_resume_fail_closed,
-        None,
+        (),
     ),
-    "completed_run_reuse": (domain_tests.test_output_collision_and_resume_fail_closed, None),
-    "resume_attempt": (domain_tests.test_output_collision_and_resume_fail_closed, None),
+    "completed_run_reuse": (domain_tests.test_output_collision_and_resume_fail_closed, ()),
+    "resume_attempt": (domain_tests.test_output_collision_and_resume_fail_closed, ()),
     "wrong_expected_plan_sha": (
         domain_tests.test_expected_plan_hash_mismatch_fails_before_any_write,
-        None,
+        (),
     ),
     "dirty_official_worktree": (
         domain_tests.test_official_api_rechecks_repository_identity_before_any_write,
-        None,
+        (),
     ),
     "non_descendant_official_head": (
         domain_tests.test_official_api_rejects_a_non_descendant_head,
-        "sibling",
+        ("parent", "sibling", "unrelated"),
     ),
     "moved_or_missing_contract_tag": (
         domain_tests.test_repository_identity_verifier_rejects_missing_or_moved_tag,
-        None,
+        (),
     ),
     "nonzero_teacher_forward_count": (
         domain_tests.test_verifier_rejects_a_nonzero_manifest_teacher_forward_count,
-        None,
+        (),
     ),
 }
+
+# Identity-drift negative controls must be proven by a case that really drifts
+# the named scientific identity, never by a sample/link mismatch test. An ID
+# standing for several identities must evidence every one of them.
+REQUIRED_IDENTITY_EVIDENCE: dict[str, tuple[str, ...]] = {
+    "teacher_cache_identity_drift": ("teacher_cache_scientific_sha256",),
+    "descriptor_collection_identity_drift": ("descriptor_collection_scientific_sha256",),
+    "descriptor_record_identity_drift": ("descriptor_record_scientific_sha256",),
+    "wrong_split_checkpoint_profile": (
+        "split_scientific_sha256",
+        "checkpoint_sha256",
+        "execution_profile_sha256",
+    ),
+}
+
+FORBIDDEN_IDENTITY_EVIDENCE_TESTS = (
+    domain_tests.test_bind_upstream_identities_rejects_teacher_descriptor_mismatch,
+    domain_tests.test_bind_upstream_identities_rejects_sample_and_split_mismatch,
+)
 
 
 def _parametrized_case_ids(test_case: Any) -> tuple[str, ...]:
@@ -900,16 +925,101 @@ def _parametrized_case_ids(test_case: Any) -> tuple[str, ...]:
     return tuple(ids)
 
 
-def test_every_negative_control_id_maps_to_a_real_asserting_test_case() -> None:
+def _collected_case_ids(module_path: Path) -> dict[str, set[str]]:
+    environment = dict(os.environ)
+    environment["CUDA_VISIBLE_DEVICES"] = ""
+    environment["PYTHONPATH"] = str(REPO_ROOT)
+    completed = subprocess.run(
+        [
+            sys.executable,
+            "-m",
+            "pytest",
+            str(module_path),
+            "--collect-only",
+            "-q",
+            "-p",
+            "no:cacheprovider",
+        ],
+        check=False,
+        capture_output=True,
+        text=True,
+        cwd=str(REPO_ROOT),
+        env=environment,
+    )
+    assert completed.returncode == 0, completed.stdout + completed.stderr
+    collected: dict[str, set[str]] = {}
+    for line in completed.stdout.splitlines():
+        _prefix, separator, node = line.partition("::")
+        if not separator:
+            continue
+        name, bracket, parameters = node.strip().partition("[")
+        collected.setdefault(name, set())
+        if bracket:
+            collected[name].add(parameters.removesuffix("]"))
+    assert collected, completed.stdout
+    return collected
+
+
+@pytest.fixture(scope="module")
+def collected_domain_case_ids() -> dict[str, set[str]]:
+    return _collected_case_ids(REPO_ROOT / "tests" / "rad" / "test_b2_contribution_targets.py")
+
+
+def _evidenced_identity_fields(parameter: str) -> set[str]:
+    fields: set[str] = set()
+    if parameter.endswith("_sha256"):
+        fields.add(parameter)
+    categorized = domain_tests.COMPARISON_MISMATCH_CASES.get(parameter)
+    if categorized is not None:
+        fields.add(categorized[1])
+    return fields
+
+
+def test_every_negative_control_id_maps_to_a_real_asserting_test_case(
+    collected_domain_case_ids: dict[str, set[str]],
+) -> None:
     assert qualification_mod.NEGATIVE_CONTROL_CASE_IDS == NEGATIVE_CONTROL_CASE_IDS
     assert len(NEGATIVE_CONTROL_CASE_IDS) == 34
     assert len(set(NEGATIVE_CONTROL_CASE_IDS)) == 34
     assert set(NEGATIVE_CONTROL_TEST_MAP) == set(NEGATIVE_CONTROL_CASE_IDS)
-    for case_id, (test_case, parameter) in NEGATIVE_CONTROL_TEST_MAP.items():
+    for case_id, (test_case, parameters) in NEGATIVE_CONTROL_TEST_MAP.items():
         assert callable(test_case), case_id
         assert test_case.__name__.startswith("test_"), case_id
         assert test_case.__module__ == domain_tests.__name__, case_id
         source = inspect.getsource(test_case)
         assert "assert " in source or "pytest.raises" in source, case_id
-        if parameter is not None:
-            assert parameter in _parametrized_case_ids(test_case), case_id
+        assert test_case.__name__ in collected_domain_case_ids, case_id
+        assert isinstance(parameters, tuple), case_id
+        for parameter in parameters:
+            assert parameter in collected_domain_case_ids[test_case.__name__], (
+                case_id,
+                parameter,
+            )
+            assert parameter in _parametrized_case_ids(test_case), (case_id, parameter)
+
+
+def test_identity_negative_controls_bind_to_real_identity_drift_cases(
+    collected_domain_case_ids: dict[str, set[str]],
+) -> None:
+    problems: list[str] = []
+    for case_id, required_fields in REQUIRED_IDENTITY_EVIDENCE.items():
+        test_case, parameters = NEGATIVE_CONTROL_TEST_MAP[case_id]
+        if test_case in FORBIDDEN_IDENTITY_EVIDENCE_TESTS:
+            problems.append(
+                f"{case_id} is bound to the sample/link mismatch test "
+                f"{test_case.__name__}"
+            )
+            continue
+        evidenced: set[str] = set()
+        for parameter in parameters:
+            assert parameter in collected_domain_case_ids[test_case.__name__], (
+                case_id,
+                parameter,
+            )
+            evidenced |= _evidenced_identity_fields(parameter)
+        missing = sorted(set(required_fields) - evidenced)
+        if missing:
+            problems.append(
+                f"{case_id} evidences {sorted(evidenced)} and misses {missing}"
+            )
+    assert problems == []
