@@ -42,6 +42,23 @@ OFFICIAL_CONFIG_PATH = (
     REPO_ROOT / "configs" / "phase_b" / "b2_contribution_targets_official_v1.json"
 )
 
+# Hermetic regression pin for the B2-04A contract fixture only. It proves the
+# frozen mathematics, the deterministic input ordering, and the no-write
+# dry-run over synthetic inputs. It is never an accepted-input plan identity and
+# never authorizes official materialization.
+#
+# Supersedes fa3d2435d684a310c81c151c48717afc9455401adce41fbe4d8a96f5c776a84e,
+# which hashed the run-control field ``official_materialization_enabled``. The
+# canonical payload lost exactly the 41 bytes of
+# ``"official_materialization_enabled":false``; all twenty remaining scientific
+# keys and values are byte-identical.
+FIXTURE_CONTRACT_PLAN_SHA256 = (
+    "a072b67b9154b193dccd99e1123c2d5ef09583114e6b2840061cdfcf92ac93d5"
+)
+SUPERSEDED_RUN_CONTROL_FIXTURE_PLAN_SHA256 = (
+    "fa3d2435d684a310c81c151c48717afc9455401adce41fbe4d8a96f5c776a84e"
+)
+
 FIXTURE_ARTIFACT_KIND = "test_fixture"
 FIXTURE_CANDIDATE_LAYERS: tuple[int, ...] = (6, 12, 18, 24)
 FIXTURE_PREDICTION_DEPTHS: tuple[int, ...] = (12, 18, 24)

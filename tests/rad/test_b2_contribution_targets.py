@@ -2667,10 +2667,7 @@ def test_contribution_plan_binds_all_seven_identities(
     )
 
 
-@pytest.mark.parametrize(
-    "mutate",
-    ["record", "calibration", "normalization", "official_flag"],
-)
+@pytest.mark.parametrize("mutate", ["record", "calibration", "normalization"])
 def test_contribution_plan_hash_changes_when_any_bound_identity_changes(
     target_fixture: Any,
     target_records: Any,
@@ -2688,24 +2685,160 @@ def test_contribution_plan_hash_changes_when_any_bound_identity_changes(
     records = copy.deepcopy(list(target_records))
     artifact = copy.deepcopy(calibration_artifact)
     statistics = copy.deepcopy(normalization)
-    official = False
     if mutate == "record":
         records[0]["contribution_target_record_scientific_sha256"] = "3" * 64
     elif mutate == "calibration":
         artifact["gt_map_calibration_scientific_sha256"] = "4" * 64
-    elif mutate == "normalization":
-        statistics["shapley_normalization_scientific_sha256"] = "5" * 64
     else:
-        official = True
+        statistics["shapley_normalization_scientific_sha256"] = "5" * 64
     mutated = subject.build_contribution_plan(
         records=records,
         calibration_artifact=artifact,
         normalization=statistics,
         candidate_layers=target_fixture.candidate_layers,
         prediction_depths=target_fixture.prediction_depths,
-        official_materialization_enabled=official,
     )["contribution_plan_scientific_sha256"]
     assert mutated != baseline
+
+
+# --- scientific plan identity versus operational provenance -----------------
+#
+# Run control, repository gating, and output location describe *how* a plan was
+# executed, never *what* was computed. They may travel with the plan payload as
+# operational attestation, but they can never move the scientific identity.
+
+
+_OPERATIONAL_PLAN_FIELDS: tuple[tuple[str, Any], ...] = (
+    ("official_materialization_enabled", True),
+    ("repository_identity_gate_enabled", True),
+    ("resume_enabled", True),
+    ("expected_plan_sha_required_for_official", False),
+    ("expected_contribution_contract_tag", "b2-contribution-target-contract-v1"),
+    ("expected_contribution_contract_commit", "2" * 40),
+    ("generation_commit", "9" * 40),
+    ("observed_head_commit", "8" * 40),
+    ("worktree_clean", False),
+    ("git_branch", "some-other-branch"),
+    ("worktree_path", "/tmp/some-other-worktree"),
+    ("absolute_output_path", "/tmp/some-other-run"),
+    ("output_dir", "/tmp/some-other-run"),
+    ("output_root", "/tmp/some-other-root"),
+    ("cli_mode", "official"),
+    ("mode", "dry_run"),
+    ("timestamp", "2026-07-30T00:00:00Z"),
+    ("runtime_attestation_sha256", "7" * 64),
+    ("plan_file_sha256", "6" * 64),
+)
+
+_SCIENTIFIC_PLAN_MUTATIONS: tuple[tuple[str, Any], ...] = (
+    ("gt_map_calibration_scientific_sha256", "a" * 64),
+    ("contribution_target_sample_coverage_sha256", "b" * 64),
+    ("contribution_target_collection_scientific_sha256", "c" * 64),
+    ("shapley_normalization_scientific_sha256", "d" * 64),
+    ("training_target_coverage_sha256", "e" * 64),
+    ("calibration_target_coverage_sha256", "f" * 64),
+    ("evaluation_target_coverage_sha256", "0" * 64),
+    ("planned_record_count", 31),
+    ("planned_split_counts", {"training": 15, "calibration": 9, "evaluation": 8}),
+    ("candidate_layers", [6, 12, 18]),
+    ("prediction_depths", [12, 18]),
+    ("teacher_forward_count", 1),
+    ("teacher_cache_scientific_sha256", "1" * 64),
+    ("descriptor_collection_scientific_sha256", "2" * 64),
+    ("split_scientific_sha256", "3" * 64),
+    ("checkpoint_sha256", "4" * 64),
+    ("execution_profile_sha256", "5" * 64),
+)
+
+
+@pytest.fixture(scope="module")
+def baseline_plan(
+    target_fixture: Any,
+    target_records: Any,
+    calibration_artifact: Any,
+    normalization: Any,
+) -> dict[str, Any]:
+    return subject.build_contribution_plan(
+        records=target_records,
+        calibration_artifact=calibration_artifact,
+        normalization=normalization,
+        candidate_layers=target_fixture.candidate_layers,
+        prediction_depths=target_fixture.prediction_depths,
+    )
+
+
+def test_official_materialization_flag_never_moves_the_plan_scientific_identity(
+    target_fixture: Any,
+    target_records: Any,
+    calibration_artifact: Any,
+    normalization: Any,
+) -> None:
+    hashes = {
+        subject.build_contribution_plan(
+            records=target_records,
+            calibration_artifact=calibration_artifact,
+            normalization=normalization,
+            candidate_layers=target_fixture.candidate_layers,
+            prediction_depths=target_fixture.prediction_depths,
+            official_materialization_enabled=enabled,
+        )["contribution_plan_scientific_sha256"]
+        for enabled in (False, True)
+    }
+    assert len(hashes) == 1
+
+
+@pytest.mark.parametrize(("field", "value"), _OPERATIONAL_PLAN_FIELDS)
+def test_operational_plan_fields_never_move_the_plan_scientific_identity(
+    baseline_plan: dict[str, Any], field: str, value: Any
+) -> None:
+    baseline = subject._plan_scientific_sha256(baseline_plan)
+    assert baseline == baseline_plan["contribution_plan_scientific_sha256"]
+    attested = copy.deepcopy(baseline_plan)
+    attested[field] = value
+    assert subject._plan_scientific_sha256(attested) == baseline
+
+
+@pytest.mark.parametrize(("field", "value"), _SCIENTIFIC_PLAN_MUTATIONS)
+def test_scientific_plan_fields_still_move_the_plan_scientific_identity(
+    baseline_plan: dict[str, Any], field: str, value: Any
+) -> None:
+    baseline = subject._plan_scientific_sha256(baseline_plan)
+    mutated = copy.deepcopy(baseline_plan)
+    assert mutated[field] != value
+    mutated[field] = value
+    assert subject._plan_scientific_sha256(mutated) != baseline
+
+
+@pytest.mark.parametrize(
+    "field",
+    [
+        "planned_ordered_stable_sample_ids",
+        "contribution_target_record_scientific_sha256_by_id",
+        "contract_versions",
+    ],
+)
+def test_structured_scientific_plan_fields_still_move_the_identity(
+    baseline_plan: dict[str, Any], field: str
+) -> None:
+    baseline = subject._plan_scientific_sha256(baseline_plan)
+    mutated = copy.deepcopy(baseline_plan)
+    if field == "planned_ordered_stable_sample_ids":
+        mutated[field] = list(reversed(mutated[field]))
+    elif field == "contribution_target_record_scientific_sha256_by_id":
+        first = sorted(mutated[field])[0]
+        mutated[field][first] = "9" * 64
+    else:
+        mutated[field] = {**mutated[field], "utility": "drifted_utility_contract"}
+    assert subject._plan_scientific_sha256(mutated) != baseline
+
+
+def test_plan_whitelist_declares_run_control_as_operational_only() -> None:
+    assert set(subject._PLAN_SCIENTIFIC_KEYS).isdisjoint(subject._NON_SCIENTIFIC_PLAN_KEYS)
+    for field, _value in _OPERATIONAL_PLAN_FIELDS:
+        assert field not in subject._PLAN_SCIENTIFIC_KEYS
+        assert field in subject._NON_SCIENTIFIC_PLAN_KEYS
+    for field, _value in _SCIENTIFIC_PLAN_MUTATIONS:
+        assert field in subject._PLAN_SCIENTIFIC_KEYS
 
 
 def test_contribution_plan_rejects_wrong_split_counts(
@@ -3178,6 +3311,36 @@ def test_dry_run_returns_the_frozen_plan_semantics(
         collection.plan["contribution_plan_scientific_sha256"]
     )
     assert result["official_materialization_enabled"] is False
+
+
+def test_hermetic_fixture_plan_regression(
+    tracked_config: Any, input_bundle: Any
+) -> None:
+    """Pin the hermetic B2-04A contract plan, never an accepted-input identity."""
+
+    result = subject.dry_run_contribution_targets(
+        config=tracked_config, inputs=input_bundle
+    )
+    assert result["artifact_kind"] == subject.TEST_FIXTURE_ARTIFACT_KIND
+    assert result["contribution_plan_scientific_sha256"] == (
+        fixtures.FIXTURE_CONTRACT_PLAN_SHA256
+    )
+    assert result["contribution_plan_scientific_sha256"] != (
+        fixtures.SUPERSEDED_RUN_CONTROL_FIXTURE_PLAN_SHA256
+    )
+
+
+def test_hermetic_fixture_plan_regression_ignores_official_enablement(
+    tracked_config: Any, input_bundle: Any, tmp_path: Path
+) -> None:
+    official = _official_config(tmp_path)
+    assert tracked_config.official_materialization_enabled is False
+    assert official.official_materialization_enabled is True
+    assert subject.dry_run_contribution_targets(config=official, inputs=input_bundle)[
+        "contribution_plan_scientific_sha256"
+    ] == subject.dry_run_contribution_targets(
+        config=tracked_config, inputs=input_bundle
+    )["contribution_plan_scientific_sha256"]
 
 
 def test_dry_run_exposes_all_seven_layered_identities(

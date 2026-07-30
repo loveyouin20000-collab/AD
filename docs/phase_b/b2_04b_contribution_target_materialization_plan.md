@@ -26,8 +26,10 @@ qualification writer.
 - Base tag: `b2-contribution-target-contract-v1`
 - Base commit: `29591668c3228f6cebd7fd923ae1c39c6dad49bc`
 - Python: `/root/miniconda3/envs/rad-visualad/bin/python`
-- Accepted plan:
-  `fa3d2435d684a310c81c151c48717afc9455401adce41fbe4d8a96f5c776a84e`
+- Hermetic fixture regression pin (never an accepted-input identity):
+  `a072b67b9154b193dccd99e1123c2d5ef09583114e6b2840061cdfcf92ac93d5`
+- Accepted-input plan: computed by the real dry-runs and frozen only after
+  Dry-run A and Dry-run B agree
 - Use `CUDA_VISIBLE_DEVICES=""`; teacher forward count remains exactly zero.
 - Preserve `expected_contribution_contract_tag` and
   `expected_contribution_contract_commit`; do not add short aliases.
@@ -78,7 +80,7 @@ Run:
 
 ```bash
 rg -n \
-  'b2-contribution-target-contract-v1|29591668c3228f6cebd7fd923ae1c39c6dad49bc|fa3d2435d684a310c81c151c48717afc9455401adce41fbe4d8a96f5c776a84e|expected_contribution_contract_' \
+  'b2-contribution-target-contract-v1|29591668c3228f6cebd7fd923ae1c39c6dad49bc|fixture_contract_plan_sha256|expected_accepted_input_plan_sha256|expected_contribution_contract_' \
   docs/phase_b/b2_04b_contribution_target_materialization_*.md
 ```
 
@@ -758,13 +760,11 @@ Repeat Step 2 with descriptor B. Do not reuse the A process or in-memory plan.
 
 - [ ] **Step 4: Compare dry-run payloads**
 
-Require both plan hashes equal:
+Require both plan hashes to be equal to each other. Their agreed value becomes
+`expected_accepted_input_plan_sha256`; never expect the hermetic fixture pin
+here.
 
-```text
-fa3d2435d684a310c81c151c48717afc9455401adce41fbe4d8a96f5c776a84e
-```
-
-If either differs, stop before official generation and report the differing
+If they differ, stop before official generation and report the differing
 scientific payload fields.
 
 ---

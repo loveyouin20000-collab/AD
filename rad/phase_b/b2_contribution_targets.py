@@ -1183,6 +1183,9 @@ _NORMALIZATION_SCIENTIFIC_KEYS = (
     "axes",
 )
 
+# Run control, repository gating, and output location are operational
+# attestation: they describe how a plan was executed, never what was computed,
+# so they may travel with the plan payload but can never enter its identity.
 _NON_SCIENTIFIC_PLAN_KEYS = frozenset(
     {
         "contribution_plan_scientific_sha256",
@@ -1192,6 +1195,23 @@ _NON_SCIENTIFIC_PLAN_KEYS = frozenset(
         "worktree_path",
         "runtime_attestation_sha256",
         "plan_file_sha256",
+        "official_materialization_enabled",
+        "repository_identity_gate_enabled",
+        "resume_enabled",
+        "expected_plan_sha_required_for_official",
+        "expected_contribution_contract_tag",
+        "expected_contribution_contract_commit",
+        "generation_commit",
+        "observed_head_commit",
+        "head_is_descendant",
+        "worktree_clean",
+        "output_dir",
+        "output_root",
+        "run_dir",
+        "cli_mode",
+        "mode",
+        "dry_run",
+        "seed",
     }
 )
 _PLAN_SCIENTIFIC_KEYS = (
@@ -1209,7 +1229,6 @@ _PLAN_SCIENTIFIC_KEYS = (
     "prediction_depths",
     "contract_versions",
     "teacher_forward_count",
-    "official_materialization_enabled",
     "contribution_target_record_scientific_sha256_by_id",
     "teacher_cache_scientific_sha256",
     "descriptor_collection_scientific_sha256",

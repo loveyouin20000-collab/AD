@@ -10,8 +10,30 @@ Authoritative base:
 
 - tag: `b2-contribution-target-contract-v1`
 - commit: `29591668c3228f6cebd7fd923ae1c39c6dad49bc`
-- accepted plan SHA-256:
-  `fa3d2435d684a310c81c151c48717afc9455401adce41fbe4d8a96f5c776a84e`
+
+## Two distinct plan identities
+
+`fixture_contract_plan_sha256` and `expected_accepted_input_plan_sha256` are
+different identities and are never interchangeable.
+
+| Identity | Inputs | Proves | Authorizes official materialization |
+|---|---|---|---|
+| `fixture_contract_plan_sha256` | hermetic B2-04A synthetic fixture | frozen mathematics, deterministic input ordering, no-write dry run | never |
+| `expected_accepted_input_plan_sha256` | accepted teacher cache A plus descriptor collection A/B | the real accepted-input plan | yes, and only after two independent real dry-runs agree |
+
+The hermetic regression pin is
+`a072b67b9154b193dccd99e1123c2d5ef09583114e6b2840061cdfcf92ac93d5`. It
+supersedes `fa3d2435d684a310c81c151c48717afc9455401adce41fbe4d8a96f5c776a84e`,
+which additionally hashed the run-control field
+`official_materialization_enabled`; the superseded value was never an
+accepted-input identity.
+
+The scientific plan identity covers upstream scientific hashes, the planned
+sample identities and their record hashes, GT calibration, Shapley
+normalization, coverage counts, the depth lattice, the contract versions, and
+the teacher forward count. Run control, repository gating, the observed HEAD
+and worktree state, the CLI mode, and every output location are operational
+attestation only and never enter the identity.
 
 ## Frozen scientific contract
 
