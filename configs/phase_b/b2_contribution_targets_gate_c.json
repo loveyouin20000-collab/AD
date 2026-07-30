@@ -1,0 +1,66 @@
+{
+  "schema_version": 1,
+  "configuration_id": "b2_contribution_targets_gate_c",
+  "contract_stage": "b2_04a",
+  "official_materialization_enabled": false,
+  "expected_input_artifact_kind": "production",
+  "expected_execution_profile_sha256": "7af8dba39633743da0380fef9710940cded655f68c9efa8f84f5a52aeddb3c8d",
+  "expected_split_scientific_sha256": "91570da1fed6d7859d407196b10403581832ae0ff677a1ea7657ca76b91471f0",
+  "expected_checkpoint_sha256": "97bd461163efb96e36cddb1c3adf677e4c4fc2daabb2521021689f30e799b4f4",
+  "expected_teacher_cache_scientific_sha256": "66d23807e868696a9c4a68ad83399d82df3d33e743a97d97eeb98ac60c0b1b0a",
+  "expected_teacher_cache_sample_coverage_sha256": "6e538b902795c377f9992258e307e58b5c0ba0f99cbbe6c3853a81947ca3d76c",
+  "expected_descriptor_collection_scientific_sha256": "eb967822725e730ee2eb8afa3a5c8e28b4657141aa920d6a688ab370c70c6dd9",
+  "expected_descriptor_sample_coverage_sha256": "27d064db21b5c699503be32e414d579bd1aa7158f1d9b141de26555fc79bc6df",
+  "expected_descriptor_normalization_scientific_sha256": "f77975a94acf87a14b0753aabc9aad6777943ee4e4958b0a2083701cf4528594",
+  "expected_descriptor_normalization_training_coverage_sha256": "e940f46bf696d326f8b982f15b8639f81e4548ec31a9b09634729811337e4c90",
+  "candidate_layers": [6, 12, 18, 24],
+  "prediction_depths": [12, 18, 24],
+  "target_families": ["gt_localization", "teacher_fidelity"],
+  "coalition_fusion": "equal_average",
+  "coalition_encoding": "depth_local_bitmask_ascending",
+  "gt_calibration": {
+    "quantile_low": 0.01,
+    "quantile_high": 0.995,
+    "quantile_algorithm": "nearest_rank_ceiling",
+    "per_depth": true,
+    "training_only": true
+  },
+  "abnormal_gt_weights": {
+    "pixel_ap": 0.4,
+    "soft_dice": 0.4,
+    "background_penalty": 0.2
+  },
+  "false_positive_weights": {
+    "top1": 0.7,
+    "global_mean": 0.3
+  },
+  "teacher_fidelity": {
+    "spearman_weight": 0.5,
+    "top1_overlap_weight": 0.5,
+    "top_fraction": 0.01,
+    "overlap": "intersection_over_k"
+  },
+  "soft_dice_epsilon": 1e-6,
+  "shapley": {
+    "exact": true,
+    "float_dtype": "float64",
+    "tolerance": 1e-12,
+    "empty_coalition_centering": true
+  },
+  "allocation": {
+    "positive_threshold": 1e-12,
+    "fallback": "minimum_harm_equal_ties"
+  },
+  "split_counts": {
+    "training": 16,
+    "calibration": 8,
+    "evaluation": 8
+  },
+  "resume_enabled": false,
+  "dry_run_complete_compute": true,
+  "expected_plan_sha_required_for_official": true,
+  "primary_target_dtype": "float64",
+  "repository_identity_gate_enabled": false,
+  "expected_contribution_contract_tag": null,
+  "expected_contribution_contract_commit": null
+}
