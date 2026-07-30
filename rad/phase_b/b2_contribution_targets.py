@@ -3225,6 +3225,154 @@ def _load_pt_payload(path: Path, *, code: str) -> Mapping[str, Any]:
     return loaded
 
 
+def _require_teacher_tensor(
+    tensors: Mapping[str, Any], name: str
+) -> torch.Tensor:
+    meta = tensors.get(name)
+    if not isinstance(meta, Mapping) or "tensor" not in meta:
+        _fail(
+            "B2_CONTRIBUTION_TEACHER_PAYLOAD_SCHEMA_INVALID",
+            f"teacher scientific record is missing tensor {name!r}",
+        )
+    tensor = meta["tensor"]
+    if not isinstance(tensor, torch.Tensor):
+        _fail(
+            "B2_CONTRIBUTION_TEACHER_PAYLOAD_SCHEMA_INVALID",
+            f"teacher tensor {name!r} must be a torch.Tensor",
+        )
+    return tensor
+
+
+def production_maps_from_teacher_record(
+    teacher_record: Mapping[str, Any],
+) -> tuple[dict[int, dict[int, torch.Tensor]], torch.Tensor]:
+    """Rebuild the depth-local causal lattice and full-depth map from Option A tensors."""
+
+    if not isinstance(teacher_record, Mapping):
+        _fail(
+            "B2_CONTRIBUTION_TEACHER_PAYLOAD_SCHEMA_INVALID",
+            "teacher scientific record must be a mapping",
+        )
+    tensors = teacher_record.get("tensors")
+    if not isinstance(tensors, Mapping):
+        _fail(
+            "B2_CONTRIBUTION_TEACHER_PAYLOAD_SCHEMA_INVALID",
+            "teacher scientific record must declare tensors",
+        )
+    layers = _validate_candidate_layers(teacher_record.get("candidate_layers", ()))
+    depths = _validate_prediction_depths(teacher_record.get("prediction_depths", ()))
+    maps_by_depth: dict[int, dict[int, torch.Tensor]] = {}
+    for depth in depths:
+        layer_maps: dict[int, torch.Tensor] = {}
+        for layer in layers:
+            if layer > depth:
+                continue
+            name = f"causal_map:{depth}:{layer}"
+            layer_maps[layer] = _require_teacher_tensor(tensors, name)
+        maps_by_depth[depth] = layer_maps
+    full_depth_map = _require_teacher_tensor(tensors, "full_depth_map")
+    return maps_by_depth, full_depth_map
+
+
+def production_mask_from_teacher_record(teacher_record: Mapping[str, Any]) -> torch.Tensor:
+    """Return the cached anomalous mask, or a zero mask for normal samples."""
+
+    if not isinstance(teacher_record, Mapping):
+        _fail(
+            "B2_CONTRIBUTION_TEACHER_PAYLOAD_SCHEMA_INVALID",
+            "teacher scientific record must be a mapping",
+        )
+    tensors = teacher_record.get("tensors")
+    if not isinstance(tensors, Mapping):
+        _fail(
+            "B2_CONTRIBUTION_TEACHER_PAYLOAD_SCHEMA_INVALID",
+            "teacher scientific record must declare tensors",
+        )
+    label = int(teacher_record["image_label"])
+    if label == 1:
+        return _require_teacher_tensor(tensors, "anomalous_mask")
+    if label != 0:
+        _fail(
+            "B2_CONTRIBUTION_TEACHER_PAYLOAD_SCHEMA_INVALID",
+            f"image_label must be 0 or 1, got {label}",
+        )
+    if "anomalous_mask" in tensors:
+        _fail(
+            "B2_CONTRIBUTION_TEACHER_PAYLOAD_SCHEMA_INVALID",
+            "normal teacher records must not embed anomalous_mask",
+        )
+    full_depth_map = _require_teacher_tensor(tensors, "full_depth_map")
+    return torch.zeros(tuple(full_depth_map.shape), dtype=torch.float32)
+
+
+def _index_mvtec_source_records(mvtec_root: Path) -> Mapping[str, Any]:
+    cache_mod.forbid_target_domain_access(mvtec_root)
+    if not mvtec_root.is_dir():
+        _fail(
+            "B2_CONTRIBUTION_SOURCE_ROOT_MISSING",
+            f"MVTec source root does not exist: {mvtec_root}",
+        )
+    from rad.data.adapters.mvtec import MVTecAdapter
+
+    adapter = MVTecAdapter(mvtec_root)
+    records = {
+        record.image_path.relative_to(mvtec_root).as_posix(): record
+        for record in adapter.records("test")
+    }
+    return MappingProxyType(records)
+
+
+def _verify_production_source_identities(
+    *,
+    teacher_record: Mapping[str, Any],
+    mvtec_records: Mapping[str, Any],
+    mvtec_root: Path,
+) -> None:
+    image_identity = teacher_record.get("image_identity")
+    if not isinstance(image_identity, str) or not image_identity:
+        _fail(
+            "B2_CONTRIBUTION_TEACHER_PAYLOAD_SCHEMA_INVALID",
+            "production teacher records require image_identity",
+        )
+    cache_mod.forbid_target_domain_access(image_identity)
+    record = mvtec_records.get(image_identity)
+    if record is None:
+        _fail(
+            "B2_CONTRIBUTION_SOURCE_SAMPLE_UNRESOLVED",
+            f"cannot resolve image_identity {image_identity}",
+        )
+    if int(record.image_label) != int(teacher_record["image_label"]):
+        _fail(
+            "B2_CONTRIBUTION_SOURCE_SAMPLE_UNRESOLVED",
+            f"label drifted for image_identity {image_identity}",
+        )
+    mask_identity = teacher_record.get("mask_identity")
+    if int(teacher_record["image_label"]) == 0:
+        if mask_identity is not None:
+            _fail(
+                "B2_CONTRIBUTION_TEACHER_PAYLOAD_SCHEMA_INVALID",
+                "normal samples must declare mask_identity=null",
+            )
+        return
+    if not isinstance(mask_identity, str) or not mask_identity:
+        _fail(
+            "B2_CONTRIBUTION_TEACHER_PAYLOAD_SCHEMA_INVALID",
+            "anomalous samples require mask_identity",
+        )
+    cache_mod.forbid_target_domain_access(mask_identity)
+    actual_mask = (
+        record.mask_path.relative_to(mvtec_root).as_posix()
+        if record.mask_path is not None
+        else None
+    )
+    if actual_mask != mask_identity:
+        _fail(
+            "B2_CONTRIBUTION_SOURCE_MASK_DRIFT",
+            f"mask identity drifted for {teacher_record['stable_sample_id']}: "
+            f"{actual_mask!r} != {mask_identity!r}",
+        )
+
+
 def load_contribution_inputs_from_disk(
     *,
     config: ContributionTargetsConfig,
@@ -3232,13 +3380,15 @@ def load_contribution_inputs_from_disk(
     teacher_cache_root: Any,
     descriptor_manifest_path: Any,
     descriptor_root: Any,
+    mvtec_root: Any = None,
 ) -> ContributionInputBundle:
     """Read a declared teacher-cache and descriptor collection into one bundle.
 
-    Production inputs are bound to the configured upstream identities. Hermetic
-    ``test_fixture`` inputs skip that binding but may never reach official
-    materialization unless the configuration explicitly declares fixture inputs,
-    which the tracked Gate-C configuration can never do.
+    Production inputs are bound to the configured upstream identities and must
+    resolve against an explicit MVTec source root. Hermetic ``test_fixture``
+    inputs skip that binding but may never reach official materialization unless
+    the configuration explicitly declares fixture inputs, which the tracked
+    Gate-C configuration can never do.
     """
 
     teacher_root = Path(teacher_cache_root)
@@ -3267,6 +3417,15 @@ def load_contribution_inputs_from_disk(
             "B2_TARGET_TEST_FIXTURE_NOT_ACCEPTED",
             "test_fixture artifacts are never accepted by production official mode",
         )
+
+    mvtec_records: Mapping[str, Any] | None = None
+    if artifact_kind == PRODUCTION_ARTIFACT_KIND:
+        if mvtec_root is None:
+            _fail(
+                "B2_CONTRIBUTION_SOURCE_ROOT_REQUIRED",
+                "production contribution inputs require an explicit --mvtec-root",
+            )
+        mvtec_records = _index_mvtec_source_records(Path(mvtec_root))
 
     teacher_cache_hash = str(teacher_manifest.get("cache_scientific_sha256", ""))
     teacher_coverage_hash = str(teacher_manifest.get("sample_coverage_sha256", ""))
@@ -3306,6 +3465,8 @@ def load_contribution_inputs_from_disk(
         _fail("B2_CONTRIBUTION_INPUT_MANIFEST_INVALID", "manifest samples must be lists")
     descriptor_by_id = {str(row["stable_sample_id"]): row for row in descriptor_rows}
 
+    import rad.phase_b.b2_descriptor_artifacts as descriptor_mod
+
     samples: list[ContributionInputSample] = []
     for row in teacher_rows:
         stable_sample_id = str(row["stable_sample_id"])
@@ -3326,12 +3487,43 @@ def load_contribution_inputs_from_disk(
             record_path, code="B2_CONTRIBUTION_INPUT_PAYLOAD_INVALID"
         )
         teacher_record = payload["scientific_record"]
-        maps_by_depth = {
-            int(depth_key): {
-                int(layer_key): tensor for layer_key, tensor in layer_maps.items()
+        if not isinstance(teacher_record, Mapping):
+            _fail(
+                "B2_CONTRIBUTION_INPUT_PAYLOAD_INVALID",
+                f"teacher scientific_record missing for {stable_sample_id}",
+            )
+        if artifact_kind == PRODUCTION_ARTIFACT_KIND:
+            assert mvtec_records is not None and mvtec_root is not None
+            recomputed_teacher_hash = cache_mod.record_scientific_sha256(teacher_record)
+            claimed_teacher_hash = str(row["record_scientific_sha256"])
+            if (
+                payload.get("record_scientific_sha256") != claimed_teacher_hash
+                or recomputed_teacher_hash != claimed_teacher_hash
+            ):
+                _fail(
+                    "B2_CONTRIBUTION_TEACHER_RECORD_HASH_MISMATCH",
+                    f"teacher scientific hash mismatch for {stable_sample_id}",
+                )
+            _verify_production_source_identities(
+                teacher_record=teacher_record,
+                mvtec_records=mvtec_records,
+                mvtec_root=Path(mvtec_root),
+            )
+            maps_by_depth, full_depth_map = production_maps_from_teacher_record(
+                teacher_record
+            )
+            mask = production_mask_from_teacher_record(teacher_record)
+            teacher_record_scientific_sha256 = recomputed_teacher_hash
+        else:
+            maps_by_depth = {
+                int(depth_key): {
+                    int(layer_key): tensor for layer_key, tensor in layer_maps.items()
+                }
+                for depth_key, layer_maps in payload["maps_by_depth"].items()
             }
-            for depth_key, layer_maps in payload["maps_by_depth"].items()
-        }
+            mask = payload["mask"]
+            full_depth_map = payload["full_depth_map"]
+            teacher_record_scientific_sha256 = str(row["record_scientific_sha256"])
         descriptor_row = descriptor_by_id.get(stable_sample_id)
         if descriptor_row is None:
             _fail(
@@ -3346,23 +3538,65 @@ def load_contribution_inputs_from_disk(
             missing_code="B2_CONTRIBUTION_MISSING_ARTIFACT",
             escape_code="B2_CONTRIBUTION_INPUT_ROOT_ESCAPE",
         )
+        claimed_descriptor_file_hash = descriptor_row.get("descriptor_record_file_sha256")
+        if claimed_descriptor_file_hash is not None and _sha256_file(
+            descriptor_path
+        ) != str(claimed_descriptor_file_hash):
+            _fail(
+                "B2_CONTRIBUTION_DESCRIPTOR_FILE_HASH_MISMATCH",
+                f"descriptor record file hash mismatch for {stable_sample_id}",
+            )
         descriptor_payload = _load_pt_payload(
             descriptor_path, code="B2_CONTRIBUTION_INPUT_PAYLOAD_INVALID"
         )
+        descriptor_record = descriptor_payload["scientific_record"]
+        if not isinstance(descriptor_record, Mapping):
+            _fail(
+                "B2_CONTRIBUTION_INPUT_PAYLOAD_INVALID",
+                f"descriptor scientific_record missing for {stable_sample_id}",
+            )
+        if artifact_kind == PRODUCTION_ARTIFACT_KIND:
+            recomputed_descriptor_hash = descriptor_mod.descriptor_record_scientific_sha256(
+                descriptor_record
+            )
+            claimed_descriptor_hash = str(
+                descriptor_row["descriptor_record_scientific_sha256"]
+            )
+            if (
+                descriptor_payload.get("descriptor_record_scientific_sha256")
+                != claimed_descriptor_hash
+                or recomputed_descriptor_hash != claimed_descriptor_hash
+            ):
+                _fail(
+                    "B2_CONTRIBUTION_DESCRIPTOR_RECORD_HASH_MISMATCH",
+                    f"descriptor scientific hash mismatch for {stable_sample_id}",
+                )
+        if "membership" in row:
+            split_membership = str(row["membership"])
+        else:
+            split_membership = str(teacher_record["membership"])
+        if (
+            "membership" in teacher_record
+            and str(teacher_record["membership"]) != split_membership
+        ):
+            _fail(
+                "B2_CONTRIBUTION_INPUT_MANIFEST_INVALID",
+                f"membership drifted for {stable_sample_id}",
+            )
         samples.append(
             ContributionInputSample(
                 stable_sample_id=stable_sample_id,
-                split_membership=str(row["membership"]),
+                split_membership=split_membership,
                 category=str(teacher_record["category"]),
                 label=int(teacher_record["image_label"]),
                 anomaly_type=str(teacher_record["anomaly_type"]),
                 mask_identity=teacher_record.get("mask_identity"),
                 maps_by_depth=maps_by_depth,
-                mask=payload["mask"],
-                full_depth_map=payload["full_depth_map"],
+                mask=mask,
+                full_depth_map=full_depth_map,
                 teacher_record=teacher_record,
-                teacher_record_scientific_sha256=str(row["record_scientific_sha256"]),
-                descriptor_record=descriptor_payload["scientific_record"],
+                teacher_record_scientific_sha256=teacher_record_scientific_sha256,
+                descriptor_record=descriptor_record,
             )
         )
 
@@ -3389,6 +3623,7 @@ def dry_run_contribution_targets_from_roots(
     teacher_cache_root: Any,
     descriptor_manifest_path: Any,
     descriptor_root: Any,
+    mvtec_root: Any = None,
     seed: int = 0,
     output_dir: Any = None,
 ) -> dict[str, Any]:
@@ -3400,6 +3635,7 @@ def dry_run_contribution_targets_from_roots(
         teacher_cache_root=teacher_cache_root,
         descriptor_manifest_path=descriptor_manifest_path,
         descriptor_root=descriptor_root,
+        mvtec_root=mvtec_root,
     )
     return dry_run_contribution_targets(
         config=config, inputs=inputs, seed=seed, output_dir=output_dir

@@ -3389,6 +3389,7 @@ def test_historical_production_manifests_still_face_every_downstream_pin(
             teacher_cache_root=layout.teacher_cache_root,
             descriptor_manifest_path=layout.descriptor_manifest,
             descriptor_root=layout.descriptor_root,
+            mvtec_root=layout.mvtec_root,
         )
     assert _error_code(excinfo) == "B2_CONTRIBUTION_UPSTREAM_IDENTITY_MISMATCH"
 
@@ -3408,8 +3409,107 @@ def test_historical_manifest_pair_must_agree_on_the_inferred_kind(
             teacher_cache_root=layout.teacher_cache_root,
             descriptor_manifest_path=layout.descriptor_manifest,
             descriptor_root=layout.descriptor_root,
+            mvtec_root=layout.mvtec_root,
         )
     assert _error_code(excinfo) == "B2_TARGET_ARTIFACT_KIND_INVALID"
+
+
+def test_fixture_loader_accepts_mvtec_root_without_using_it(
+    tmp_path: Path, tracked_config: Any, target_fixture: Any
+) -> None:
+    layout = fixtures.prepare_hermetic_contribution_inputs(tmp_path, fixture=target_fixture)
+    bundle = subject.load_contribution_inputs_from_disk(
+        config=tracked_config,
+        teacher_cache_manifest_path=layout.teacher_cache_manifest,
+        teacher_cache_root=layout.teacher_cache_root,
+        descriptor_manifest_path=layout.descriptor_manifest,
+        descriptor_root=layout.descriptor_root,
+        mvtec_root=layout.mvtec_root,
+    )
+    assert bundle.artifact_kind == subject.TEST_FIXTURE_ARTIFACT_KIND
+    assert len(bundle.samples) == len(target_fixture.samples)
+
+
+def test_production_inputs_require_an_explicit_mvtec_root(tmp_path: Path) -> None:
+    layout = fixtures.prepare_hermetic_contribution_inputs(tmp_path)
+    _rewrite_as_historical_manifest(
+        layout.teacher_cache_manifest, configuration_id=LEGACY_TEACHER_CONFIGURATION_ID
+    )
+    _rewrite_as_historical_manifest(
+        layout.descriptor_manifest, configuration_id=LEGACY_DESCRIPTOR_CONFIGURATION_ID
+    )
+    config = subject.load_contribution_targets_config(fixtures.TRACKED_CONFIG_PATH)
+    with pytest.raises(subject.ContributionTargetError) as excinfo:
+        subject.load_contribution_inputs_from_disk(
+            config=config,
+            teacher_cache_manifest_path=layout.teacher_cache_manifest,
+            teacher_cache_root=layout.teacher_cache_root,
+            descriptor_manifest_path=layout.descriptor_manifest,
+            descriptor_root=layout.descriptor_root,
+        )
+    assert _error_code(excinfo) == "B2_CONTRIBUTION_SOURCE_ROOT_REQUIRED"
+
+
+def test_production_maps_and_mask_are_read_from_teacher_scientific_tensors() -> None:
+    layers = (6, 12)
+    depths = (12,)
+    shape = (1, 1, 4, 4)
+    maps = {
+        12: {
+            6: torch.full(shape, 0.25, dtype=torch.float32),
+            12: torch.full(shape, 0.75, dtype=torch.float32),
+        }
+    }
+    full_depth = torch.full(shape, 0.5, dtype=torch.float32)
+    mask = torch.zeros(shape, dtype=torch.float32)
+    mask[..., 1:3, 1:3] = 1.0
+    tensors = {
+        "causal_map:12:6": {"tensor": maps[12][6]},
+        "causal_map:12:12": {"tensor": maps[12][12]},
+        "full_depth_map": {"tensor": full_depth},
+        "anomalous_mask": {"tensor": mask},
+    }
+    teacher_record = {
+        "candidate_layers": list(layers),
+        "prediction_depths": list(depths),
+        "image_label": 1,
+        "tensors": tensors,
+    }
+    extracted_maps, extracted_full = subject.production_maps_from_teacher_record(
+        teacher_record
+    )
+    assert set(extracted_maps) == {12}
+    assert set(extracted_maps[12]) == {6, 12}
+    assert torch.equal(extracted_maps[12][6], maps[12][6])
+    assert torch.equal(extracted_full, full_depth)
+    extracted_mask = subject.production_mask_from_teacher_record(teacher_record)
+    assert torch.equal(extracted_mask, mask)
+
+    normal_record = {
+        "candidate_layers": list(layers),
+        "prediction_depths": list(depths),
+        "image_label": 0,
+        "tensors": {
+            "causal_map:12:6": {"tensor": maps[12][6]},
+            "causal_map:12:12": {"tensor": maps[12][12]},
+            "full_depth_map": {"tensor": full_depth},
+        },
+    }
+    zero_mask = subject.production_mask_from_teacher_record(normal_record)
+    assert tuple(zero_mask.shape) == shape
+    assert float(zero_mask.sum()) == 0.0
+
+
+def test_production_teacher_payload_rejects_missing_causal_map_tensor() -> None:
+    teacher_record = {
+        "candidate_layers": [6, 12],
+        "prediction_depths": [12],
+        "image_label": 0,
+        "tensors": {"full_depth_map": {"tensor": torch.zeros((1, 1, 2, 2))}},
+    }
+    with pytest.raises(subject.ContributionTargetError) as excinfo:
+        subject.production_maps_from_teacher_record(teacher_record)
+    assert _error_code(excinfo) == "B2_CONTRIBUTION_TEACHER_PAYLOAD_SCHEMA_INVALID"
 
 
 # --- official materialization gate -----------------------------------------

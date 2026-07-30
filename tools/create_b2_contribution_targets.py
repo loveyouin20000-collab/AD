@@ -131,6 +131,7 @@ def main(argv: list[str] | None = None) -> int:
                 teacher_cache_root=Path(args.teacher_cache_root),
                 descriptor_manifest_path=Path(args.descriptor_manifest),
                 descriptor_root=Path(args.descriptor_root),
+                mvtec_root=Path(args.mvtec_root),
                 seed=seed,
                 output_dir=output_dir,
             )
@@ -149,6 +150,7 @@ def main(argv: list[str] | None = None) -> int:
             teacher_cache_root=Path(args.teacher_cache_root),
             descriptor_manifest_path=Path(args.descriptor_manifest),
             descriptor_root=Path(args.descriptor_root),
+            mvtec_root=Path(args.mvtec_root),
         )
         materialized = materialize_contribution_target_collection(
             config=config,
