@@ -268,13 +268,13 @@ def _write_atomic_pair(output_dir: Path, json_text: str, markdown_text: str) -> 
         _fail("output directory path is not a directory")
     if json_path.exists() or json_path.is_symlink() or markdown_path.exists() or markdown_path.is_symlink():
         _fail("qualification output collision")
+    created_output_dir = not output_dir.exists()
     output_dir.mkdir(parents=True, exist_ok=True)
+    planned = ((json_path, json_text), (markdown_path, markdown_text))
     temporary: list[Path] = []
+    replaced: list[Path] = []
     try:
-        for destination, content in (
-            (json_path, json_text),
-            (markdown_path, markdown_text),
-        ):
+        for destination, content in planned:
             descriptor, name = tempfile.mkstemp(
                 prefix=f".{destination.name}.", suffix=".tmp", dir=output_dir
             )
@@ -284,14 +284,16 @@ def _write_atomic_pair(output_dir: Path, json_text: str, markdown_text: str) -> 
                 handle.write(content)
                 handle.flush()
                 os.fsync(handle.fileno())
-        os.replace(temporary[0], json_path)
-        temporary.pop(0)
-        os.replace(temporary[0], markdown_path)
-        temporary.pop(0)
-    except Exception:
-        for path in temporary:
+        for temp_path, (destination, _content) in zip(tuple(temporary), planned, strict=True):
+            os.replace(temp_path, destination)
+            temporary.remove(temp_path)
+            replaced.append(destination)
+    except BaseException:
+        # Either both evidence targets appear or none does: roll back every
+        # already-replaced destination and drop the temporaries.
+        for path in (*temporary, *replaced):
             path.unlink(missing_ok=True)
-        if not any(output_dir.iterdir()):
+        if created_output_dir and output_dir.is_dir() and not any(output_dir.iterdir()):
             output_dir.rmdir()
         raise
 

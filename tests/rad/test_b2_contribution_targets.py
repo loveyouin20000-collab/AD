@@ -70,6 +70,7 @@ import copy
 import dataclasses
 import hashlib
 import inspect
+import json
 import math
 import os
 import subprocess
@@ -2902,13 +2903,32 @@ def _official_config(tmp_path: Path, **overrides: Any) -> Any:
     )
 
 
-def _clone_contract_repository(tmp_path: Path) -> Path:
-    repository = tmp_path / "contract-repository"
+def _clone_contract_repository(tmp_path: Path, *, name: str = "contract-repository") -> Path:
+    repository = tmp_path / name
     subprocess.run(
         ["git", "clone", "--quiet", "--no-local", str(fixtures.REPO_ROOT), str(repository)],
         check=True,
     )
     return repository
+
+
+def _git(repository: Path, *arguments: str) -> str:
+    completed = subprocess.run(
+        [
+            "git",
+            "-C",
+            str(repository),
+            "-c",
+            "user.name=b2 negative control",
+            "-c",
+            "user.email=b2@example.invalid",
+            *arguments,
+        ],
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+    return completed.stdout.strip()
 
 
 def _materialize(
@@ -3808,13 +3828,40 @@ def test_comparison_rejects_unverified_inputs(
     verified = subject.verify_contribution_target_collection(
         config=config, run_dir=result.run_dir
     )
-    unsealed = dataclasses.replace(verified, _verification_seal=None)
-    for first in (result.manifest, result, unsealed):
-        with pytest.raises(subject.ContributionTargetError) as excinfo:
-            subject.compare_contribution_target_collections(
-                first=first, second=verified
-            )
-        assert _error_code(excinfo) == "B2_CONTRIBUTION_COLLECTION_NOT_VERIFIED"
+    replaced = dataclasses.replace(verified)
+    copied = subject.VerifiedContributionTargetCollection(
+        **{
+            field.name: getattr(verified, field.name)
+            for field in dataclasses.fields(verified)
+            if field.init
+        }
+    )
+    for candidate in (result.manifest, result, replaced, copied):
+        for pair in (
+            {"first": candidate, "second": verified},
+            {"first": verified, "second": candidate},
+        ):
+            with pytest.raises(subject.ContributionTargetError) as excinfo:
+                subject.compare_contribution_target_collections(**pair)
+            assert _error_code(excinfo) == "B2_CONTRIBUTION_COLLECTION_NOT_VERIFIED"
+
+
+def test_verification_seal_is_instance_identity_not_a_copyable_token(
+    tmp_path: Path, input_bundle: Any
+) -> None:
+    config = _official_config(tmp_path)
+    result = _materialize(tmp_path, config, input_bundle)
+    verified = subject.verify_contribution_target_collection(
+        config=config, run_dir=result.run_dir
+    )
+    assert [
+        field.name
+        for field in dataclasses.fields(subject.VerifiedContributionTargetCollection)
+        if field.name.startswith("_")
+    ] == []
+    assert subject.compare_contribution_target_collections(
+        first=verified, second=verified
+    ).scientifically_equivalent is True
 
 
 def test_comparison_reports_descriptor_variant_scientific_mismatch(
@@ -3847,3 +3894,242 @@ def test_comparison_reports_descriptor_variant_scientific_mismatch(
     assert comparison.layered_identities_equal is False
     assert comparison.record_scientific_hashes_equal is False
     assert any("descriptor" in reason for reason in comparison.reasons)
+
+
+# --- categorized comparison mismatches --------------------------------------
+
+
+COMPARISON_MISMATCH_CASES: dict[str, tuple[str, str]] = {
+    "layered_identity_drift": (
+        "layered_identities_equal",
+        "layered scientific identity",
+    ),
+    "record_scientific_hash_drift": (
+        "record_scientific_hashes_equal",
+        "record scientific hash",
+    ),
+    "teacher_cache_identity_drift": (
+        "record_scientific_hashes_equal",
+        "teacher_cache_scientific_sha256",
+    ),
+    "descriptor_collection_identity_drift": (
+        "record_scientific_hashes_equal",
+        "descriptor_collection_scientific_sha256",
+    ),
+    "descriptor_record_identity_drift": (
+        "record_scientific_hashes_equal",
+        "descriptor_record_scientific_sha256",
+    ),
+    "coalition_utility_component_drift": (
+        "utility_tables_equal",
+        "coalition utility component",
+    ),
+    "raw_utility_drift": ("utility_tables_equal", "raw utility"),
+    "centered_value_drift": ("utility_tables_equal", "centered value"),
+    "empty_coalition_raw_utility_drift": (
+        "utility_tables_equal",
+        "empty coalition raw utility",
+    ),
+    "grand_coalition_centered_value_drift": (
+        "utility_tables_equal",
+        "grand coalition centered value",
+    ),
+    "signed_shapley_drift": ("signed_shapley_equal", "signed Shapley"),
+    "efficiency_residual_drift": ("signed_shapley_equal", "efficiency residual"),
+    "allocation_drift": ("allocations_equal", "allocation"),
+    "changed_split_membership": ("coverage_equal", "split membership"),
+    "gt_calibration_statistic_drift": ("gt_calibration_equal", "GT calibration"),
+    "shapley_normalization_statistic_drift": (
+        "shapley_normalization_equal",
+        "Shapley normalization",
+    ),
+    "nonzero_teacher_forward_count": (
+        "teacher_forward_count_equal",
+        "teacher forward count",
+    ),
+}
+
+_IDENTITY_DRIFT_FIELDS = {
+    "teacher_cache_identity_drift": "teacher_cache_scientific_sha256",
+    "descriptor_collection_identity_drift": "descriptor_collection_scientific_sha256",
+    "descriptor_record_identity_drift": "descriptor_record_scientific_sha256",
+}
+
+
+def _mutate_comparison_payload(payload: dict[str, Any], case: str) -> None:
+    delta = 1e-9
+    stable_id = sorted(payload["records_by_id"])[0]
+    record = payload["records_by_id"][stable_id]
+    depth_key = sorted(record["depth_targets"])[0]
+    depth = record["depth_targets"][depth_key]
+    coalition = depth["coalition_table"][1]
+    family = depth["gt_localization"]
+    if case == "layered_identity_drift":
+        payload["manifest"]["contribution_plan_scientific_sha256"] = "0" * 64
+    elif case == "record_scientific_hash_drift":
+        record["contribution_target_record_scientific_sha256"] = "0" * 64
+    elif case in _IDENTITY_DRIFT_FIELDS:
+        record[_IDENTITY_DRIFT_FIELDS[case]] = "0" * 64
+    elif case == "coalition_utility_component_drift":
+        components = coalition["gt_localization"]["utility_components"]
+        component = sorted(components)[0]
+        components[component] = float(components[component]) + delta
+    elif case == "raw_utility_drift":
+        coalition["gt_localization"]["raw_utility"] += delta
+    elif case == "centered_value_drift":
+        coalition["teacher_fidelity"]["centered_value"] += delta
+    elif case == "empty_coalition_raw_utility_drift":
+        family["empty_coalition_raw_utility"] += delta
+    elif case == "grand_coalition_centered_value_drift":
+        family["grand_coalition_centered_value"] += delta
+    elif case == "signed_shapley_drift":
+        layer = sorted(family["raw_signed_shapley_by_layer"])[0]
+        family["raw_signed_shapley_by_layer"][layer] += delta
+    elif case == "efficiency_residual_drift":
+        family["efficiency_residual"] += delta
+    elif case == "allocation_drift":
+        allocation = family["positive_allocation_target_by_layer"]
+        layers = sorted(allocation)
+        allocation[layers[0]], allocation[layers[-1]] = (
+            allocation[layers[-1]],
+            allocation[layers[0]],
+        )
+    elif case == "changed_split_membership":
+        record["split_membership"] = (
+            "calibration" if record["split_membership"] == "training" else "training"
+        )
+    elif case == "gt_calibration_statistic_drift":
+        by_depth = payload["calibration_artifact"]["by_depth"]
+        payload["calibration_artifact"]["by_depth"][sorted(by_depth)[0]]["q_low"] += delta
+    elif case == "shapley_normalization_statistic_drift":
+        axes = payload["normalization"]["axes"]["gt_localization"]
+        axes[sorted(axes)[0]]["layers"][0]["mean"] += delta
+    elif case == "nonzero_teacher_forward_count":
+        payload["teacher_forward_count"] = 1
+    else:  # pragma: no cover - guards against silent placeholder cases
+        raise AssertionError(f"unmapped categorized mismatch case: {case}")
+
+
+@pytest.fixture(scope="module")
+def verified_reference_payload(tmp_path_factory: pytest.TempPathFactory) -> dict[str, Any]:
+    root = tmp_path_factory.mktemp("categorized-comparison")
+    config = _official_config(root)
+    fixture = fixtures.build_contribution_target_fixture()
+    result = _materialize(root, config, fixtures.fixture_input_bundle(fixture))
+    verified = subject.verify_contribution_target_collection(
+        config=config, run_dir=result.run_dir
+    )
+    return subject._contribution_comparison_payload(verified)
+
+
+@pytest.mark.parametrize("case", sorted(COMPARISON_MISMATCH_CASES))
+def test_comparison_categorizes_every_scientific_mismatch(
+    case: str, verified_reference_payload: dict[str, Any]
+) -> None:
+    predicate, reason_fragment = COMPARISON_MISMATCH_CASES[case]
+    first = copy.deepcopy(verified_reference_payload)
+    second = copy.deepcopy(verified_reference_payload)
+    baseline = subject._compare_contribution_target_payloads(first=first, second=second)
+    assert baseline.scientifically_equivalent is True
+    assert baseline.reasons == ()
+
+    _mutate_comparison_payload(second, case)
+    comparison = subject._compare_contribution_target_payloads(first=first, second=second)
+    assert comparison.scientifically_equivalent is False
+    assert getattr(comparison, predicate) is False
+    assert any(reason_fragment in reason for reason in comparison.reasons)
+    untouched = [
+        field.name
+        for field in dataclasses.fields(comparison)
+        if field.name
+        not in {"scientifically_equivalent", "reasons", "file_byte_equal", predicate}
+    ]
+    assert all(getattr(comparison, name) is True for name in untouched)
+
+
+def test_comparison_reasons_name_the_sample_depth_and_family(
+    verified_reference_payload: dict[str, Any]
+) -> None:
+    first = copy.deepcopy(verified_reference_payload)
+    second = copy.deepcopy(verified_reference_payload)
+    stable_id = sorted(second["records_by_id"])[0]
+    depth_key = sorted(second["records_by_id"][stable_id]["depth_targets"])[0]
+    _mutate_comparison_payload(second, "raw_utility_drift")
+    comparison = subject._compare_contribution_target_payloads(first=first, second=second)
+    reason = next(reason for reason in comparison.reasons if "raw utility" in reason)
+    assert stable_id in reason
+    assert depth_key in reason
+    assert "gt_localization" in reason
+
+
+def test_verifier_rejects_a_nonzero_manifest_teacher_forward_count(
+    tmp_path: Path, input_bundle: Any
+) -> None:
+    config = _official_config(tmp_path)
+    result = _materialize(tmp_path, config, input_bundle)
+    manifest_path = result.run_dir / subject.FINAL_MANIFEST_NAME
+    payload = json.loads(manifest_path.read_text(encoding="utf-8"))
+    assert payload["teacher_forward_count"] == 0
+    payload["teacher_forward_count"] = 1
+    tampered = json.dumps(payload, indent=2, sort_keys=True, ensure_ascii=False) + "\n"
+    manifest_path.write_text(tampered, encoding="utf-8")
+    (result.run_dir / subject.FINAL_MANIFEST_RECEIPT_NAME).write_text(
+        hashlib.sha256(tampered.encode("utf-8")).hexdigest() + "\n", encoding="utf-8"
+    )
+    assert subject.verify_final_manifest_receipt(result.run_dir)
+    with pytest.raises(subject.ContributionTargetError) as excinfo:
+        subject.verify_contribution_target_collection(
+            config=config, run_dir=result.run_dir
+        )
+    assert _error_code(excinfo) == "B2_CONTRIBUTION_TEACHER_FORWARD_NONZERO"
+
+
+def _gate_enabled_official_config(tmp_path: Path) -> Any:
+    return dataclasses.replace(
+        _official_config(tmp_path),
+        repository_identity_gate_enabled=True,
+        expected_contribution_contract_tag="b2-contribution-target-contract-v1",
+        expected_contribution_contract_commit="29591668c3228f6cebd7fd923ae1c39c6dad49bc",
+    )
+
+
+@pytest.mark.parametrize("head", ["parent", "sibling", "unrelated"])
+def test_official_api_rejects_a_non_descendant_head(
+    tmp_path: Path, input_bundle: Any, head: str
+) -> None:
+    repository = _clone_contract_repository(tmp_path, name=f"repository-{head}")
+    contract_commit = "29591668c3228f6cebd7fd923ae1c39c6dad49bc"
+    parent_commit = _git(repository, "rev-parse", f"{contract_commit}^1")
+    if head == "parent":
+        _git(repository, "checkout", "--quiet", "--detach", parent_commit)
+    elif head == "sibling":
+        _git(repository, "checkout", "--quiet", "--detach", parent_commit)
+        (repository / "sibling-branch.txt").write_text("sibling\n", encoding="utf-8")
+        _git(repository, "add", "sibling-branch.txt")
+        _git(repository, "commit", "--quiet", "-m", "sibling commit")
+    else:
+        _git(repository, "checkout", "--quiet", "--orphan", "unrelated-history")
+        _git(repository, "rm", "-r", "-f", "-q", ".")
+        (repository / "unrelated.txt").write_text("unrelated\n", encoding="utf-8")
+        _git(repository, "add", "unrelated.txt")
+        _git(repository, "commit", "--quiet", "-m", "unrelated root commit")
+    assert _git(repository, "status", "--porcelain", "--untracked-files=all") == ""
+    assert _git(repository, "rev-parse", f"{contract_commit}^{{commit}}") == contract_commit
+
+    config = _gate_enabled_official_config(tmp_path)
+    run_dir = tmp_path / f"run-{head}"
+    with pytest.raises(subject.ContributionTargetError) as excinfo:
+        subject.materialize_contribution_target_collection(
+            config=config,
+            inputs=input_bundle,
+            output_run_dir=run_dir,
+            expected_plan_sha256="0" * 64,
+            repository_root=repository,
+        )
+    assert _error_code(excinfo) == "B2_CONTRIBUTION_HEAD_NOT_DESCENDANT"
+    assert not run_dir.exists()
+    with pytest.raises(subject.ContributionTargetError) as excinfo:
+        subject.verify_contribution_repository_identity(
+            config=config, repository_root=repository
+        )
+    assert _error_code(excinfo) == "B2_CONTRIBUTION_HEAD_NOT_DESCENDANT"

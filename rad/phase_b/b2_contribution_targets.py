@@ -37,9 +37,9 @@ import math
 import os
 import subprocess
 import tempfile
+import weakref
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
-from dataclasses import field as dataclass_field
 from pathlib import Path, PurePath, PurePosixPath
 from types import MappingProxyType
 from typing import Any, NamedTuple, NoReturn
@@ -3453,9 +3453,6 @@ class ContributionRepositoryIdentity:
     worktree_clean: bool
 
 
-_VERIFIED_CONTRIBUTION_COLLECTION_SEAL = object()
-
-
 @dataclass(frozen=True)
 class VerifiedContributionTargetCollection:
     """A disk-verified contribution-target collection."""
@@ -3466,9 +3463,34 @@ class VerifiedContributionTargetCollection:
     calibration_artifact: Mapping[str, Any]
     normalization: Mapping[str, Any]
     teacher_forward_count: int
-    _verification_seal: object | None = dataclass_field(
-        default=None, repr=False, compare=False
-    )
+
+
+# Verification is an instance-identity property, never a copyable field: only the
+# exact objects returned by ``verify_contribution_target_collection`` after every
+# check are registered here, so manual construction and ``dataclasses.replace``
+# stay unverified.
+_VERIFIED_COLLECTION_REGISTRY: dict[
+    int, weakref.ReferenceType[VerifiedContributionTargetCollection]
+] = {}
+
+
+def _seal_verified_collection(
+    collection: VerifiedContributionTargetCollection,
+) -> VerifiedContributionTargetCollection:
+    key = id(collection)
+
+    def _forget(_reference: Any, key: int = key) -> None:
+        _VERIFIED_COLLECTION_REGISTRY.pop(key, None)
+
+    _VERIFIED_COLLECTION_REGISTRY[key] = weakref.ref(collection, _forget)
+    return collection
+
+
+def _is_verified_collection(value: Any) -> bool:
+    if not isinstance(value, VerifiedContributionTargetCollection):
+        return False
+    reference = _VERIFIED_COLLECTION_REGISTRY.get(id(value))
+    return reference is not None and reference() is value
 
 
 @dataclass(frozen=True)
@@ -4270,6 +4292,19 @@ def verify_contribution_target_collection(
         run_dir=root, manifest=manifest, planned_ids=planned_ids
     )
 
+    claimed_forwards = manifest.get("teacher_forward_count")
+    if isinstance(claimed_forwards, bool) or not isinstance(claimed_forwards, int):
+        _fail(
+            "B2_CONTRIBUTION_TEACHER_FORWARD_NONZERO",
+            "the manifest must record an integer teacher_forward_count",
+        )
+    teacher_forward_count = int(claimed_forwards)
+    if teacher_forward_count != 0:
+        _fail(
+            "B2_CONTRIBUTION_TEACHER_FORWARD_NONZERO",
+            f"the manifest claims {teacher_forward_count} teacher forwards, must be zero",
+        )
+
     layers = tuple(int(layer) for layer in manifest["candidate_layers"])
     depths = tuple(int(depth) for depth in manifest["prediction_depths"])
     records_by_id: dict[str, Mapping[str, Any]] = {}
@@ -4345,14 +4380,15 @@ def verify_contribution_target_collection(
             "B2_CONTRIBUTION_MANIFEST_INVALID",
             "manifest official-materialization flag disagrees with the configuration",
         )
-    return VerifiedContributionTargetCollection(
-        run_dir=root,
-        manifest=MappingProxyType(dict(manifest)),
-        records_by_id=MappingProxyType(records_by_id),
-        calibration_artifact=calibration_artifact,
-        normalization=normalization,
-        teacher_forward_count=int(manifest.get("teacher_forward_count", -1)),
-        _verification_seal=_VERIFIED_CONTRIBUTION_COLLECTION_SEAL,
+    return _seal_verified_collection(
+        VerifiedContributionTargetCollection(
+            run_dir=root,
+            manifest=MappingProxyType(dict(manifest)),
+            records_by_id=MappingProxyType(records_by_id),
+            calibration_artifact=calibration_artifact,
+            normalization=normalization,
+            teacher_forward_count=teacher_forward_count,
+        )
     )
 
 
@@ -4387,27 +4423,127 @@ def _contribution_file_hashes(root: Path) -> Mapping[str, str]:
     }
 
 
-def _require_sealed_collection(value: Any) -> VerifiedContributionTargetCollection:
-    if (
-        not isinstance(value, VerifiedContributionTargetCollection)
-        or value._verification_seal is not _VERIFIED_CONTRIBUTION_COLLECTION_SEAL
-    ):
-        _fail(
-            "B2_CONTRIBUTION_COLLECTION_NOT_VERIFIED",
-            "comparison accepts only collections sealed by production verification",
-        )
+def _mapping_or_empty(value: Any) -> Mapping[str, Any]:
+    return value if isinstance(value, Mapping) else {}
+
+
+def _contribution_plain_value(value: Any) -> Any:
+    if isinstance(value, Mapping):
+        return {str(key): _contribution_plain_value(item) for key, item in value.items()}
+    if isinstance(value, list | tuple):
+        return [_contribution_plain_value(item) for item in value]
     return value
 
 
-def compare_contribution_target_collections(
-    *,
-    first: VerifiedContributionTargetCollection,
-    second: VerifiedContributionTargetCollection,
-) -> ContributionTargetCollectionComparison:
-    """Compare two independently disk-verified collections exactly."""
+def _contribution_comparison_payload(
+    collection: VerifiedContributionTargetCollection,
+) -> dict[str, Any]:
+    """Freeze one verified collection into a plain comparable payload."""
 
-    left = _require_sealed_collection(first)
-    right = _require_sealed_collection(second)
+    return {
+        "manifest": _contribution_plain_value(collection.manifest),
+        "records_by_id": _contribution_plain_value(collection.records_by_id),
+        "calibration_artifact": _contribution_plain_value(collection.calibration_artifact),
+        "normalization": _contribution_plain_value(collection.normalization),
+        "teacher_forward_count": int(collection.teacher_forward_count),
+        "file_hashes": dict(_contribution_file_hashes(collection.run_dir)),
+    }
+
+
+_RECORD_UPSTREAM_IDENTITY_FIELDS = (
+    "source_teacher_record_scientific_sha256",
+    "descriptor_record_scientific_sha256",
+    "teacher_cache_scientific_sha256",
+    "teacher_cache_sample_coverage_sha256",
+    "descriptor_collection_scientific_sha256",
+    "split_scientific_sha256",
+    "checkpoint_sha256",
+    "execution_profile_sha256",
+)
+_COALITION_ENUMERATION_FIELDS = ("bitmask", "layer_ids", "coalition_size")
+_FAMILY_UTILITY_FIELDS = (
+    ("empty_coalition_raw_utility", "empty coalition raw utility"),
+    ("grand_coalition_centered_value", "grand coalition centered value"),
+    ("utility_mode", "utility mode"),
+)
+
+
+def _compare_coalition_tables(
+    *,
+    left: Any,
+    right: Any,
+    sample: str,
+    depth: str,
+    reasons: list[str],
+) -> bool:
+    where = f"sample {sample} depth {depth}"
+    if not isinstance(left, list) or not isinstance(right, list) or len(left) != len(right):
+        reasons.append(f"coalition table shape mismatch for {where}")
+        return False
+    equal = True
+    for left_row, right_row in zip(left, right, strict=True):
+        if not isinstance(left_row, Mapping) or not isinstance(right_row, Mapping):
+            reasons.append(f"coalition table entry mismatch for {where}")
+            equal = False
+            continue
+        bitmask = left_row.get("bitmask")
+        if any(
+            not _contribution_values_equal(left_row.get(key), right_row.get(key))
+            for key in _COALITION_ENUMERATION_FIELDS
+        ):
+            reasons.append(f"coalition enumeration mismatch for {where} coalition {bitmask}")
+            equal = False
+            continue
+        for family in TARGET_FAMILIES:
+            left_family = left_row.get(family)
+            right_family = right_row.get(family)
+            if not isinstance(left_family, Mapping) or not isinstance(right_family, Mapping):
+                reasons.append(
+                    f"coalition family mismatch for {where} family {family} "
+                    f"coalition {bitmask}"
+                )
+                equal = False
+                continue
+            scope = f"{where} family {family} coalition {bitmask}"
+            if not _contribution_values_equal(
+                left_family.get("raw_utility"), right_family.get("raw_utility")
+            ):
+                reasons.append(f"raw utility mismatch for {scope}")
+                equal = False
+            if not _contribution_values_equal(
+                left_family.get("centered_value"), right_family.get("centered_value")
+            ):
+                reasons.append(f"centered value mismatch for {scope}")
+                equal = False
+            left_components = left_family.get("utility_components")
+            right_components = right_family.get("utility_components")
+            if not isinstance(left_components, Mapping) or not isinstance(
+                right_components, Mapping
+            ):
+                reasons.append(f"coalition utility component mismatch for {scope}")
+                equal = False
+                continue
+            for component in sorted(set(left_components) | set(right_components)):
+                if not _contribution_values_equal(
+                    left_components.get(component), right_components.get(component)
+                ):
+                    reasons.append(
+                        f"coalition utility component mismatch for {scope} "
+                        f"component {component}"
+                    )
+                    equal = False
+    return equal
+
+
+def _compare_contribution_target_payloads(
+    *, first: Mapping[str, Any], second: Mapping[str, Any]
+) -> ContributionTargetCollectionComparison:
+    """Compare two frozen verified payloads field by scientific field."""
+
+    left_manifest = _mapping_or_empty(first.get("manifest"))
+    right_manifest = _mapping_or_empty(second.get("manifest"))
+    left_records = _mapping_or_empty(first.get("records_by_id"))
+    right_records = _mapping_or_empty(second.get("records_by_id"))
     reasons: list[str] = []
 
     layered_fields = (
@@ -4415,129 +4551,124 @@ def compare_contribution_target_collections(
         *SEVEN_LAYERED_IDENTITY_KEYS,
     )
     layered_identities_equal = all(
-        left.manifest.get(key) == right.manifest.get(key) for key in layered_fields
+        left_manifest.get(key) == right_manifest.get(key) for key in layered_fields
     )
     if not layered_identities_equal:
         reasons.append("layered scientific identity mismatch")
 
-    left_ids = tuple(sorted(left.records_by_id))
-    right_ids = tuple(sorted(right.records_by_id))
-    coverage_equal = (
-        left_ids == right_ids
-        and _contribution_values_equal(
-            left.manifest.get("planned_ordered_stable_sample_ids"),
-            right.manifest.get("planned_ordered_stable_sample_ids"),
-        )
-        and _contribution_values_equal(
-            left.manifest.get("split_counts"), right.manifest.get("split_counts")
-        )
-        and all(
-            left.records_by_id[stable_id].get("split_membership")
-            == right.records_by_id[stable_id].get("split_membership")
-            for stable_id in set(left_ids) & set(right_ids)
-        )
-    )
-    if not coverage_equal:
-        reasons.append("split or sample coverage mismatch")
+    left_ids = tuple(sorted(left_records))
+    right_ids = tuple(sorted(right_records))
+    coverage_equal = True
+    if left_ids != right_ids or not _contribution_values_equal(
+        left_manifest.get("planned_ordered_stable_sample_ids"),
+        right_manifest.get("planned_ordered_stable_sample_ids"),
+    ):
+        coverage_equal = False
+        reasons.append("sample coverage mismatch")
+    if not _contribution_values_equal(
+        left_manifest.get("split_counts"), right_manifest.get("split_counts")
+    ):
+        coverage_equal = False
+        reasons.append("split count mismatch")
 
-    record_scientific_hashes_equal = left_ids == right_ids and all(
-        left.records_by_id[stable_id].get(
-            "contribution_target_record_scientific_sha256"
-        )
-        == right.records_by_id[stable_id].get(
-            "contribution_target_record_scientific_sha256"
-        )
-        for stable_id in left_ids
-    )
-    if not record_scientific_hashes_equal:
-        reasons.append("record scientific hash mismatch")
-
+    record_scientific_hashes_equal = True
     utility_tables_equal = True
     signed_shapley_equal = True
     allocations_equal = True
-    record_identity_equal = True
-    record_identity_fields = (
-        "source_teacher_record_scientific_sha256",
-        "descriptor_record_scientific_sha256",
-        "teacher_cache_scientific_sha256",
-        "teacher_cache_sample_coverage_sha256",
-        "descriptor_collection_scientific_sha256",
-        "split_scientific_sha256",
-        "checkpoint_sha256",
-        "execution_profile_sha256",
-    )
     for stable_id in sorted(set(left_ids) & set(right_ids)):
-        left_record = left.records_by_id[stable_id]
-        right_record = right.records_by_id[stable_id]
-        if any(
-            not _contribution_values_equal(
-                left_record.get(key), right_record.get(key)
-            )
-            for key in record_identity_fields
+        left_record = _mapping_or_empty(left_records.get(stable_id))
+        right_record = _mapping_or_empty(right_records.get(stable_id))
+        if not _contribution_values_equal(
+            left_record.get("contribution_target_record_scientific_sha256"),
+            right_record.get("contribution_target_record_scientific_sha256"),
         ):
-            record_identity_equal = False
-            reasons.append(f"descriptor or upstream identity mismatch for sample {stable_id}")
-        depth_keys = sorted(
-            set(left_record.get("depth_targets", {}))
-            | set(right_record.get("depth_targets", {}))
-        )
-        for depth in depth_keys:
-            left_depth = left_record.get("depth_targets", {}).get(depth)
-            right_depth = right_record.get("depth_targets", {}).get(depth)
+            record_scientific_hashes_equal = False
+            reasons.append(f"record scientific hash mismatch for sample {stable_id}")
+        for key in _RECORD_UPSTREAM_IDENTITY_FIELDS:
+            if not _contribution_values_equal(left_record.get(key), right_record.get(key)):
+                record_scientific_hashes_equal = False
+                reasons.append(
+                    f"upstream identity mismatch for sample {stable_id} field {key}"
+                )
+        if not _contribution_values_equal(
+            left_record.get("split_membership"), right_record.get("split_membership")
+        ):
+            coverage_equal = False
+            reasons.append(f"split membership mismatch for sample {stable_id}")
+
+        left_depths = _mapping_or_empty(left_record.get("depth_targets"))
+        right_depths = _mapping_or_empty(right_record.get("depth_targets"))
+        for depth in sorted(set(left_depths) | set(right_depths)):
+            left_depth = left_depths.get(depth)
+            right_depth = right_depths.get(depth)
             if not isinstance(left_depth, Mapping) or not isinstance(right_depth, Mapping):
                 utility_tables_equal = False
                 signed_shapley_equal = False
                 allocations_equal = False
                 reasons.append(f"depth target mismatch for sample {stable_id} depth {depth}")
                 continue
+            where = f"sample {stable_id} depth {depth}"
             if not _contribution_values_equal(
-                left_depth.get("coalition_table"), right_depth.get("coalition_table")
+                left_depth.get("ordered_player_layers"),
+                right_depth.get("ordered_player_layers"),
             ):
                 utility_tables_equal = False
-                reasons.append(f"utility table mismatch for sample {stable_id} depth {depth}")
+                reasons.append(f"coalition enumeration mismatch for {where}")
+            if not _compare_coalition_tables(
+                left=left_depth.get("coalition_table"),
+                right=right_depth.get("coalition_table"),
+                sample=stable_id,
+                depth=depth,
+                reasons=reasons,
+            ):
+                utility_tables_equal = False
             for family in TARGET_FAMILIES:
-                left_family = left_depth.get(family, {})
-                right_family = right_depth.get(family, {})
+                left_family = _mapping_or_empty(left_depth.get(family))
+                right_family = _mapping_or_empty(right_depth.get(family))
+                scope = f"{where} family {family}"
+                for key, label in _FAMILY_UTILITY_FIELDS:
+                    if not _contribution_values_equal(
+                        left_family.get(key), right_family.get(key)
+                    ):
+                        utility_tables_equal = False
+                        reasons.append(f"{label} mismatch for {scope}")
                 if not _contribution_values_equal(
                     left_family.get("raw_signed_shapley_by_layer"),
                     right_family.get("raw_signed_shapley_by_layer"),
-                ) or not _contribution_values_equal(
+                ):
+                    signed_shapley_equal = False
+                    reasons.append(f"signed Shapley mismatch for {scope}")
+                if not _contribution_values_equal(
                     left_family.get("efficiency_residual"),
                     right_family.get("efficiency_residual"),
                 ):
                     signed_shapley_equal = False
-                    reasons.append(
-                        f"signed Shapley mismatch for sample {stable_id} "
-                        f"depth {depth} family {family}"
-                    )
+                    reasons.append(f"efficiency residual mismatch for {scope}")
                 if not _contribution_values_equal(
                     left_family.get("positive_allocation_target_by_layer"),
                     right_family.get("positive_allocation_target_by_layer"),
                 ):
                     allocations_equal = False
-                    reasons.append(
-                        f"allocation mismatch for sample {stable_id} "
-                        f"depth {depth} family {family}"
-                    )
+                    reasons.append(f"allocation mismatch for {scope}")
 
     gt_calibration_equal = _contribution_values_equal(
-        left.calibration_artifact, right.calibration_artifact
+        first.get("calibration_artifact"), second.get("calibration_artifact")
     )
     if not gt_calibration_equal:
         reasons.append("GT calibration scientific content mismatch")
     shapley_normalization_equal = _contribution_values_equal(
-        left.normalization, right.normalization
+        first.get("normalization"), second.get("normalization")
     )
     if not shapley_normalization_equal:
         reasons.append("Shapley normalization scientific content mismatch")
     teacher_forward_count_equal = (
-        left.teacher_forward_count == 0 and right.teacher_forward_count == 0
+        first.get("teacher_forward_count") == 0
+        and second.get("teacher_forward_count") == 0
     )
     if not teacher_forward_count_equal:
         reasons.append("teacher forward count must be zero for both collections")
     file_byte_equal = _contribution_values_equal(
-        _contribution_file_hashes(left.run_dir),
-        _contribution_file_hashes(right.run_dir),
+        first.get("file_hashes"), second.get("file_hashes")
     )
     scientific_predicates = (
         layered_identities_equal,
@@ -4549,7 +4680,6 @@ def compare_contribution_target_collections(
         shapley_normalization_equal,
         coverage_equal,
         teacher_forward_count_equal,
-        record_identity_equal,
     )
     return ContributionTargetCollectionComparison(
         scientifically_equivalent=all(scientific_predicates),
@@ -4564,4 +4694,26 @@ def compare_contribution_target_collections(
         coverage_equal=coverage_equal,
         teacher_forward_count_equal=teacher_forward_count_equal,
         file_byte_equal=file_byte_equal,
+    )
+
+
+def _require_verified_collection(value: Any) -> VerifiedContributionTargetCollection:
+    if not _is_verified_collection(value):
+        _fail(
+            "B2_CONTRIBUTION_COLLECTION_NOT_VERIFIED",
+            "comparison accepts only collections returned by production verification",
+        )
+    return value
+
+
+def compare_contribution_target_collections(
+    *,
+    first: VerifiedContributionTargetCollection,
+    second: VerifiedContributionTargetCollection,
+) -> ContributionTargetCollectionComparison:
+    """Compare two independently disk-verified collections exactly."""
+
+    return _compare_contribution_target_payloads(
+        first=_contribution_comparison_payload(_require_verified_collection(first)),
+        second=_contribution_comparison_payload(_require_verified_collection(second)),
     )

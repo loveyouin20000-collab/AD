@@ -1,11 +1,15 @@
 #!/usr/bin/env python3
-"""B2-04A contribution-target qualification CLI.
+"""B2 contribution-target materialization CLI.
 
-B2-04A is a contract-only increment: ``--dry-run`` performs the complete
-scientific computation (GT map calibration, all dual-family target records, the
-training-only Shapley normalization, every layered identity, and the plan hash)
-and writes nothing at all. A non-dry-run invocation with the tracked Gate-C
-configuration fails closed because official materialization is disabled.
+``--dry-run`` performs the complete scientific computation (GT map calibration,
+all dual-family target records, the training-only Shapley normalization, every
+layered identity, and the plan hash) and writes nothing at all.
+
+Non-dry-run behavior is configuration-driven. With the tracked Gate-C
+configuration it still fails closed because official materialization is
+disabled; with the official B2-04B configuration it materializes one fresh,
+fully verified run directory, and the repository identity gate additionally
+requires the frozen contract tag, a descendant HEAD, and a clean worktree.
 
 The CLI never loads a teacher checkpoint, never runs a backbone, never touches a
 target-domain dataset, and never selects a machine-local path of its own: every

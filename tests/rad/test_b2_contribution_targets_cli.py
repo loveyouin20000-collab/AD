@@ -23,7 +23,9 @@ Contract assumed by these tests:
 from __future__ import annotations
 
 import contextlib
+import dataclasses
 import hashlib
+import inspect
 import io
 import json
 import os
@@ -36,6 +38,7 @@ import pytest
 
 import rad.phase_b.b2_contribution_targets as subject
 import tests.rad.b2_contribution_target_fixtures as fixtures
+import tests.rad.test_b2_contribution_targets as domain_tests
 from tools import create_b2_contribution_targets as cli_mod
 from tools import qualify_b2_contribution_target_reproduction as qualification_mod
 
@@ -611,3 +614,302 @@ def test_qualification_writer_fails_closed_on_missing_decisions(
     )
     assert code == 1
     assert not (tmp_path / "evidence").exists()
+
+
+SCIENTIFIC_COMPARISON_PREDICATES = (
+    "layered_identities_equal",
+    "record_scientific_hashes_equal",
+    "utility_tables_equal",
+    "signed_shapley_equal",
+    "allocations_equal",
+    "gt_calibration_equal",
+    "shapley_normalization_equal",
+    "coverage_equal",
+    "teacher_forward_count_equal",
+)
+
+
+@pytest.fixture(scope="module")
+def qualification_bundle(
+    tmp_path_factory: pytest.TempPathFactory, target_fixture: Any
+) -> tuple[Path, Path, Path, Path]:
+    root = tmp_path_factory.mktemp("qualification-bundle")
+    config_path, run_a, run_b = _qualification_runs(root, target_fixture)
+    results_path = root / "qualification-results.json"
+    results_path.write_text(
+        json.dumps(_qualification_results_payload(), sort_keys=True) + "\n",
+        encoding="utf-8",
+    )
+    return config_path, run_a, run_b, results_path
+
+
+def _qualification_args(
+    bundle: tuple[Path, Path, Path, Path], output_dir: Path
+) -> list[str]:
+    config_path, run_a, run_b, results_path = bundle
+    return [
+        "--config",
+        str(config_path),
+        "--run-a",
+        str(run_a),
+        "--run-b",
+        str(run_b),
+        "--qualification-results",
+        str(results_path),
+        "--output-dir",
+        str(output_dir),
+        "--seed",
+        "0",
+    ]
+
+
+@pytest.mark.parametrize("failing_replace", [1, 2])
+def test_qualification_writer_leaves_no_partial_output_when_a_replace_fails(
+    tmp_path: Path,
+    qualification_bundle: tuple[Path, Path, Path, Path],
+    monkeypatch: pytest.MonkeyPatch,
+    failing_replace: int,
+) -> None:
+    output_dir = tmp_path / "evidence"
+    args = _qualification_args(qualification_bundle, output_dir)
+    production_replace = os.replace
+    calls = {"count": 0}
+
+    def flaky_replace(source: Any, destination: Any) -> None:
+        calls["count"] += 1
+        if calls["count"] == failing_replace:
+            raise OSError("injected atomic replace failure")
+        production_replace(source, destination)
+
+    monkeypatch.setattr(qualification_mod.os, "replace", flaky_replace)
+    assert qualification_mod.main(args) == 1
+    assert calls["count"] == failing_replace
+    assert not (output_dir / QUALIFICATION_JSON_NAME).exists()
+    assert not (output_dir / QUALIFICATION_MARKDOWN_NAME).exists()
+    assert _snapshot_tree(output_dir) == {}
+
+    monkeypatch.setattr(qualification_mod.os, "replace", production_replace)
+    assert qualification_mod.main(args) == 0
+    assert (output_dir / QUALIFICATION_JSON_NAME).is_file()
+    assert (output_dir / QUALIFICATION_MARKDOWN_NAME).is_file()
+
+
+def test_qualification_writer_rejects_an_unverified_collection(
+    tmp_path: Path,
+    qualification_bundle: tuple[Path, Path, Path, Path],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    production_verify = subject.verify_contribution_target_collection
+
+    def unregistered(**kwargs: Any) -> Any:
+        return dataclasses.replace(production_verify(**kwargs))
+
+    monkeypatch.setattr(subject, "verify_contribution_target_collection", unregistered)
+    output_dir = tmp_path / "evidence"
+    assert qualification_mod.main(_qualification_args(qualification_bundle, output_dir)) == 1
+    assert not output_dir.exists()
+
+
+@pytest.mark.parametrize("predicate", SCIENTIFIC_COMPARISON_PREDICATES)
+def test_qualification_writer_rejects_any_false_scientific_predicate(
+    tmp_path: Path,
+    qualification_bundle: tuple[Path, Path, Path, Path],
+    monkeypatch: pytest.MonkeyPatch,
+    predicate: str,
+) -> None:
+    production_compare = subject.compare_contribution_target_collections
+
+    def degraded(**kwargs: Any) -> Any:
+        comparison = production_compare(**kwargs)
+        assert getattr(comparison, predicate) is True
+        return dataclasses.replace(comparison, **{predicate: False})
+
+    monkeypatch.setattr(subject, "compare_contribution_target_collections", degraded)
+    output_dir = tmp_path / "evidence"
+    assert qualification_mod.main(_qualification_args(qualification_bundle, output_dir)) == 1
+    assert not output_dir.exists()
+
+
+@dataclasses.dataclass(frozen=True)
+class _TeacherForwardProbe:
+    manifest: Any
+    teacher_forward_count: int
+
+
+def test_qualification_writer_rejects_a_nonzero_teacher_forward_count(
+    qualification_bundle: tuple[Path, Path, Path, Path],
+) -> None:
+    config_path, run_a, run_b, results_path = qualification_bundle
+    config = subject.load_contribution_targets_config(config_path)
+    verified_a = subject.verify_contribution_target_collection(config=config, run_dir=run_a)
+    verified_b = subject.verify_contribution_target_collection(config=config, run_dir=run_b)
+    comparison = subject.compare_contribution_target_collections(
+        first=verified_a, second=verified_b
+    )
+    results = qualification_mod._load_qualification_results(results_path)
+    for counts in ((1, 0), (0, 1)):
+        with pytest.raises(subject.ContributionTargetError) as excinfo:
+            qualification_mod._build_evidence(
+                config_path=config_path,
+                config=config,
+                run_a=_TeacherForwardProbe(verified_a.manifest, counts[0]),
+                run_b=_TeacherForwardProbe(verified_b.manifest, counts[1]),
+                comparison=comparison,
+                qualification_results=results,
+                seed=0,
+            )
+        assert str(getattr(excinfo.value, "code", "")) == (
+            "B2_CONTRIBUTION_QUALIFICATION_INVALID"
+        )
+        assert "teacher forward" in str(excinfo.value)
+
+
+NEGATIVE_CONTROL_TEST_MAP: dict[str, tuple[Any, str | None]] = {
+    "record_file_byte_drift": (domain_tests.test_record_file_hash_mismatch_is_detected, None),
+    "record_scientific_hash_drift": (
+        domain_tests.test_record_scientific_hash_mismatch_is_detected,
+        None,
+    ),
+    "coalition_utility_component_drift": (
+        domain_tests.test_comparison_categorizes_every_scientific_mismatch,
+        "coalition_utility_component_drift",
+    ),
+    "raw_utility_drift": (
+        domain_tests.test_comparison_categorizes_every_scientific_mismatch,
+        "raw_utility_drift",
+    ),
+    "centered_value_drift": (
+        domain_tests.test_comparison_categorizes_every_scientific_mismatch,
+        "centered_value_drift",
+    ),
+    "signed_shapley_drift": (
+        domain_tests.test_comparison_categorizes_every_scientific_mismatch,
+        "signed_shapley_drift",
+    ),
+    "allocation_drift": (
+        domain_tests.test_comparison_categorizes_every_scientific_mismatch,
+        "allocation_drift",
+    ),
+    "efficiency_residual_above_tolerance": (
+        domain_tests.test_build_target_record_fails_closed_on_efficiency_violation,
+        None,
+    ),
+    "changed_split_membership": (
+        domain_tests.test_comparison_categorizes_every_scientific_mismatch,
+        "changed_split_membership",
+    ),
+    "training_record_moved_to_calibration": (
+        domain_tests.test_training_access_mode_fails_closed_on_calibration_or_evaluation_records,
+        None,
+    ),
+    "calibration_record_in_gt_fitting": (
+        domain_tests.test_gt_map_calibration_rejects_non_training_samples_from_the_fixture,
+        None,
+    ),
+    "evaluation_record_in_normalization": (
+        domain_tests.test_shapley_normalization_uses_only_the_sixteen_training_records,
+        None,
+    ),
+    "gt_calibration_statistic_drift": (
+        domain_tests.test_tampered_gt_map_calibration_statistics_fail_closed,
+        None,
+    ),
+    "shapley_normalization_statistic_drift": (
+        domain_tests.test_tampered_shapley_normalization_statistics_fail_closed,
+        None,
+    ),
+    "teacher_cache_identity_drift": (
+        domain_tests.test_bind_upstream_identities_rejects_upstream_hash_drift,
+        None,
+    ),
+    "descriptor_collection_identity_drift": (
+        domain_tests.test_bind_upstream_identities_rejects_teacher_descriptor_mismatch,
+        None,
+    ),
+    "descriptor_record_identity_drift": (
+        domain_tests.test_comparison_categorizes_every_scientific_mismatch,
+        "descriptor_record_identity_drift",
+    ),
+    "wrong_split_checkpoint_profile": (
+        domain_tests.test_bind_upstream_identities_rejects_sample_and_split_mismatch,
+        None,
+    ),
+    "target_domain_or_visa_source": (
+        domain_tests.test_module_avoids_teacher_loading_and_target_domain,
+        None,
+    ),
+    "missing_record": (
+        domain_tests.test_orphan_extra_and_temporary_artifacts_fail_the_integrity_audit,
+        None,
+    ),
+    "extra_record": (
+        domain_tests.test_orphan_extra_and_temporary_artifacts_fail_the_integrity_audit,
+        None,
+    ),
+    "orphan_pt": (
+        domain_tests.test_orphan_extra_and_temporary_artifacts_fail_the_integrity_audit,
+        None,
+    ),
+    "path_traversal": (domain_tests.test_run_relative_paths_reject_traversal, "../escape.pt"),
+    "symlink_escape": (
+        domain_tests.test_symlink_escape_from_the_run_directory_is_rejected,
+        None,
+    ),
+    "missing_receipt": (
+        domain_tests.test_missing_and_mismatched_final_manifest_receipt_fail_closed,
+        None,
+    ),
+    "receipt_mismatch": (
+        domain_tests.test_missing_and_mismatched_final_manifest_receipt_fail_closed,
+        None,
+    ),
+    "output_directory_collision": (
+        domain_tests.test_output_collision_and_resume_fail_closed,
+        None,
+    ),
+    "completed_run_reuse": (domain_tests.test_output_collision_and_resume_fail_closed, None),
+    "resume_attempt": (domain_tests.test_output_collision_and_resume_fail_closed, None),
+    "wrong_expected_plan_sha": (
+        domain_tests.test_expected_plan_hash_mismatch_fails_before_any_write,
+        None,
+    ),
+    "dirty_official_worktree": (
+        domain_tests.test_official_api_rechecks_repository_identity_before_any_write,
+        None,
+    ),
+    "non_descendant_official_head": (
+        domain_tests.test_official_api_rejects_a_non_descendant_head,
+        "sibling",
+    ),
+    "moved_or_missing_contract_tag": (
+        domain_tests.test_repository_identity_verifier_rejects_missing_or_moved_tag,
+        None,
+    ),
+    "nonzero_teacher_forward_count": (
+        domain_tests.test_verifier_rejects_a_nonzero_manifest_teacher_forward_count,
+        None,
+    ),
+}
+
+
+def _parametrized_case_ids(test_case: Any) -> tuple[str, ...]:
+    ids: list[str] = []
+    for mark in getattr(test_case, "pytestmark", ()):
+        if mark.name == "parametrize":
+            ids.extend(str(value) for value in mark.args[1])
+    return tuple(ids)
+
+
+def test_every_negative_control_id_maps_to_a_real_asserting_test_case() -> None:
+    assert qualification_mod.NEGATIVE_CONTROL_CASE_IDS == NEGATIVE_CONTROL_CASE_IDS
+    assert len(NEGATIVE_CONTROL_CASE_IDS) == 34
+    assert len(set(NEGATIVE_CONTROL_CASE_IDS)) == 34
+    assert set(NEGATIVE_CONTROL_TEST_MAP) == set(NEGATIVE_CONTROL_CASE_IDS)
+    for case_id, (test_case, parameter) in NEGATIVE_CONTROL_TEST_MAP.items():
+        assert callable(test_case), case_id
+        assert test_case.__name__.startswith("test_"), case_id
+        assert test_case.__module__ == domain_tests.__name__, case_id
+        source = inspect.getsource(test_case)
+        assert "assert " in source or "pytest.raises" in source, case_id
+        if parameter is not None:
+            assert parameter in _parametrized_case_ids(test_case), case_id
