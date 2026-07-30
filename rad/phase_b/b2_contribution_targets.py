@@ -35,9 +35,11 @@ import hashlib
 import json
 import math
 import os
+import subprocess
 import tempfile
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
+from dataclasses import field as dataclass_field
 from pathlib import Path, PurePath, PurePosixPath
 from types import MappingProxyType
 from typing import Any, NamedTuple, NoReturn
@@ -2365,6 +2367,10 @@ def load_targets_for_access(
 
 TRACKED_CONFIGURATION_ID = "b2_contribution_targets_gate_c"
 CONTRACT_STAGE = "b2_04a"
+OFFICIAL_CONFIGURATION_ID = "b2_contribution_targets_official_v1"
+OFFICIAL_CONTRACT_STAGE = "b2_04b"
+EXPECTED_CONTRIBUTION_CONTRACT_TAG = "b2-contribution-target-contract-v1"
+EXPECTED_CONTRIBUTION_CONTRACT_COMMIT = "29591668c3228f6cebd7fd923ae1c39c6dad49bc"
 CONFIG_SCHEMA_VERSION = 1
 MANIFEST_SCHEMA_VERSION = 1
 
@@ -2565,9 +2571,24 @@ def _numeric_mapping_equal(actual: Mapping[str, Any], expected: Mapping[str, Any
 
 def _validate_pinned_contribution_config(config: ContributionTargetsConfig) -> None:
     tracked = config.configuration_id == TRACKED_CONFIGURATION_ID
+    gate_c_profile = (
+        config.contract_stage == CONTRACT_STAGE
+        and config.repository_identity_gate_enabled is False
+        and config.expected_contribution_contract_tag is None
+        and config.expected_contribution_contract_commit is None
+    )
+    official_profile = (
+        config.configuration_id == OFFICIAL_CONFIGURATION_ID
+        and config.contract_stage == OFFICIAL_CONTRACT_STAGE
+        and config.official_materialization_enabled is True
+        and config.expected_input_artifact_kind == PRODUCTION_ARTIFACT_KIND
+        and config.repository_identity_gate_enabled is True
+        and config.expected_contribution_contract_tag == EXPECTED_CONTRIBUTION_CONTRACT_TAG
+        and config.expected_contribution_contract_commit == EXPECTED_CONTRIBUTION_CONTRACT_COMMIT
+    )
     if (
         config.schema_version != CONFIG_SCHEMA_VERSION
-        or config.contract_stage != CONTRACT_STAGE
+        or not (gate_c_profile or official_profile)
         or config.expected_input_artifact_kind not in _ACCEPTED_INPUT_ARTIFACT_KINDS
         or config.expected_execution_profile_sha256 != _EXPECTED_EXECUTION_PROFILE_SHA256
         or config.expected_split_scientific_sha256 != _EXPECTED_SPLIT_SCIENTIFIC_SHA256
@@ -2605,9 +2626,6 @@ def _validate_pinned_contribution_config(config: ContributionTargetsConfig) -> N
         or config.dry_run_complete_compute is not True
         or config.expected_plan_sha_required_for_official is not True
         or config.primary_target_dtype != STATISTICS_DTYPE
-        or config.repository_identity_gate_enabled is not False
-        or config.expected_contribution_contract_tag is not None
-        or config.expected_contribution_contract_commit is not None
         or (tracked and config.official_materialization_enabled is not False)
         or (tracked and config.expected_input_artifact_kind != PRODUCTION_ARTIFACT_KIND)
     ):
@@ -3425,6 +3443,20 @@ class ContributionTargetMaterializationResult:
 
 
 @dataclass(frozen=True)
+class ContributionRepositoryIdentity:
+    """Verified outer Git provenance for one official materialization."""
+
+    contract_tag: str
+    contract_commit: str
+    generation_commit: str
+    head_is_descendant: bool
+    worktree_clean: bool
+
+
+_VERIFIED_CONTRIBUTION_COLLECTION_SEAL = object()
+
+
+@dataclass(frozen=True)
 class VerifiedContributionTargetCollection:
     """A disk-verified contribution-target collection."""
 
@@ -3434,6 +3466,109 @@ class VerifiedContributionTargetCollection:
     calibration_artifact: Mapping[str, Any]
     normalization: Mapping[str, Any]
     teacher_forward_count: int
+    _verification_seal: object | None = dataclass_field(
+        default=None, repr=False, compare=False
+    )
+
+
+@dataclass(frozen=True)
+class ContributionTargetCollectionComparison:
+    """Exact scientific and byte-level comparison of two verified collections."""
+
+    scientifically_equivalent: bool
+    reasons: tuple[str, ...]
+    layered_identities_equal: bool
+    record_scientific_hashes_equal: bool
+    utility_tables_equal: bool
+    signed_shapley_equal: bool
+    allocations_equal: bool
+    gt_calibration_equal: bool
+    shapley_normalization_equal: bool
+    coverage_equal: bool
+    teacher_forward_count_equal: bool
+    file_byte_equal: bool
+
+
+def _run_contribution_git(repository_root: Path, *arguments: str) -> subprocess.CompletedProcess[str]:
+    try:
+        return subprocess.run(
+            ["git", "-C", str(repository_root), *arguments],
+            check=False,
+            capture_output=True,
+            text=True,
+        )
+    except OSError as exc:
+        _fail("B2_CONTRIBUTION_REPOSITORY_INVALID", f"cannot execute Git: {exc}")
+
+
+def verify_contribution_repository_identity(
+    *,
+    config: ContributionTargetsConfig,
+    repository_root: Path,
+    expected_generation_commit: str | None = None,
+) -> ContributionRepositoryIdentity:
+    """Verify the frozen contract tag, descendant HEAD, and clean worktree."""
+
+    root = Path(repository_root)
+    if (
+        not config.repository_identity_gate_enabled
+        or config.expected_contribution_contract_tag != EXPECTED_CONTRIBUTION_CONTRACT_TAG
+        or config.expected_contribution_contract_commit != EXPECTED_CONTRIBUTION_CONTRACT_COMMIT
+    ):
+        _fail(
+            "B2_CONTRIBUTION_REPOSITORY_IDENTITY_CONFIG_INVALID",
+            "repository identity verification requires the frozen B2-04B contract",
+        )
+    tag_result = _run_contribution_git(
+        root, "rev-parse", "--verify", f"{config.expected_contribution_contract_tag}^{{commit}}"
+    )
+    resolved_tag = tag_result.stdout.strip()
+    if tag_result.returncode != 0 or resolved_tag != config.expected_contribution_contract_commit:
+        _fail(
+            "B2_CONTRIBUTION_CONTRACT_TAG_INVALID",
+            "the configured contribution contract tag is missing or moved",
+        )
+    head_result = _run_contribution_git(root, "rev-parse", "--verify", "HEAD")
+    generation_commit = head_result.stdout.strip()
+    if head_result.returncode != 0 or len(generation_commit) != 40:
+        _fail("B2_CONTRIBUTION_REPOSITORY_INVALID", "cannot resolve repository HEAD")
+    ancestor_result = _run_contribution_git(
+        root,
+        "merge-base",
+        "--is-ancestor",
+        config.expected_contribution_contract_commit,
+        generation_commit,
+    )
+    if ancestor_result.returncode != 0:
+        _fail(
+            "B2_CONTRIBUTION_HEAD_NOT_DESCENDANT",
+            "repository HEAD is not a descendant of the contribution contract commit",
+        )
+    if (
+        expected_generation_commit is not None
+        and generation_commit != expected_generation_commit
+    ):
+        _fail(
+            "B2_CONTRIBUTION_GENERATION_COMMIT_CHANGED",
+            "repository HEAD changed during contribution-target calculation",
+        )
+    status_result = _run_contribution_git(
+        root, "status", "--porcelain", "--untracked-files=all"
+    )
+    if status_result.returncode != 0:
+        _fail("B2_CONTRIBUTION_REPOSITORY_INVALID", "cannot inspect repository status")
+    if status_result.stdout:
+        _fail(
+            "B2_CONTRIBUTION_WORKTREE_DIRTY",
+            "official contribution-target materialization requires a clean worktree",
+        )
+    return ContributionRepositoryIdentity(
+        contract_tag=config.expected_contribution_contract_tag,
+        contract_commit=config.expected_contribution_contract_commit,
+        generation_commit=generation_commit,
+        head_is_descendant=True,
+        worktree_clean=True,
+    )
 
 
 def contribution_record_relative_path(stable_sample_id: Any) -> str:
@@ -3871,6 +4006,7 @@ def build_contribution_targets_manifest(
     record_entries: Sequence[PersistedTargetRecordEntry],
     calibration_entry: PersistedStatisticsEntry | None,
     normalization_entry: PersistedStatisticsEntry | None,
+    repository_identity: ContributionRepositoryIdentity | None = None,
 ) -> dict[str, Any]:
     """Build the passed final manifest from dual-hash verified disk entries."""
 
@@ -3969,6 +4105,14 @@ def build_contribution_targets_manifest(
     }
     for identity in SEVEN_LAYERED_IDENTITY_KEYS:
         manifest[identity] = str(plan[identity])
+    if repository_identity is not None:
+        manifest["repository_identity"] = {
+            "contract_tag": repository_identity.contract_tag,
+            "contract_commit": repository_identity.contract_commit,
+            "generation_commit": repository_identity.generation_commit,
+            "head_is_descendant": repository_identity.head_is_descendant,
+            "worktree_clean": repository_identity.worktree_clean,
+        }
     return manifest
 
 
@@ -4010,12 +4154,25 @@ def materialize_contribution_target_collection(
     inputs: Any,
     output_run_dir: Any,
     expected_plan_sha256: Any,
+    repository_root: Any | None = None,
     candidate_layers: Sequence[int] | None = None,
     prediction_depths: Sequence[int] | None = None,
 ) -> ContributionTargetMaterializationResult:
     """Materialize one fresh, fully verified contribution-target run directory."""
 
     require_official_materialization_enabled(config)
+    repository_identity: ContributionRepositoryIdentity | None = None
+    repository_path: Path | None = None
+    if config.repository_identity_gate_enabled:
+        if repository_root is None:
+            _fail(
+                "B2_CONTRIBUTION_REPOSITORY_ROOT_REQUIRED",
+                "official materialization requires a repository root",
+            )
+        repository_path = Path(repository_root)
+        repository_identity = verify_contribution_repository_identity(
+            config=config, repository_root=repository_path
+        )
     if config.expected_input_artifact_kind == PRODUCTION_ARTIFACT_KIND:
         require_production_artifact_kind(
             {"artifact_kind": getattr(inputs, "artifact_kind", None)}
@@ -4026,6 +4183,11 @@ def materialize_contribution_target_collection(
             "input artifact kind does not match the configured expectation",
         )
     expected = _require_expected_plan_sha256(config, expected_plan_sha256)
+    run_dir = Path(output_run_dir)
+    try:
+        refuse_existing_run(run_dir)
+    except OutputProtectionError as exc:
+        _fail("B2_CONTRIBUTION_OUTPUT_DIR_EXISTS", str(exc))
 
     collection = run_contribution_target_collection(
         config=config,
@@ -4040,11 +4202,13 @@ def materialize_contribution_target_collection(
             f"recomputed plan hash {recomputed} does not match the expected {expected}",
         )
 
-    run_dir = Path(output_run_dir)
-    try:
-        refuse_existing_run(run_dir)
-    except OutputProtectionError as exc:
-        _fail("B2_CONTRIBUTION_OUTPUT_DIR_EXISTS", str(exc))
+    if repository_identity is not None:
+        assert repository_path is not None
+        repository_identity = verify_contribution_repository_identity(
+            config=config,
+            repository_root=repository_path,
+            expected_generation_commit=repository_identity.generation_commit,
+        )
     run_dir.mkdir(parents=True, exist_ok=False)
     (run_dir / RECORDS_DIRECTORY).mkdir(parents=True, exist_ok=False)
 
@@ -4069,6 +4233,7 @@ def materialize_contribution_target_collection(
         record_entries=record_entries,
         calibration_entry=calibration_entry,
         normalization_entry=normalization_entry,
+        repository_identity=repository_identity,
     )
     write_final_manifest_with_receipt_atomic(run_dir, manifest)
     verify_contribution_target_collection(config=config, run_dir=run_dir)
@@ -4186,5 +4351,217 @@ def verify_contribution_target_collection(
         records_by_id=MappingProxyType(records_by_id),
         calibration_artifact=calibration_artifact,
         normalization=normalization,
-        teacher_forward_count=0,
+        teacher_forward_count=int(manifest.get("teacher_forward_count", -1)),
+        _verification_seal=_VERIFIED_CONTRIBUTION_COLLECTION_SEAL,
+    )
+
+
+def _contribution_values_equal(first: Any, second: Any) -> bool:
+    if isinstance(first, torch.Tensor) or isinstance(second, torch.Tensor):
+        return (
+            isinstance(first, torch.Tensor)
+            and isinstance(second, torch.Tensor)
+            and torch.equal(first, second)
+        )
+    if isinstance(first, Mapping) or isinstance(second, Mapping):
+        if not isinstance(first, Mapping) or not isinstance(second, Mapping):
+            return False
+        return set(first) == set(second) and all(
+            _contribution_values_equal(first[key], second[key]) for key in first
+        )
+    if isinstance(first, list | tuple) or isinstance(second, list | tuple):
+        if not isinstance(first, list | tuple) or not isinstance(second, list | tuple):
+            return False
+        return len(first) == len(second) and all(
+            _contribution_values_equal(left, right)
+            for left, right in zip(first, second, strict=True)
+        )
+    return bool(first == second)
+
+
+def _contribution_file_hashes(root: Path) -> Mapping[str, str]:
+    return {
+        path.relative_to(root).as_posix(): _sha256_file(path)
+        for path in sorted(root.rglob("*"))
+        if path.is_file()
+    }
+
+
+def _require_sealed_collection(value: Any) -> VerifiedContributionTargetCollection:
+    if (
+        not isinstance(value, VerifiedContributionTargetCollection)
+        or value._verification_seal is not _VERIFIED_CONTRIBUTION_COLLECTION_SEAL
+    ):
+        _fail(
+            "B2_CONTRIBUTION_COLLECTION_NOT_VERIFIED",
+            "comparison accepts only collections sealed by production verification",
+        )
+    return value
+
+
+def compare_contribution_target_collections(
+    *,
+    first: VerifiedContributionTargetCollection,
+    second: VerifiedContributionTargetCollection,
+) -> ContributionTargetCollectionComparison:
+    """Compare two independently disk-verified collections exactly."""
+
+    left = _require_sealed_collection(first)
+    right = _require_sealed_collection(second)
+    reasons: list[str] = []
+
+    layered_fields = (
+        "contribution_plan_scientific_sha256",
+        *SEVEN_LAYERED_IDENTITY_KEYS,
+    )
+    layered_identities_equal = all(
+        left.manifest.get(key) == right.manifest.get(key) for key in layered_fields
+    )
+    if not layered_identities_equal:
+        reasons.append("layered scientific identity mismatch")
+
+    left_ids = tuple(sorted(left.records_by_id))
+    right_ids = tuple(sorted(right.records_by_id))
+    coverage_equal = (
+        left_ids == right_ids
+        and _contribution_values_equal(
+            left.manifest.get("planned_ordered_stable_sample_ids"),
+            right.manifest.get("planned_ordered_stable_sample_ids"),
+        )
+        and _contribution_values_equal(
+            left.manifest.get("split_counts"), right.manifest.get("split_counts")
+        )
+        and all(
+            left.records_by_id[stable_id].get("split_membership")
+            == right.records_by_id[stable_id].get("split_membership")
+            for stable_id in set(left_ids) & set(right_ids)
+        )
+    )
+    if not coverage_equal:
+        reasons.append("split or sample coverage mismatch")
+
+    record_scientific_hashes_equal = left_ids == right_ids and all(
+        left.records_by_id[stable_id].get(
+            "contribution_target_record_scientific_sha256"
+        )
+        == right.records_by_id[stable_id].get(
+            "contribution_target_record_scientific_sha256"
+        )
+        for stable_id in left_ids
+    )
+    if not record_scientific_hashes_equal:
+        reasons.append("record scientific hash mismatch")
+
+    utility_tables_equal = True
+    signed_shapley_equal = True
+    allocations_equal = True
+    record_identity_equal = True
+    record_identity_fields = (
+        "source_teacher_record_scientific_sha256",
+        "descriptor_record_scientific_sha256",
+        "teacher_cache_scientific_sha256",
+        "teacher_cache_sample_coverage_sha256",
+        "descriptor_collection_scientific_sha256",
+        "split_scientific_sha256",
+        "checkpoint_sha256",
+        "execution_profile_sha256",
+    )
+    for stable_id in sorted(set(left_ids) & set(right_ids)):
+        left_record = left.records_by_id[stable_id]
+        right_record = right.records_by_id[stable_id]
+        if any(
+            not _contribution_values_equal(
+                left_record.get(key), right_record.get(key)
+            )
+            for key in record_identity_fields
+        ):
+            record_identity_equal = False
+            reasons.append(f"descriptor or upstream identity mismatch for sample {stable_id}")
+        depth_keys = sorted(
+            set(left_record.get("depth_targets", {}))
+            | set(right_record.get("depth_targets", {}))
+        )
+        for depth in depth_keys:
+            left_depth = left_record.get("depth_targets", {}).get(depth)
+            right_depth = right_record.get("depth_targets", {}).get(depth)
+            if not isinstance(left_depth, Mapping) or not isinstance(right_depth, Mapping):
+                utility_tables_equal = False
+                signed_shapley_equal = False
+                allocations_equal = False
+                reasons.append(f"depth target mismatch for sample {stable_id} depth {depth}")
+                continue
+            if not _contribution_values_equal(
+                left_depth.get("coalition_table"), right_depth.get("coalition_table")
+            ):
+                utility_tables_equal = False
+                reasons.append(f"utility table mismatch for sample {stable_id} depth {depth}")
+            for family in TARGET_FAMILIES:
+                left_family = left_depth.get(family, {})
+                right_family = right_depth.get(family, {})
+                if not _contribution_values_equal(
+                    left_family.get("raw_signed_shapley_by_layer"),
+                    right_family.get("raw_signed_shapley_by_layer"),
+                ) or not _contribution_values_equal(
+                    left_family.get("efficiency_residual"),
+                    right_family.get("efficiency_residual"),
+                ):
+                    signed_shapley_equal = False
+                    reasons.append(
+                        f"signed Shapley mismatch for sample {stable_id} "
+                        f"depth {depth} family {family}"
+                    )
+                if not _contribution_values_equal(
+                    left_family.get("positive_allocation_target_by_layer"),
+                    right_family.get("positive_allocation_target_by_layer"),
+                ):
+                    allocations_equal = False
+                    reasons.append(
+                        f"allocation mismatch for sample {stable_id} "
+                        f"depth {depth} family {family}"
+                    )
+
+    gt_calibration_equal = _contribution_values_equal(
+        left.calibration_artifact, right.calibration_artifact
+    )
+    if not gt_calibration_equal:
+        reasons.append("GT calibration scientific content mismatch")
+    shapley_normalization_equal = _contribution_values_equal(
+        left.normalization, right.normalization
+    )
+    if not shapley_normalization_equal:
+        reasons.append("Shapley normalization scientific content mismatch")
+    teacher_forward_count_equal = (
+        left.teacher_forward_count == 0 and right.teacher_forward_count == 0
+    )
+    if not teacher_forward_count_equal:
+        reasons.append("teacher forward count must be zero for both collections")
+    file_byte_equal = _contribution_values_equal(
+        _contribution_file_hashes(left.run_dir),
+        _contribution_file_hashes(right.run_dir),
+    )
+    scientific_predicates = (
+        layered_identities_equal,
+        record_scientific_hashes_equal,
+        utility_tables_equal,
+        signed_shapley_equal,
+        allocations_equal,
+        gt_calibration_equal,
+        shapley_normalization_equal,
+        coverage_equal,
+        teacher_forward_count_equal,
+        record_identity_equal,
+    )
+    return ContributionTargetCollectionComparison(
+        scientifically_equivalent=all(scientific_predicates),
+        reasons=tuple(dict.fromkeys(reasons)),
+        layered_identities_equal=layered_identities_equal,
+        record_scientific_hashes_equal=record_scientific_hashes_equal,
+        utility_tables_equal=utility_tables_equal,
+        signed_shapley_equal=signed_shapley_equal,
+        allocations_equal=allocations_equal,
+        gt_calibration_equal=gt_calibration_equal,
+        shapley_normalization_equal=shapley_normalization_equal,
+        coverage_equal=coverage_equal,
+        teacher_forward_count_equal=teacher_forward_count_equal,
+        file_byte_equal=file_byte_equal,
     )

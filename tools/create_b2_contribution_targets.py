@@ -151,6 +151,7 @@ def main(argv: list[str] | None = None) -> int:
             inputs=inputs,
             output_run_dir=output_dir,
             expected_plan_sha256=args.expected_plan_sha256,
+            repository_root=repository_root,
         )
         official = {
             "mode": mode,

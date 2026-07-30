@@ -37,10 +37,50 @@ import pytest
 import rad.phase_b.b2_contribution_targets as subject
 import tests.rad.b2_contribution_target_fixtures as fixtures
 from tools import create_b2_contribution_targets as cli_mod
+from tools import qualify_b2_contribution_target_reproduction as qualification_mod
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 CLI_PATH = REPO_ROOT / "tools" / "create_b2_contribution_targets.py"
 RESULT_PREFIX = "B2_CONTRIBUTION_TARGETS_RESULT="
+QUALIFICATION_JSON_NAME = "b2_04b_contribution_targets_manifest.json"
+QUALIFICATION_MARKDOWN_NAME = "b2_04b_contribution_targets_report.md"
+
+NEGATIVE_CONTROL_CASE_IDS = (
+    "record_file_byte_drift",
+    "record_scientific_hash_drift",
+    "coalition_utility_component_drift",
+    "raw_utility_drift",
+    "centered_value_drift",
+    "signed_shapley_drift",
+    "allocation_drift",
+    "efficiency_residual_above_tolerance",
+    "changed_split_membership",
+    "training_record_moved_to_calibration",
+    "calibration_record_in_gt_fitting",
+    "evaluation_record_in_normalization",
+    "gt_calibration_statistic_drift",
+    "shapley_normalization_statistic_drift",
+    "teacher_cache_identity_drift",
+    "descriptor_collection_identity_drift",
+    "descriptor_record_identity_drift",
+    "wrong_split_checkpoint_profile",
+    "target_domain_or_visa_source",
+    "missing_record",
+    "extra_record",
+    "orphan_pt",
+    "path_traversal",
+    "symlink_escape",
+    "missing_receipt",
+    "receipt_mismatch",
+    "output_directory_collision",
+    "completed_run_reuse",
+    "resume_attempt",
+    "wrong_expected_plan_sha",
+    "dirty_official_worktree",
+    "non_descendant_official_head",
+    "moved_or_missing_contract_tag",
+    "nonzero_teacher_forward_count",
+)
 
 FORBIDDEN_FLAGS = (
     "--fixture",
@@ -417,3 +457,157 @@ def test_cli_never_imports_a_teacher_bundle_or_dataset_adapter() -> None:
         "torch.backends",
     ):
         assert forbidden not in source
+
+
+def _qualification_results_payload() -> dict[str, Any]:
+    return {
+        "schema_version": 1,
+        "semantic_spot_checks": {
+            "status": "passed",
+            "sample_count": 6,
+            "depths": [12, 18, 24],
+            "run_a_equals_run_b": True,
+        },
+        "source_only_audit": {
+            "status": "passed",
+            "target_domain_record_count": 0,
+            "teacher_forward_count": 0,
+        },
+        "negative_controls": {
+            "status": "passed",
+            "required": 34,
+            "passed": 34,
+            "case_ids": list(NEGATIVE_CONTROL_CASE_IDS),
+        },
+        "validation": {
+            name: {"status": "passed", "exit_code": 0, "summary": "passed"}
+            for name in ("focused_pytest", "full_cpu_pytest", "ruff", "mypy")
+        },
+    }
+
+
+def test_qualification_cli_exposes_only_the_required_arguments() -> None:
+    options = {
+        option
+        for action in qualification_mod._parser()._actions
+        for option in action.option_strings
+        if option.startswith("--") and option != "--help"
+    }
+    assert options == {
+        "--config",
+        "--run-a",
+        "--run-b",
+        "--qualification-results",
+        "--output-dir",
+        "--seed",
+        "--dry-run",
+    }
+
+
+def _qualification_runs(tmp_path: Path, target_fixture: Any) -> tuple[Path, Path, Path]:
+    config_path = fixtures.write_controlled_official_config(tmp_path)
+    config = subject.load_contribution_targets_config(config_path)
+    inputs = fixtures.fixture_input_bundle(target_fixture)
+    expected = subject.run_contribution_target_collection(
+        config=config, inputs=inputs
+    ).plan["contribution_plan_scientific_sha256"]
+    runs: list[Path] = []
+    for name in ("run-a", "run-b"):
+        result = subject.materialize_contribution_target_collection(
+            config=config,
+            inputs=inputs,
+            output_run_dir=tmp_path / name,
+            expected_plan_sha256=expected,
+        )
+        runs.append(result.run_dir)
+    return config_path, runs[0], runs[1]
+
+
+def test_qualification_writer_is_deterministic_atomic_and_dry_run_safe(
+    tmp_path: Path, target_fixture: Any
+) -> None:
+    config_path, run_a, run_b = _qualification_runs(tmp_path, target_fixture)
+    results_path = tmp_path / "qualification-results.json"
+    results_path.write_text(
+        json.dumps(_qualification_results_payload(), sort_keys=True) + "\n",
+        encoding="utf-8",
+    )
+    output_dir = tmp_path / "evidence"
+    args = [
+        "--config",
+        str(config_path),
+        "--run-a",
+        str(run_a),
+        "--run-b",
+        str(run_b),
+        "--qualification-results",
+        str(results_path),
+        "--output-dir",
+        str(output_dir),
+        "--seed",
+        "0",
+    ]
+    assert qualification_mod.main([*args, "--dry-run"]) == 0
+    assert not output_dir.exists()
+    assert qualification_mod.main(args) == 0
+    json_path = output_dir / QUALIFICATION_JSON_NAME
+    markdown_path = output_dir / QUALIFICATION_MARKDOWN_NAME
+    first_json = json_path.read_bytes()
+    first_markdown = markdown_path.read_bytes()
+    evidence = json.loads(first_json)
+    assert evidence["status"] == "deterministic_dual_contribution_target_reproduction"
+    assert evidence["comparison"]["scientifically_equivalent"] is True
+    assert evidence["teacher_forward_count"] == 0
+    assert len(evidence["runs"]["run_a"]["ordered_record_hashes"]) == 32
+    assert set(subject.SEVEN_LAYERED_IDENTITY_KEYS) <= set(
+        evidence["runs"]["run_a"]["layered_identities"]
+    )
+    assert str(tmp_path) not in first_json.decode()
+    assert "tensor(" not in first_json.decode()
+    assert not list(output_dir.glob("*.tmp"))
+
+    duplicate_dir = tmp_path / "duplicate-evidence"
+    duplicate_args = [str(duplicate_dir) if value == str(output_dir) else value for value in args]
+    assert qualification_mod.main(duplicate_args) == 0
+    assert (duplicate_dir / QUALIFICATION_JSON_NAME).read_bytes() == first_json
+    assert (duplicate_dir / QUALIFICATION_MARKDOWN_NAME).read_bytes() == first_markdown
+    assert qualification_mod.main(args) == 1
+
+
+@pytest.mark.parametrize(
+    "mutate",
+    ["semantic", "source", "negative", "focused_pytest", "full_cpu_pytest", "ruff", "mypy"],
+)
+def test_qualification_writer_fails_closed_on_missing_decisions(
+    tmp_path: Path, target_fixture: Any, mutate: str
+) -> None:
+    config_path, run_a, run_b = _qualification_runs(tmp_path, target_fixture)
+    payload = _qualification_results_payload()
+    if mutate == "semantic":
+        payload.pop("semantic_spot_checks")
+    elif mutate == "source":
+        payload.pop("source_only_audit")
+    elif mutate == "negative":
+        payload["negative_controls"]["case_ids"] = list(NEGATIVE_CONTROL_CASE_IDS[:-1])
+    else:
+        payload["validation"].pop(mutate)
+    results_path = tmp_path / "qualification-results.json"
+    results_path.write_text(json.dumps(payload), encoding="utf-8")
+    code = qualification_mod.main(
+        [
+            "--config",
+            str(config_path),
+            "--run-a",
+            str(run_a),
+            "--run-b",
+            str(run_b),
+            "--qualification-results",
+            str(results_path),
+            "--output-dir",
+            str(tmp_path / "evidence"),
+            "--seed",
+            "0",
+        ]
+    )
+    assert code == 1
+    assert not (tmp_path / "evidence").exists()

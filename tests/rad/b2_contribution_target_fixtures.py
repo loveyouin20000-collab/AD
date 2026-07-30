@@ -38,6 +38,9 @@ REPO_ROOT = Path(__file__).resolve().parents[2]
 TRACKED_CONFIG_PATH = (
     REPO_ROOT / "configs" / "phase_b" / "b2_contribution_targets_gate_c.json"
 )
+OFFICIAL_CONFIG_PATH = (
+    REPO_ROOT / "configs" / "phase_b" / "b2_contribution_targets_official_v1.json"
+)
 
 FIXTURE_ARTIFACT_KIND = "test_fixture"
 FIXTURE_CANDIDATE_LAYERS: tuple[int, ...] = (6, 12, 18, 24)
@@ -453,6 +456,12 @@ def tracked_config_payload() -> dict[str, Any]:
     """Deep-copied tracked Gate-C configuration object."""
 
     return json.loads(TRACKED_CONFIG_PATH.read_text(encoding="utf-8"))
+
+
+def official_config_payload() -> dict[str, Any]:
+    """Deep-copied B2-04B official configuration object."""
+
+    return json.loads(OFFICIAL_CONFIG_PATH.read_text(encoding="utf-8"))
 
 
 def write_config(

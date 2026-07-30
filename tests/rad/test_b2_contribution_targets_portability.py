@@ -9,6 +9,7 @@ target-domain dataset, a teacher checkpoint, or a machine-local path.
 
 from __future__ import annotations
 
+import hashlib
 import json
 import random
 from pathlib import Path
@@ -22,14 +23,16 @@ import tests.rad.b2_contribution_target_fixtures as fixtures
 REPO_ROOT = Path(__file__).resolve().parents[2]
 DOMAIN_PATH = REPO_ROOT / "rad" / "phase_b" / "b2_contribution_targets.py"
 CLI_PATH = REPO_ROOT / "tools" / "create_b2_contribution_targets.py"
+QUALIFICATION_CLI_PATH = (
+    REPO_ROOT / "tools" / "qualify_b2_contribution_target_reproduction.py"
+)
+HISTORICAL_GATE_C_SHA256 = "b1efaa3494e3fc93f50c9565ab42632a3c4458735746beb6de7125d75276beda"
 
 TARGET_DOMAIN_MARKERS = ("VisA", "visa", "Visa")
 MACHINE_LOCAL_MARKERS = ("/root/", "/home/", "/mnt/", "autodl", "C:\\", "/tmp/")
 FORBIDDEN_DOMAIN_SYMBOLS = (
     "load_teacher_bundle",
     "build_backbone",
-    "subprocess",
-    "git rev-parse",
     "torch.backends",
     "torch.set_grad_enabled",
     "mvtec",
@@ -154,8 +157,12 @@ def test_cli_never_reaches_a_target_domain_or_machine_local_path() -> None:
     source = CLI_PATH.read_text(encoding="utf-8")
     for marker in TARGET_DOMAIN_MARKERS:
         assert marker not in source
-    for marker in MACHINE_LOCAL_MARKERS:
-        assert marker not in source
+    for path in (CLI_PATH, QUALIFICATION_CLI_PATH):
+        portable_source = path.read_text(encoding="utf-8")
+        for marker in MACHINE_LOCAL_MARKERS:
+            assert marker not in portable_source
+        for forbidden in ("load_teacher_bundle", "build_backbone", "torch.load"):
+            assert forbidden not in portable_source
 
 
 def test_tracked_config_is_portable_and_keeps_official_materialization_disabled() -> None:
@@ -167,6 +174,21 @@ def test_tracked_config_is_portable_and_keeps_official_materialization_disabled(
     assert payload["contract_stage"] == "b2_04a"
     assert payload["candidate_layers"] == [6, 12, 18, 24]
     assert payload["prediction_depths"] == [12, 18, 24]
+
+
+def test_official_config_is_portable_and_long_contract_fields_remain_canonical() -> None:
+    raw = fixtures.OFFICIAL_CONFIG_PATH.read_text(encoding="utf-8")
+    loader_source = DOMAIN_PATH.read_text(encoding="utf-8")
+    for marker in (*TARGET_DOMAIN_MARKERS, *MACHINE_LOCAL_MARKERS):
+        assert marker not in raw
+    assert '"expected_contribution_contract_tag"' in raw
+    assert '"expected_contribution_contract_commit"' in raw
+    for alias in ('"expected_contract_tag"', '"expected_contract_commit"'):
+        assert alias not in raw
+        assert alias.strip('"') not in loader_source
+    assert hashlib.sha256(fixtures.TRACKED_CONFIG_PATH.read_bytes()).hexdigest() == (
+        HISTORICAL_GATE_C_SHA256
+    )
 
 
 def test_candidate_layers_stay_configuration_driven(target_fixture: Any, tmp_path: Path) -> None:

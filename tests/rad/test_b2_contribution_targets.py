@@ -67,10 +67,12 @@ Contract assumed by the Story 2 tests in this file (artifacts only):
 from __future__ import annotations
 
 import copy
+import dataclasses
 import hashlib
 import inspect
 import math
 import os
+import subprocess
 from pathlib import Path
 from typing import Any
 
@@ -141,7 +143,6 @@ def test_module_avoids_teacher_loading_and_target_domain() -> None:
         "build_backbone",
         "visa",
         "argparse",
-        "subprocess",
         "torch.backends",
     ):
         assert forbidden not in source
@@ -2901,6 +2902,15 @@ def _official_config(tmp_path: Path, **overrides: Any) -> Any:
     )
 
 
+def _clone_contract_repository(tmp_path: Path) -> Path:
+    repository = tmp_path / "contract-repository"
+    subprocess.run(
+        ["git", "clone", "--quiet", "--no-local", str(fixtures.REPO_ROOT), str(repository)],
+        check=True,
+    )
+    return repository
+
+
 def _materialize(
     tmp_path: Path,
     config: Any,
@@ -2944,6 +2954,59 @@ def test_tracked_gate_c_config_loads_with_official_materialization_disabled(
     assert tracked_config.resume_enabled is False
     assert tracked_config.dry_run_complete_compute is True
     assert tracked_config.expected_plan_sha_required_for_official is True
+
+
+def test_official_b2_04b_config_has_independent_pinned_identity() -> None:
+    official = subject.load_contribution_targets_config(fixtures.OFFICIAL_CONFIG_PATH)
+    gate_c = subject.load_contribution_targets_config(fixtures.TRACKED_CONFIG_PATH)
+
+    assert official.configuration_id == "b2_contribution_targets_official_v1"
+    assert official.contract_stage == "b2_04b"
+    assert official.official_materialization_enabled is True
+    assert official.repository_identity_gate_enabled is True
+    assert official.resume_enabled is False
+    assert official.expected_plan_sha_required_for_official is True
+    assert official.expected_contribution_contract_tag == "b2-contribution-target-contract-v1"
+    assert official.expected_contribution_contract_commit == (
+        "29591668c3228f6cebd7fd923ae1c39c6dad49bc"
+    )
+
+    identity_fields = {
+        "configuration_id",
+        "contract_stage",
+        "official_materialization_enabled",
+        "repository_identity_gate_enabled",
+        "expected_contribution_contract_tag",
+        "expected_contribution_contract_commit",
+    }
+    for field in official.__dataclass_fields__:
+        if field not in identity_fields:
+            assert getattr(official, field) == getattr(gate_c, field)
+
+
+@pytest.mark.parametrize(
+    "override",
+    [
+        {"contract_stage": "b2_04a"},
+        {"official_materialization_enabled": False},
+        {"repository_identity_gate_enabled": False},
+        {"resume_enabled": True},
+        {"expected_contribution_contract_tag": None},
+        {"expected_contribution_contract_tag": "moved-tag"},
+        {"expected_contribution_contract_commit": None},
+        {"expected_contribution_contract_commit": "0" * 40},
+    ],
+)
+def test_official_b2_04b_config_drift_fails_closed(
+    tmp_path: Path, override: dict[str, Any]
+) -> None:
+    payload = fixtures.official_config_payload()
+    payload.update(override)
+    with pytest.raises(subject.ContributionTargetError) as excinfo:
+        subject.load_contribution_targets_config(
+            fixtures.write_config(tmp_path, payload, name="official-drift.json")
+        )
+    assert _error_code(excinfo) == "B2_CONTRIBUTION_CONFIG_DRIFT"
 
 
 def test_tracked_config_carries_no_machine_local_paths() -> None:
@@ -3170,6 +3233,138 @@ def test_fixture_inputs_are_refused_when_the_config_expects_production(
 
 
 # --- official materialization gate -----------------------------------------
+
+
+def test_repository_identity_verifier_accepts_a_clean_descendant(tmp_path: Path) -> None:
+    repository = _clone_contract_repository(tmp_path)
+    config = subject.load_contribution_targets_config(fixtures.OFFICIAL_CONFIG_PATH)
+    identity = subject.verify_contribution_repository_identity(
+        config=config, repository_root=repository
+    )
+    assert identity.contract_tag == "b2-contribution-target-contract-v1"
+    assert identity.contract_commit == "29591668c3228f6cebd7fd923ae1c39c6dad49bc"
+    assert identity.generation_commit == subprocess.run(
+        ["git", "-C", str(repository), "rev-parse", "HEAD"],
+        check=True,
+        capture_output=True,
+        text=True,
+    ).stdout.strip()
+    assert identity.head_is_descendant is True
+    assert identity.worktree_clean is True
+
+
+def test_repository_identity_verifier_rejects_missing_or_moved_tag(tmp_path: Path) -> None:
+    repository = _clone_contract_repository(tmp_path)
+    config = subject.load_contribution_targets_config(fixtures.OFFICIAL_CONFIG_PATH)
+    subprocess.run(
+        ["git", "-C", str(repository), "tag", "-d", config.expected_contribution_contract_tag],
+        check=True,
+        capture_output=True,
+    )
+    with pytest.raises(subject.ContributionTargetError) as excinfo:
+        subject.verify_contribution_repository_identity(
+            config=config, repository_root=repository
+        )
+    assert _error_code(excinfo) == "B2_CONTRIBUTION_CONTRACT_TAG_INVALID"
+
+    subprocess.run(
+        [
+            "git",
+            "-C",
+            str(repository),
+            "tag",
+            config.expected_contribution_contract_tag,
+            "HEAD",
+        ],
+        check=True,
+    )
+    with pytest.raises(subject.ContributionTargetError) as excinfo:
+        subject.verify_contribution_repository_identity(
+            config=config, repository_root=repository
+        )
+    assert _error_code(excinfo) == "B2_CONTRIBUTION_CONTRACT_TAG_INVALID"
+
+
+def test_repository_identity_verifier_rejects_dirty_and_observed_head_mismatch(
+    tmp_path: Path,
+) -> None:
+    repository = _clone_contract_repository(tmp_path)
+    config = subject.load_contribution_targets_config(fixtures.OFFICIAL_CONFIG_PATH)
+    (repository / "untracked.txt").write_text("dirty\n", encoding="utf-8")
+    with pytest.raises(subject.ContributionTargetError) as excinfo:
+        subject.verify_contribution_repository_identity(
+            config=config, repository_root=repository
+        )
+    assert _error_code(excinfo) == "B2_CONTRIBUTION_WORKTREE_DIRTY"
+    (repository / "untracked.txt").unlink()
+
+    with pytest.raises(subject.ContributionTargetError) as excinfo:
+        subject.verify_contribution_repository_identity(
+            config=config,
+            repository_root=repository,
+            expected_generation_commit="0" * 40,
+        )
+    assert _error_code(excinfo) == "B2_CONTRIBUTION_GENERATION_COMMIT_CHANGED"
+
+
+def test_official_api_requires_repository_root_before_materialization(
+    tmp_path: Path, input_bundle: Any
+) -> None:
+    controlled = _official_config(tmp_path)
+    config = dataclasses.replace(
+        controlled,
+        repository_identity_gate_enabled=True,
+        expected_contribution_contract_tag="b2-contribution-target-contract-v1",
+        expected_contribution_contract_commit="29591668c3228f6cebd7fd923ae1c39c6dad49bc",
+    )
+    expected = subject.run_contribution_target_collection(
+        config=config, inputs=input_bundle
+    ).plan["contribution_plan_scientific_sha256"]
+    with pytest.raises(subject.ContributionTargetError) as excinfo:
+        subject.materialize_contribution_target_collection(
+            config=config,
+            inputs=input_bundle,
+            output_run_dir=tmp_path / "run",
+            expected_plan_sha256=expected,
+        )
+    assert _error_code(excinfo) == "B2_CONTRIBUTION_REPOSITORY_ROOT_REQUIRED"
+    assert not (tmp_path / "run").exists()
+
+
+def test_official_api_rechecks_repository_identity_before_any_write(
+    tmp_path: Path, input_bundle: Any, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    repository = _clone_contract_repository(tmp_path)
+    controlled = _official_config(tmp_path)
+    config = dataclasses.replace(
+        controlled,
+        repository_identity_gate_enabled=True,
+        expected_contribution_contract_tag="b2-contribution-target-contract-v1",
+        expected_contribution_contract_commit="29591668c3228f6cebd7fd923ae1c39c6dad49bc",
+    )
+    expected = subject.run_contribution_target_collection(
+        config=config, inputs=input_bundle
+    ).plan["contribution_plan_scientific_sha256"]
+    production_collection = subject.run_contribution_target_collection
+
+    def mutate_after_plan(**kwargs: Any) -> Any:
+        collection = production_collection(**kwargs)
+        (repository / "mutation-after-plan.txt").write_text("dirty\n", encoding="utf-8")
+        return collection
+
+    monkeypatch.setattr(
+        subject, "run_contribution_target_collection", mutate_after_plan
+    )
+    with pytest.raises(subject.ContributionTargetError) as excinfo:
+        subject.materialize_contribution_target_collection(
+            config=config,
+            inputs=input_bundle,
+            output_run_dir=tmp_path / "run",
+            expected_plan_sha256=expected,
+            repository_root=repository,
+        )
+    assert _error_code(excinfo) == "B2_CONTRIBUTION_WORKTREE_DIRTY"
+    assert not (tmp_path / "run").exists()
 
 
 def test_non_dry_run_is_refused_while_official_materialization_is_disabled(
@@ -3578,3 +3773,77 @@ def test_passed_manifest_requires_verified_record_entries(
     assert _error_code(excinfo) == (
         "B2_CONTRIBUTION_PASSED_MANIFEST_REQUIRES_VERIFIED_RECORDS"
     )
+
+
+# --- verified collection comparison ----------------------------------------
+
+
+def test_comparison_accepts_two_independently_verified_identical_runs(
+    tmp_path: Path, input_bundle: Any
+) -> None:
+    config = _official_config(tmp_path)
+    first_result = _materialize(tmp_path, config, input_bundle, run_name="run-a")
+    second_result = _materialize(tmp_path, config, input_bundle, run_name="run-b")
+    first = subject.verify_contribution_target_collection(
+        config=config, run_dir=first_result.run_dir
+    )
+    second = subject.verify_contribution_target_collection(
+        config=config, run_dir=second_result.run_dir
+    )
+    comparison = subject.compare_contribution_target_collections(
+        first=first, second=second
+    )
+    assert comparison.scientifically_equivalent is True
+    assert comparison.reasons == ()
+    for field in dataclasses.fields(comparison):
+        if field.name not in {"scientifically_equivalent", "reasons"}:
+            assert getattr(comparison, field.name) is True
+
+
+def test_comparison_rejects_unverified_inputs(
+    tmp_path: Path, input_bundle: Any
+) -> None:
+    config = _official_config(tmp_path)
+    result = _materialize(tmp_path, config, input_bundle)
+    verified = subject.verify_contribution_target_collection(
+        config=config, run_dir=result.run_dir
+    )
+    unsealed = dataclasses.replace(verified, _verification_seal=None)
+    for first in (result.manifest, result, unsealed):
+        with pytest.raises(subject.ContributionTargetError) as excinfo:
+            subject.compare_contribution_target_collections(
+                first=first, second=verified
+            )
+        assert _error_code(excinfo) == "B2_CONTRIBUTION_COLLECTION_NOT_VERIFIED"
+
+
+def test_comparison_reports_descriptor_variant_scientific_mismatch(
+    tmp_path: Path,
+) -> None:
+    config = _official_config(tmp_path)
+    fixture_a = fixtures.build_contribution_target_fixture(descriptor_variant="A")
+    fixture_b = fixtures.build_contribution_target_fixture(descriptor_variant="B")
+    first_result = _materialize(
+        tmp_path,
+        config,
+        fixtures.fixture_input_bundle(fixture_a),
+        run_name="run-a",
+    )
+    second_result = _materialize(
+        tmp_path,
+        config,
+        fixtures.fixture_input_bundle(fixture_b),
+        run_name="run-b",
+    )
+    comparison = subject.compare_contribution_target_collections(
+        first=subject.verify_contribution_target_collection(
+            config=config, run_dir=first_result.run_dir
+        ),
+        second=subject.verify_contribution_target_collection(
+            config=config, run_dir=second_result.run_dir
+        ),
+    )
+    assert comparison.scientifically_equivalent is False
+    assert comparison.layered_identities_equal is False
+    assert comparison.record_scientific_hashes_equal is False
+    assert any("descriptor" in reason for reason in comparison.reasons)
