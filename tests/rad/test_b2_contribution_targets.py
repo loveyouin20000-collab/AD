@@ -3252,6 +3252,166 @@ def test_fixture_inputs_are_refused_when_the_config_expects_production(
     assert not (tmp_path / "run").exists()
 
 
+# --- historical accepted production manifests -------------------------------
+
+
+LEGACY_TEACHER_CONFIGURATION_ID = "b2_teacher_cache_gate_c"
+LEGACY_DESCRIPTOR_CONFIGURATION_ID = "b2_descriptor_artifacts_gate_c"
+
+
+def _rewrite_as_historical_manifest(
+    manifest_path: Path,
+    *,
+    configuration_id: str | None,
+    artifact_kind: str | None = None,
+) -> None:
+    """Rewrite one manifest in the historical accepted schema.
+
+    The accepted teacher-cache and descriptor manifests predate the
+    ``artifact_kind`` field and identify themselves through ``configuration_id``.
+    """
+
+    payload = json.loads(manifest_path.read_text(encoding="utf-8"))
+    payload.pop("artifact_kind", None)
+    payload.pop("configuration_id", None)
+    if configuration_id is not None:
+        payload["configuration_id"] = configuration_id
+    if artifact_kind is not None:
+        payload["artifact_kind"] = artifact_kind
+    manifest_path.write_text(
+        json.dumps(payload, indent=2, sort_keys=True) + "\n", encoding="utf-8"
+    )
+
+
+def _historical_manifest_target(layout: Any, label: str) -> tuple[Path, Path]:
+    if label == "teacher-cache":
+        return layout.teacher_cache_manifest, layout.teacher_cache_root
+    return layout.descriptor_manifest, layout.descriptor_root
+
+
+def test_loader_normalizes_historical_production_manifests_without_artifact_kind(
+    tmp_path: Path,
+) -> None:
+    layout = fixtures.prepare_hermetic_contribution_inputs(tmp_path)
+    for label, configuration_id in (
+        ("teacher-cache", LEGACY_TEACHER_CONFIGURATION_ID),
+        ("descriptor", LEGACY_DESCRIPTOR_CONFIGURATION_ID),
+    ):
+        manifest_path, _root = _historical_manifest_target(layout, label)
+        _rewrite_as_historical_manifest(manifest_path, configuration_id=configuration_id)
+
+    for label in ("teacher-cache", "descriptor"):
+        manifest_path, root = _historical_manifest_target(layout, label)
+        loaded = subject._load_input_manifest(
+            manifest_path=manifest_path, root=root, label=label
+        )
+        assert loaded["artifact_kind"] == subject.PRODUCTION_ARTIFACT_KIND
+        on_disk = json.loads(manifest_path.read_text(encoding="utf-8"))
+        assert "artifact_kind" not in on_disk
+
+
+@pytest.mark.parametrize(
+    ("label", "configuration_id"),
+    [
+        ("teacher-cache", None),
+        ("teacher-cache", "b2_teacher_cache_gate_b"),
+        ("teacher-cache", LEGACY_DESCRIPTOR_CONFIGURATION_ID),
+        ("descriptor", None),
+        ("descriptor", "b2_descriptor_artifacts_gate_b"),
+        ("descriptor", LEGACY_TEACHER_CONFIGURATION_ID),
+    ],
+)
+def test_missing_artifact_kind_requires_the_exact_accepted_configuration_id(
+    tmp_path: Path, label: str, configuration_id: str | None
+) -> None:
+    layout = fixtures.prepare_hermetic_contribution_inputs(tmp_path)
+    manifest_path, root = _historical_manifest_target(layout, label)
+    _rewrite_as_historical_manifest(manifest_path, configuration_id=configuration_id)
+    with pytest.raises(subject.ContributionTargetError) as excinfo:
+        subject._load_input_manifest(manifest_path=manifest_path, root=root, label=label)
+    assert _error_code(excinfo) == "B2_TARGET_ARTIFACT_KIND_INVALID"
+
+
+@pytest.mark.parametrize("label", ["teacher-cache", "descriptor"])
+@pytest.mark.parametrize(
+    ("declared_kind", "accepted_kind"),
+    [
+        ("production", "production"),
+        ("test_fixture", "test_fixture"),
+        ("legacy_production", None),
+        ("", None),
+    ],
+)
+def test_declared_artifact_kind_is_never_inferred_away(
+    tmp_path: Path, label: str, declared_kind: str, accepted_kind: str | None
+) -> None:
+    layout = fixtures.prepare_hermetic_contribution_inputs(tmp_path)
+    manifest_path, root = _historical_manifest_target(layout, label)
+    accepted_configuration_id = (
+        LEGACY_TEACHER_CONFIGURATION_ID
+        if label == "teacher-cache"
+        else LEGACY_DESCRIPTOR_CONFIGURATION_ID
+    )
+    _rewrite_as_historical_manifest(
+        manifest_path,
+        configuration_id=accepted_configuration_id,
+        artifact_kind=declared_kind,
+    )
+    if accepted_kind is None:
+        with pytest.raises(subject.ContributionTargetError) as excinfo:
+            subject._load_input_manifest(
+                manifest_path=manifest_path, root=root, label=label
+            )
+        assert _error_code(excinfo) == "B2_TARGET_ARTIFACT_KIND_INVALID"
+        return
+    loaded = subject._load_input_manifest(
+        manifest_path=manifest_path, root=root, label=label
+    )
+    assert loaded["artifact_kind"] == accepted_kind
+
+
+def test_historical_production_manifests_still_face_every_downstream_pin(
+    tmp_path: Path,
+) -> None:
+    layout = fixtures.prepare_hermetic_contribution_inputs(tmp_path)
+    _rewrite_as_historical_manifest(
+        layout.teacher_cache_manifest, configuration_id=LEGACY_TEACHER_CONFIGURATION_ID
+    )
+    _rewrite_as_historical_manifest(
+        layout.descriptor_manifest, configuration_id=LEGACY_DESCRIPTOR_CONFIGURATION_ID
+    )
+    config = subject.load_contribution_targets_config(fixtures.TRACKED_CONFIG_PATH)
+    assert config.expected_input_artifact_kind == subject.PRODUCTION_ARTIFACT_KIND
+    with pytest.raises(subject.ContributionTargetError) as excinfo:
+        subject.load_contribution_inputs_from_disk(
+            config=config,
+            teacher_cache_manifest_path=layout.teacher_cache_manifest,
+            teacher_cache_root=layout.teacher_cache_root,
+            descriptor_manifest_path=layout.descriptor_manifest,
+            descriptor_root=layout.descriptor_root,
+        )
+    assert _error_code(excinfo) == "B2_CONTRIBUTION_UPSTREAM_IDENTITY_MISMATCH"
+
+
+def test_historical_manifest_pair_must_agree_on_the_inferred_kind(
+    tmp_path: Path,
+) -> None:
+    layout = fixtures.prepare_hermetic_contribution_inputs(tmp_path)
+    _rewrite_as_historical_manifest(
+        layout.teacher_cache_manifest, configuration_id=LEGACY_TEACHER_CONFIGURATION_ID
+    )
+    config = subject.load_contribution_targets_config(fixtures.TRACKED_CONFIG_PATH)
+    with pytest.raises(subject.ContributionTargetError) as excinfo:
+        subject.load_contribution_inputs_from_disk(
+            config=config,
+            teacher_cache_manifest_path=layout.teacher_cache_manifest,
+            teacher_cache_root=layout.teacher_cache_root,
+            descriptor_manifest_path=layout.descriptor_manifest,
+            descriptor_root=layout.descriptor_root,
+        )
+    assert _error_code(excinfo) == "B2_TARGET_ARTIFACT_KIND_INVALID"
+
+
 # --- official materialization gate -----------------------------------------
 
 

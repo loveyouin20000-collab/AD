@@ -3145,6 +3145,16 @@ def _resolve_within_root(
     return resolved
 
 
+# Historical accepted upstream manifests carry no ``artifact_kind``: exactly
+# these label / configuration_id pairs are read as production inputs.
+_HISTORICAL_PRODUCTION_CONFIGURATION_IDS: Mapping[str, str] = MappingProxyType(
+    {
+        "teacher-cache": "b2_teacher_cache_gate_c",
+        "descriptor": "b2_descriptor_artifacts_gate_c",
+    }
+)
+
+
 def _load_input_manifest(
     *,
     manifest_path: Path,
@@ -3178,12 +3188,31 @@ def _load_input_manifest(
             f"{label} manifest status must be 'passed'",
         )
     kind = payload.get("artifact_kind")
+    if kind is None:
+        # The accepted upstream manifests predate ``artifact_kind``. Their
+        # production identity is only ever taken from the exact configuration_id
+        # of the validator that already accepted them; nothing else is inferred,
+        # and the source manifest itself is never rewritten.
+        accepted_configuration_id = _HISTORICAL_PRODUCTION_CONFIGURATION_IDS.get(label)
+        if (
+            accepted_configuration_id is not None
+            and payload.get("configuration_id") == accepted_configuration_id
+        ):
+            kind = PRODUCTION_ARTIFACT_KIND
+        else:
+            _fail(
+                "B2_TARGET_ARTIFACT_KIND_INVALID",
+                f"{label} manifest omits artifact_kind and does not declare "
+                f"configuration_id {accepted_configuration_id!r}",
+            )
     if kind not in _ACCEPTED_INPUT_ARTIFACT_KINDS:
         _fail(
             "B2_TARGET_ARTIFACT_KIND_INVALID",
             f"{label} manifest artifact_kind {kind!r} is not accepted",
         )
-    return dict(payload)
+    normalized = dict(payload)
+    normalized["artifact_kind"] = kind
+    return normalized
 
 
 def _load_pt_payload(path: Path, *, code: str) -> Mapping[str, Any]:
