@@ -35,8 +35,13 @@ FORBIDDEN_DOMAIN_SYMBOLS = (
     "build_backbone",
     "torch.backends",
     "torch.set_grad_enabled",
-    "mvtec",
 )
+# B2-04B resolves accepted source-domain identities inside the production API,
+# so the module names the source adapter. Only the caller may supply its root,
+# and every root must pass the source-only guard before any directory read.
+ACCEPTED_SOURCE_ADAPTER_SYMBOL = "MVTecAdapter"
+SOURCE_ROOT_ARGUMENT = "mvtec_root"
+SOURCE_ONLY_GUARD = "forbid_target_domain_access"
 
 
 @pytest.fixture(scope="module")
@@ -151,6 +156,30 @@ def test_domain_module_never_reaches_a_target_domain_checkpoint_or_local_path() 
         assert marker not in source
     for symbol in FORBIDDEN_DOMAIN_SYMBOLS:
         assert symbol not in source
+
+
+def test_domain_module_source_access_is_adapter_scoped_and_caller_supplied() -> None:
+    source = DOMAIN_PATH.read_text(encoding="utf-8")
+    assert ACCEPTED_SOURCE_ADAPTER_SYMBOL in source
+    assert SOURCE_ROOT_ARGUMENT in source
+    assert SOURCE_ONLY_GUARD in source
+    assert "adapters.mvtec import MVTecAdapter" in source
+
+
+@pytest.mark.parametrize(
+    "root",
+    ["visa", "datasets/visa", "visa/candle", "some/target/root"],
+)
+def test_source_root_indexing_refuses_a_target_domain_root(root: str) -> None:
+    with pytest.raises(Exception) as excinfo:
+        subject._index_mvtec_source_records(Path(root))
+    assert getattr(excinfo.value, "code", "") == "B2_CACHE_TARGET_ACCESS_FORBIDDEN"
+
+
+def test_source_root_indexing_fails_closed_on_a_missing_root(tmp_path: Path) -> None:
+    with pytest.raises(subject.ContributionTargetError) as excinfo:
+        subject._index_mvtec_source_records(tmp_path / "absent_source_root")
+    assert getattr(excinfo.value, "code", "") == "B2_CONTRIBUTION_SOURCE_ROOT_MISSING"
 
 
 def test_cli_never_reaches_a_target_domain_or_machine_local_path() -> None:
