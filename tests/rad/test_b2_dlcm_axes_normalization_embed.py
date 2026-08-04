@@ -11,7 +11,6 @@ from rad.phase_b import b2_descriptor_artifacts as desc
 from rad.phase_b import b2_dlcm as model_mod
 from rad.phase_b import b2_dlcm_deployment as subject
 
-
 _DESC_RUN = Path(
     "/root/autodl-tmp/AD-phase-b2-descriptor-real-extraction/"
     "artifacts/phase_b/b2_descriptor_artifacts/authoritative-run-a-20260729-013956"
