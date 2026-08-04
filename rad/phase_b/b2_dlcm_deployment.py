@@ -1171,3 +1171,63 @@ def require_formal_localization_defined(
                     "B2_DLCM_EVAL_METRIC_UNDEFINED",
                     f"formal localization metric {name} undefined for {category}",
                 )
+
+
+def require_passed_seed_collection_for_canonical(run_dir: Path | str) -> None:
+    failure = Path(run_dir) / "collection_failure_manifest.json"
+    if failure.is_file():
+        _fail("B2_DLCM_COLLECTION_FAILED", "seed collection failed; canonical selection blocked")
+    # Absence of failure is insufficient alone for production; B2-05A contract gate:
+    collection = Path(run_dir) / "seed_collection_manifest.json"
+    if not collection.is_file():
+        _fail("B2_DLCM_COLLECTION_FAILED", "passed seed collection manifest required")
+
+
+def require_reproduction_passed_for_evaluation(comparison: Mapping[str, Any]) -> None:
+    if comparison.get("status") != "passed":
+        _fail(
+            "B2_DLCM_REPRO_BLOCKED",
+            "canonical reproduction failure blocks evaluation/deployment export",
+        )
+
+
+def dual_family_diagnostic(
+    gt_metrics: Mapping[str, Any],
+    teacher_metrics: Mapping[str, Any],
+    *,
+    metric: str,
+) -> dict[str, Any]:
+    if gt_metrics.get("valid") is False or teacher_metrics.get("valid") is False:
+        return {"status": "invalid", "value": None, "metric": metric}
+    if metric not in gt_metrics or metric not in teacher_metrics:
+        return {"status": "invalid", "value": None, "metric": metric}
+    return {
+        "status": "ok",
+        "value": 0.5 * (float(gt_metrics[metric]) + float(teacher_metrics[metric])),
+        "metric": metric,
+    }
+
+
+def scientific_hash_rejecting_runtime_fields(
+    payload: Mapping[str, Any],
+    *,
+    whitelist: Sequence[str],
+) -> str:
+    banned = {
+        "hostname",
+        "gpu_uuid",
+        "absolute_path",
+        "path",
+        "timestamp",
+        "pid",
+        "start_time",
+        "end_time",
+    }
+    runtime = [key for key in payload if key in banned]
+    if runtime:
+        _fail("B2_DLCM_SCI_RUNTIME_FIELD", f"runtime fields forbidden in scientific hash: {runtime}")
+    unknown = [key for key in payload if key not in whitelist]
+    if unknown:
+        _fail("B2_DLCM_SCI_RUNTIME_FIELD", f"undeclared scientific fields: {unknown}")
+    projected = {key: payload[key] for key in whitelist}
+    return _canonical_json_sha256(projected)

@@ -137,24 +137,32 @@ def main(argv: list[str] | None = None) -> int:
             print("B2_DLCM_REAL_TRAINING_NOT_ENABLED", file=sys.stderr)
             print("B2_DLCM_REAL_TRAINING_NOT_ENABLED")
             return 2
-        # Dry-run: complete contract validation, write nothing.
+        # Dry-run: complete hermetic contract validation, write nothing.
+        from rad.phase_b import b2_dlcm_training as training
+
         output_root = Path(args.output_root)
+        result = training.dry_run_complete_contract_validation(
+            config=config,
+            seed=seed,
+            output_root=output_root,
+        )
+        if output_root.exists() and any(output_root.iterdir()) if output_root.exists() else False:
+            # Dry-run must not create the output root.
+            raise B2DLCMCLIError("B2_DLCM_DRY_RUN_WRITE", "dry-run must not create output files")
         payload = {
             "mode": "dry_run",
-            "status": "contract_validated",
+            "status": result["status"],
             "artifact_written": False,
             "run_directory_created": False,
             "real_training_started": False,
             "evaluation_unlocked": False,
             "teacher_forward_count": 0,
+            "hermetic_records_validated": result["hermetic_records_validated"],
             "seed": seed,
             "contract_stage": config["contract_stage"],
             "output_root_exists_before": output_root.exists(),
         }
         _print_summary(payload)
-        if output_root.exists() and args.output_dir is None:
-            # Still must not create new run directories; existing empty parents are ok.
-            pass
         return 0
     except B2DLCMCLIError as exc:
         print(str(exc), file=sys.stderr)

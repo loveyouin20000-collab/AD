@@ -30,9 +30,10 @@
 | 3–10, 17, 44 | `b2_dlcm.py` | `test_b2_dlcm_model/losses` | 1 |
 | 11–16, 18–32 | `b2_dlcm_training.py` | `test_b2_dlcm_training` | 2 |
 | 33–39, 40–52 | `b2_dlcm_deployment.py` | `test_b2_dlcm_deployment`, `test_b2_dlcm_evaluation_contracts`, `test_b2_dlcm_gpu_qualification` | 3 |
-| 53–55 | config + CLIs + fixtures | `test_b2_dlcm_cli/artifacts/portability` | 3 |
-| 56–58 | — | all above + full `tests/rad` | validation |
-| 59–60 | docs | — | docs/handoff |
+| 53–55 | config + CLIs + production hermetic dry-run | `test_b2_dlcm_cli`, `test_b2_dlcm_contract_closure`, fixtures | 3 |
+| 56 | all `test_b2_dlcm_*` suites | RED→GREEN evidence | 1–3 |
+| 57–58 | stories + validation commands | focused + full `tests/rad` | validation |
+| 59–60 | architecture + implementation plan | docs / handoff | docs |
 
 ## Story commits
 
@@ -40,6 +41,7 @@
 2. `feat: add deterministic B2 DLCM training lifecycle`
 3. `feat: add B2 DLCM qualification and deployment contracts`
 4. `feat: complete B2 DLCM GPU qual, unlock, and evaluation contracts`
+5. `feat: harden B2-05A dry-run hermetic validation and §56 closure tests`
 
 ## Error codes (selected)
 

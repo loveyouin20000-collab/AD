@@ -198,6 +198,21 @@ class ExplicitLRSchedule:
             "next_learning_rate": self.next_learning_rate,
         }
 
+    @classmethod
+    def from_contract_state(cls, state: Mapping[str, Any]) -> ExplicitLRSchedule:
+        if state.get("scheduler_contract_version") != SCHEDULER_CONTRACT_VERSION:
+            _fail("B2_DLCM_SCHEDULER_VERSION", "scheduler contract version mismatch")
+        sched = cls(
+            maximum_learning_rate=float(state["maximum_learning_rate"]),
+            minimum_learning_rate=float(state["minimum_learning_rate"]),
+            warmup_steps=int(state["warmup_steps"]),
+            maximum_optimizer_steps=int(state["maximum_optimizer_steps"]),
+            global_optimizer_step=int(state["global_optimizer_step"]),
+            last_applied_learning_rate=state.get("last_applied_learning_rate"),
+        )
+        sched.next_learning_rate = float(state["next_learning_rate"])
+        return sched
+
 
 def math_cos_pi(progress: float) -> float:
     import math
@@ -774,4 +789,189 @@ def run_hermetic_contract_training(
         "evaluation_unlocked": False,
         "best_epoch": selector.best_epoch,
         "seed": seed,
+    }
+
+
+def build_hermetic_contract_records(*, map_hw: tuple[int, int] = (8, 8)) -> list[dict[str, Any]]:
+    """In-memory hermetic 32-record bundle for B2-05A dry-run validation.
+
+    Production-owned (not imported from tests). Never persisted by dry-run.
+    """
+
+    categories = ("bottle", "cable", "capsule", "carpet")
+    h, w = map_hw
+    records: list[dict[str, Any]] = []
+    for index in range(32):
+        if index < 16:
+            split = "training"
+        elif index < 24:
+            split = "calibration"
+        else:
+            split = "evaluation"
+        descriptors: dict[int, torch.Tensor] = {}
+        p_gt: dict[int, torch.Tensor] = {}
+        p_t: dict[int, torch.Tensor] = {}
+        phi_gt: dict[int, torch.Tensor] = {}
+        phi_t: dict[int, torch.Tensor] = {}
+        anomaly_maps: dict[int, torch.Tensor] = {}
+        for depth in dlcm.DEFAULT_PREDICTION_DEPTHS:
+            players = dlcm.players_for_depth(dlcm.DEFAULT_CANDIDATE_LAYERS, depth)
+            n = len(players)
+            base = torch.arange(n * 18, dtype=torch.float32)
+            desc = ((base + index * 0.01 + depth * 0.001) % 17.0) / 8.5 - 1.0
+            descriptors[depth] = desc.view(n, 18).contiguous()
+            raw = torch.arange(1, n + 1, dtype=torch.float64) + 0.1 * index + 0.01 * depth
+            p_gt[depth] = (raw / raw.sum()).to(torch.float32)
+            raw_t = torch.arange(1, n + 1, dtype=torch.float64) + 0.07 * index + 0.02 * depth
+            p_t[depth] = (raw_t / raw_t.sum()).to(torch.float32)
+            phi = torch.linspace(-1.0, 1.0, n, dtype=torch.float32) * (1.0 + 0.01 * index)
+            phi_gt[depth] = phi
+            phi_t[depth] = phi.flip(0) * 0.5
+            maps = torch.zeros(n, h, w, dtype=torch.float32)
+            for li in range(n):
+                maps[li].fill_(0.1 * (li + 1) + 0.001 * index)
+            anomaly_maps[depth] = maps
+        mask = torch.zeros(h, w, dtype=torch.float32)
+        if index % 2 == 1:
+            mask[2:5, 2:5] = 1.0
+        records.append(
+            {
+                "stable_sample_id": f"fixture-{index:02d}",
+                "split": split,
+                "category": categories[index % len(categories)],
+                "descriptors": descriptors,
+                "p_gt": p_gt,
+                "p_t": p_t,
+                "phi_gt": phi_gt,
+                "phi_t": phi_t,
+                "anomaly_maps": anomaly_maps,
+                "mask": mask,
+                "artifact_kind": "test_fixture",
+            }
+        )
+    return records
+
+
+def optimizer_state_by_parameter_name(
+    model: nn.Module,
+    optimizer: torch.optim.Optimizer,
+    groups: Sequence[Mapping[str, Any]],
+) -> dict[str, dict[str, Any]]:
+    """Map AdamW state by full parameter name (never by internal id)."""
+
+    name_by_param = {id(param): name for name, param in model.named_parameters()}
+    group_by_name: dict[str, str] = {}
+    for group in groups:
+        for name in group["ordered_parameter_names"]:
+            group_by_name[name] = str(group["group_name"])
+    out: dict[str, dict[str, Any]] = {}
+    for group in optimizer.param_groups:
+        for param in group["params"]:
+            name = name_by_param.get(id(param))
+            if name is None:
+                _fail("B2_DLCM_OPTIM_UNMAPPED", "optimizer param missing name mapping")
+            state = optimizer.state.get(param, {})
+            step_val = state.get("step", 0)
+            if hasattr(step_val, "item"):
+                step_val = int(step_val.item())
+            else:
+                step_val = int(step_val)
+            out[name] = {
+                "full_parameter_name": name,
+                "optimizer_group": group_by_name[name],
+                "step": step_val,
+                "exp_avg": state.get("exp_avg"),
+                "exp_avg_sq": state.get("exp_avg_sq"),
+            }
+    return out
+
+
+def build_collection_failure_manifest(
+    *,
+    failed_seed: int,
+    error_code: str,
+    completed_seeds: Sequence[int],
+    environment_identity: str,
+) -> dict[str, Any]:
+    return {
+        "collection_status": "seed_collection_failed",
+        "failed_seed": int(failed_seed),
+        "normalized_error_code": error_code,
+        "completed_seeds": list(completed_seeds),
+        "environment_identity": environment_identity,
+        "canonical_seed_selected": False,
+        "evaluation_unlocked": False,
+        "deployment_exported": False,
+    }
+
+
+def persist_collection_failure_manifest(path: Path, payload: Mapping[str, Any]) -> str:
+    return _atomic_write_json(Path(path), payload)
+
+
+def dry_run_complete_contract_validation(
+    *,
+    config: Mapping[str, Any],
+    seed: int,
+    output_root: Path | str,
+) -> dict[str, Any]:
+    """Complete B2-05A dry-run: hermetic contract exercise, zero filesystem writes."""
+
+    output_root = Path(output_root)
+    if config.get("real_training_enabled") is not False:
+        _fail("B2_DLCM_REAL_TRAINING_FLAG", "dry-run requires real_training_enabled=false")
+    if config.get("contract_stage") != "b2_05a":
+        _fail("B2_DLCM_CONFIG_STAGE_INVALID", "contract_stage must be b2_05a")
+    records = build_hermetic_contract_records()
+    if len(records) != 32:
+        _fail("B2_DLCM_HERMETIC_COUNT", "hermetic fixture must contain 32 records")
+    model = dlcm.B2DLCM(seed=int(seed))
+    train = [r for r in records if r["split"] == "training"]
+    batch = train[:4]
+    depth_payload: dict[int, dict[str, torch.Tensor]] = {}
+    for depth in model.prediction_depths:
+        descs = torch.stack([r["descriptors"][depth] for r in batch], dim=0)
+        out = model.forward_training(descs, prediction_depth=depth)
+        depth_payload[depth] = {
+            "deployment_logits": out.deployment_logits,
+            "gt_signed": out.gt_signed,
+            "teacher_signed": out.teacher_signed,
+            "p_gt": torch.stack([r["p_gt"][depth] for r in batch], dim=0),
+            "p_t": torch.stack([r["p_t"][depth] for r in batch], dim=0),
+            "phi_gt": torch.stack([r["phi_gt"][depth] for r in batch], dim=0),
+            "phi_t": torch.stack([r["phi_t"][depth] for r in batch], dim=0),
+        }
+    loss, _ = dlcm.total_dlcm_loss(depth_payload)
+    if not bool(torch.isfinite(loss)):
+        _fail("B2_DLCM_NONFINITE_LOSS", "dry-run loss nonfinite")
+    sched = ExplicitLRSchedule()
+    if abs(sched.learning_rate_for_step(1) - 3e-6) > 1e-15:
+        _fail("B2_DLCM_SCHEDULER_LR", "first-step LR contract failed")
+    if abs(sched.learning_rate_for_step(100) - 3e-4) > 1e-15:
+        _fail("B2_DLCM_SCHEDULER_LR", "100th-step LR contract failed")
+    _ = dlcm.derive_component_seeds(int(seed))
+    maps = batch[0]["anomaly_maps"][18].unsqueeze(0)
+    ref = dlcm.reference_uniform_weights(3).view(1, 3).contiguous()
+    fused, path = dlcm.sum_preserving_fusion(
+        maps,
+        ref,
+        prediction_depth=18,
+        player_layer_ids=(6, 12, 18),
+        return_path=True,
+    )
+    if path != "uniform_baseline":
+        _fail("B2_DLCM_FUSION_PATH", "epoch-0 style uniform path required")
+    _ = fused
+    return {
+        "mode": "dry_run",
+        "status": "contract_validated",
+        "artifact_written": False,
+        "run_directory_created": False,
+        "real_training_started": False,
+        "evaluation_unlocked": False,
+        "teacher_forward_count": 0,
+        "hermetic_records_validated": 32,
+        "seed": int(seed),
+        "dry_run_loss_finite": True,
+        "fusion_path": path,
     }
