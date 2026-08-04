@@ -4,15 +4,12 @@ from __future__ import annotations
 
 import hashlib
 import json
-import math
 from collections.abc import Mapping, Sequence
-from dataclasses import dataclass, field
-from pathlib import Path
-from typing import Any, NoReturn
+from dataclasses import dataclass
+from typing import Any, NoReturn, cast
 
 import torch
 import torch.nn as nn
-import torch.nn.functional as F
 
 from rad.phase_b import b2_dlcm as dlcm
 from rad.phase_b.b2_dlcm import (
@@ -21,7 +18,6 @@ from rad.phase_b.b2_dlcm import (
     DEFAULT_PREDICTION_DEPTHS,
     MODEL_CLASS_ID,
     B2DLCMDeploymentTrunk,
-    reference_uniform_weights,
 )
 
 LOADER_CONTRACT_VERSION = "b2_dlcm_loader_v1"
@@ -85,13 +81,16 @@ def generate_golden_cases(
             n = len(players)
             for case_id in ("all_zero", "monotonic_ramp", "alternating_signed"):
                 inp = build_golden_input(case_id, depth, n)
-                if hasattr(model, "forward"):
-                    logits, weights = model.forward(
-                        inp, prediction_depth=depth, player_layer_ids=players
+                forward_fn = getattr(model, "forward_deployment", None)
+                if callable(forward_fn):
+                    logits, weights = cast(
+                        tuple[torch.Tensor, torch.Tensor],
+                        forward_fn(inp, prediction_depth=depth, player_layer_ids=players),
                     )
                 else:
-                    logits, weights = model.forward_deployment(
-                        inp, prediction_depth=depth, player_layer_ids=players
+                    logits, weights = cast(
+                        tuple[torch.Tensor, torch.Tensor],
+                        model(inp, prediction_depth=depth, player_layer_ids=players),
                     )
                 cases.append(
                     {

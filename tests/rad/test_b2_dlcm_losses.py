@@ -133,7 +133,7 @@ def test_total_loss_depth_equal_and_signed_weight() -> None:
     )
     # Manual: each depth L_d = L_alloc + 0.25 * mean(L_signed_gt, L_signed_t)
     depth_losses = []
-    for depth, payload in batch.items():
+    for _depth, payload in batch.items():
         alloc, _ = subject.allocation_loss(
             payload["deployment_logits"], payload["p_gt"], payload["p_t"]
         )

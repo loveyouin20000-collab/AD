@@ -607,7 +607,7 @@ def run_hermetic_contract_training(
     env = collect_environment_contract(allow_cpu_for_hermetic=True)
     persist_environment_contract(output_root / "environment_contract.json", env)
 
-    by_split = {"training": [], "calibration": [], "evaluation": []}
+    by_split: dict[str, list[Any]] = {"training": [], "calibration": [], "evaluation": []}
     for record in records:
         by_split[record.split].append(record)
     if len(by_split["training"]) != 16 or len(by_split["calibration"]) != 8:

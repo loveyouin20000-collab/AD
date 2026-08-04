@@ -2,9 +2,9 @@
 
 from __future__ import annotations
 
-import json
 import subprocess
 import sys
+import tempfile
 from pathlib import Path
 
 REPO = Path(__file__).resolve().parents[2]
@@ -56,7 +56,6 @@ def test_dry_run_twice_permutation_no_writes(tmp_path: Path) -> None:
         "17",
         "--dry-run",
     ]
-    # Create dummy path args (dry-run validates contract, not real artifacts).
     for path in (
         tmp_path / "desc.json",
         tmp_path / "tgt.json",
@@ -74,7 +73,6 @@ def test_dry_run_twice_permutation_no_writes(tmp_path: Path) -> None:
     assert "teacher_forward_count = 0" in first.stdout
     assert not out_a.exists()
 
-    # Permute argument order.
     permuted = [
         str(CLI),
         "--seed",
@@ -99,10 +97,6 @@ def test_dry_run_twice_permutation_no_writes(tmp_path: Path) -> None:
 
 
 def test_non_dry_run_disabled() -> None:
-    tmp = REPO / "runs" / "_b2_dlcm_cli_probe"
-    # Use unique temp under /tmp via python
-    import tempfile
-
     with tempfile.TemporaryDirectory() as td:
         t = Path(td)
         (t / "desc.json").write_text("{}", encoding="utf-8")

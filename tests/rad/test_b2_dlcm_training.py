@@ -7,7 +7,6 @@ import math
 from pathlib import Path
 
 import pytest
-import torch
 
 from rad.phase_b import b2_dlcm as model_mod
 from rad.phase_b import b2_dlcm_training as subject
