@@ -15,6 +15,13 @@ from rad.phase_b import b2_contribution_targets as contrib_mod
 from rad.phase_b import b2_dlcm as dlcm
 from rad.phase_b import b2_dlcm_deployment as deployment
 
+SIGNED_UNAVAILABLE_STATUS = "not_available_in_deployment_artifact"
+SIGNED_UNAVAILABLE_REASON = "training_only_auxiliary_heads_removed"
+
+
+class B2DLCMSignedDiagnosticError(ValueError):
+    """Raised when allocation weights are used as a signed-Shapley substitute."""
+
 
 def _canonical_json_sha256(payload: Mapping[str, Any]) -> str:
     return hashlib.sha256(
@@ -44,13 +51,206 @@ def _uniform_weights(n: int) -> torch.Tensor:
     return torch.full((n,), 1.0 / float(n), dtype=torch.float32)
 
 
-def _signed_huber(pred: torch.Tensor, target: torch.Tensor, *, delta: float = 1.0) -> float:
+def looks_like_allocation_simplex(pred: torch.Tensor, *, atol: float = 1e-5) -> bool:
+    """True when ``pred`` is nonnegative and sums to ~1 (probability simplex)."""
+
+    flat = pred.detach().to(torch.float64).reshape(-1)
+    if flat.numel() == 0:
+        return False
+    return bool((flat >= -atol).all().item() and abs(float(flat.sum().item()) - 1.0) <= atol)
+
+
+def _reject_allocation_weight_proxy(pred: torch.Tensor, *, context: str) -> None:
+    if looks_like_allocation_simplex(pred):
+        raise B2DLCMSignedDiagnosticError(
+            f"{context}: allocation weights cannot substitute for signed Shapley predictions "
+            "(simplex is nonnegative and sums to 1; signed targets are unbounded)"
+        )
+
+
+def signed_huber_diagnostic(
+    pred: torch.Tensor,
+    target: torch.Tensor,
+    *,
+    delta: float = 1.0,
+) -> float:
+    """Mean Huber between signed predictions and φ; refuses allocation-weight proxies."""
+
+    _reject_allocation_weight_proxy(pred, context="signed_huber_diagnostic")
+    if pred.shape != target.shape:
+        raise B2DLCMSignedDiagnosticError("signed_huber_diagnostic: pred/target shape mismatch")
     err = pred.to(torch.float64) - target.to(torch.float64)
     abs_err = err.abs()
     quadratic = 0.5 * err * err
     linear = abs_err - 0.5 * delta
     per = torch.where(abs_err <= delta, quadratic, linear)
     return float(per.mean().item())
+
+
+def _unavailable_signed_entry() -> dict[str, Any]:
+    return {
+        "status": SIGNED_UNAVAILABLE_STATUS,
+        "reason": SIGNED_UNAVAILABLE_REASON,
+        "value": None,
+    }
+
+
+def model_has_signed_auxiliary_heads(model: nn.Module) -> bool:
+    return (
+        hasattr(model, "gt_signed_head")
+        and hasattr(model, "teacher_signed_head")
+        and hasattr(model, "forward_training")
+    )
+
+
+def predict_signed_auxiliary(
+    model: nn.Module,
+    descriptors: torch.Tensor,
+    *,
+    prediction_depth: int,
+    player_layer_ids: Sequence[int],
+) -> tuple[torch.Tensor, torch.Tensor]:
+    """Return (gt_signed[n], teacher_signed[n]) from training-only auxiliary heads."""
+
+    if not model_has_signed_auxiliary_heads(model):
+        raise B2DLCMSignedDiagnosticError(
+            "predict_signed_auxiliary: training-only auxiliary heads are absent"
+        )
+    model.eval()
+    x = descriptors.unsqueeze(0).to(dtype=torch.float32).contiguous()
+    with torch.no_grad():
+        out = model.forward_training(
+            x, prediction_depth=prediction_depth, player_layer_ids=player_layer_ids
+        )
+    return out.gt_signed.reshape(-1).cpu().float(), out.teacher_signed.reshape(-1).cpu().float()
+
+
+def build_target_fidelity_row_signed_fields(
+    *,
+    signed_pred_gt: torch.Tensor,
+    signed_pred_teacher: torch.Tensor,
+    phi_gt: torch.Tensor,
+    phi_t: torch.Tensor,
+    allow_allocation_proxy: bool = False,
+) -> dict[str, Any]:
+    """Build signed diagnostic fields; never accept weight proxies unless explicitly allowed (forbidden)."""
+
+    if allow_allocation_proxy:
+        raise B2DLCMSignedDiagnosticError(
+            "allow_allocation_proxy is forbidden: deployment weights cannot proxy signed metrics"
+        )
+    _reject_allocation_weight_proxy(signed_pred_gt, context="build_target_fidelity_row_signed_fields/gt")
+    _reject_allocation_weight_proxy(
+        signed_pred_teacher, context="build_target_fidelity_row_signed_fields/teacher"
+    )
+    return {
+        "huber_gt": {"status": "ok", "value": signed_huber_diagnostic(signed_pred_gt, phi_gt)},
+        "huber_teacher": {
+            "status": "ok",
+            "value": signed_huber_diagnostic(signed_pred_teacher, phi_t),
+        },
+        "signed_spearman_gt": {
+            "status": "ok",
+            "value": deployment.spearman_average_ranks(signed_pred_gt, phi_gt),
+        },
+        "signed_spearman_teacher": {
+            "status": "ok",
+            "value": deployment.spearman_average_ranks(signed_pred_teacher, phi_t),
+        },
+        "signed_pairwise_ranking_gt": {
+            "status": "ok",
+            "value": deployment.pairwise_ranking_accuracy(signed_pred_gt, phi_gt),
+        },
+        "signed_pairwise_ranking_teacher": {
+            "status": "ok",
+            "value": deployment.pairwise_ranking_accuracy(signed_pred_teacher, phi_t),
+        },
+    }
+
+
+def compute_signed_diagnostics_report(
+    *,
+    model: nn.Module,
+    descriptors: torch.Tensor,
+    prediction_depth: int,
+    player_layer_ids: Sequence[int],
+    phi_gt: torch.Tensor,
+    phi_t: torch.Tensor,
+    artifact_kind: str,
+    diagnostic_source: str | None = None,
+) -> dict[str, Any]:
+    """Signed diagnostics bound to training aux heads, or marked unavailable for deployment."""
+
+    if artifact_kind == "deployment" or not model_has_signed_auxiliary_heads(model):
+        unavailable = _unavailable_signed_entry()
+        return {
+            "artifact_kind": "deployment",
+            "signed_diagnostics_available": False,
+            "diagnostic_source": None,
+            "not_part_of_deployment_artifact": False,
+            "huber_gt": dict(unavailable),
+            "huber_teacher": dict(unavailable),
+            "signed_spearman_gt": dict(unavailable),
+            "signed_spearman_teacher": dict(unavailable),
+            "signed_pairwise_ranking_gt": dict(unavailable),
+            "signed_pairwise_ranking_teacher": dict(unavailable),
+        }
+
+    gt_signed, teacher_signed = predict_signed_auxiliary(
+        model,
+        descriptors,
+        prediction_depth=prediction_depth,
+        player_layer_ids=player_layer_ids,
+    )
+    fields = build_target_fidelity_row_signed_fields(
+        signed_pred_gt=gt_signed,
+        signed_pred_teacher=teacher_signed,
+        phi_gt=phi_gt.to(torch.float32),
+        phi_t=phi_t.to(torch.float32),
+    )
+    source = diagnostic_source or "training_checkpoint_auxiliary_heads"
+    return {
+        "artifact_kind": "training",
+        "signed_diagnostics_available": True,
+        "diagnostic_source": source,
+        "not_part_of_deployment_artifact": True,
+        **fields,
+    }
+
+
+def signed_metrics_validity_check(report: Mapping[str, Any]) -> dict[str, Any]:
+    """Validity gate for signed diagnostics; missing heads cannot silently pass."""
+
+    available = bool(report.get("signed_diagnostics_available"))
+    if not available:
+        return {
+            "signed_diagnostics_available": False,
+            "passed": False,
+            "status": SIGNED_UNAVAILABLE_STATUS,
+            "reason": SIGNED_UNAVAILABLE_REASON,
+        }
+    for key in (
+        "huber_gt",
+        "huber_teacher",
+        "signed_spearman_gt",
+        "signed_spearman_teacher",
+        "signed_pairwise_ranking_gt",
+        "signed_pairwise_ranking_teacher",
+    ):
+        entry = report.get(key)
+        if not isinstance(entry, Mapping) or entry.get("status") != "ok":
+            return {
+                "signed_diagnostics_available": False,
+                "passed": False,
+                "status": "signed_metric_incomplete",
+                "reason": f"missing_or_invalid:{key}",
+            }
+    return {
+        "signed_diagnostics_available": True,
+        "passed": True,
+        "status": "ok",
+        "reason": None,
+    }
 
 
 def _stack_layer_maps(
@@ -137,8 +337,17 @@ def evaluate_checkpoint_on_records(
 
     depth_target_rows: dict[int, list[dict[str, Any]]] = {int(d): [] for d in prediction_depths}
     # Localization accumulators per depth / category.
-    loc_maps: dict[int, dict[str, list[torch.Tensor]]] = {
-        int(d): {"dlcm": [], "baseline": [], "teacher": [], "mask": [], "label": [], "score_dlcm": [], "score_base": [], "category": []}
+    loc_maps: dict[int, dict[str, list[Any]]] = {
+        int(d): {
+            "dlcm": [],
+            "baseline": [],
+            "teacher": [],
+            "mask": [],
+            "label": [],
+            "score_dlcm": [],
+            "score_base": [],
+            "category": [],
+        }
         for d in prediction_depths
     }
 
@@ -174,9 +383,23 @@ def evaluate_checkpoint_on_records(
             phi_gt = record["phi_gt"][int(depth)].to(torch.float32)
             phi_t = record["phi_t"][int(depth)].to(torch.float32)
 
-            # Auxiliary signed heads are absent on deployment trunk; use weight-derived
-            # scores only for ranking/spearman vs signed targets when heads missing.
-            signed_pred = weights  # diagnostic proxy when aux heads stripped
+            artifact_kind = (
+                "training" if model_has_signed_auxiliary_heads(model) else "deployment"
+            )
+            signed_report = compute_signed_diagnostics_report(
+                model=model,
+                descriptors=desc,
+                prediction_depth=int(depth),
+                player_layer_ids=players,
+                phi_gt=phi_gt,
+                phi_t=phi_t,
+                artifact_kind=artifact_kind,
+                diagnostic_source=(
+                    "canonical_best_training_checkpoint"
+                    if artifact_kind == "training"
+                    else None
+                ),
+            )
             row = {
                 "stable_sample_id": sid,
                 "category": category,
@@ -186,14 +409,11 @@ def evaluate_checkpoint_on_records(
                 "kl_teacher_uniform": _kl_p_vs_weights(p_t, uniform),
                 "jsd_gt": float(deployment.allocation_jsd(p_gt, weights).item()),
                 "jsd_teacher": float(deployment.allocation_jsd(p_t, weights).item()),
-                "huber_gt": _signed_huber(signed_pred, phi_gt),
-                "huber_teacher": _signed_huber(signed_pred, phi_t),
-                "top1_gt": deployment.top1_set_agreement(p_gt, weights),
-                "top1_teacher": deployment.top1_set_agreement(p_t, weights),
-                "spearman_gt": deployment.spearman_average_ranks(weights, p_gt),
-                "spearman_teacher": deployment.spearman_average_ranks(weights, p_t),
-                "rank_gt": deployment.pairwise_ranking_accuracy(weights, p_gt),
-                "rank_teacher": deployment.pairwise_ranking_accuracy(weights, p_t),
+                "allocation_top1_gt": deployment.top1_set_agreement(p_gt, weights),
+                "allocation_top1_teacher": deployment.top1_set_agreement(p_t, weights),
+                "allocation_spearman_gt": deployment.spearman_average_ranks(weights, p_gt),
+                "allocation_spearman_teacher": deployment.spearman_average_ranks(weights, p_t),
+                "signed_diagnostics": signed_report,
                 "logits_used": True,
             }
             depth_target_rows[int(depth)].append(row)
