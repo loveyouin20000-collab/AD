@@ -2003,7 +2003,8 @@
     "artifacts/phase_b/b2_dlcm_training/authoritative-run-20260804-152248/seed_43/committed/last_training_checkpoint.pt": "e7782829db215ec01be3bbad354c38b6163eaa25f9468fbe14f4fac7eee7bcf4"
   },
   "classification": {
-    "case": "B",
+    "alpha_case": "C_calibration_feasible_evaluation_infeasible",
+    "equal_family_objective_feasible_on_calibration": false,
     "evidence": [
       "Equal-family oracle fails both target-learning gates on calibration (GT macro KL=0.1029, teacher macro KL=0.0664; uniform teacher=0.0421).",
       "However a non-equal calibration-feasible alpha interval exists [0.31, 0.38] (Case B for reweighted single-head family balance; must not be chosen from evaluation).",
@@ -3533,7 +3534,7 @@
     }
   },
   "schema_version": "b2_05c0_target_conflict_diagnosis_v1",
-  "scientific_content_sha256": "7995516e99a074761cfab443359dca58ddbdb2221a611208a72f1a3c673ed502",
+  "scientific_content_sha256": "d28f486815826c3013926b0d64212948bbb3b18d1b59d483553dbcbb062414fc",
   "seed_calibration_ranking_order": [
     17,
     29,
