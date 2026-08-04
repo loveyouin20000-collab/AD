@@ -3038,9 +3038,12 @@ def _official_config(tmp_path: Path, **overrides: Any) -> Any:
 
 def _clone_contract_repository(tmp_path: Path, *, name: str = "contract-repository") -> Path:
     repository = tmp_path / name
+    clone_env = os.environ.copy()
+    clone_env["GIT_LFS_SKIP_SMUDGE"] = "1"
     subprocess.run(
         ["git", "clone", "--quiet", "--no-local", str(fixtures.REPO_ROOT), str(repository)],
         check=True,
+        env=clone_env,
     )
     return repository
 
@@ -3694,6 +3697,58 @@ def test_production_teacher_payload_rejects_missing_causal_map_tensor() -> None:
 
 
 # --- official materialization gate -----------------------------------------
+
+
+def test_contract_repository_clone_skips_lfs_smudge_without_weakening_identity(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Identity clones must skip LFS smudge without weakening Git identity gates."""
+
+    original_skip = os.environ.get("GIT_LFS_SKIP_SMUDGE")
+    production_run = subprocess.run
+    observed: dict[str, Any] = {}
+
+    def capturing_run(*args: Any, **kwargs: Any) -> Any:
+        command = list(args[0]) if args else list(kwargs.get("args", []))
+        if command[:2] == ["git", "clone"] or (
+            len(command) >= 2 and command[0] == "git" and "clone" in command
+        ):
+            observed["command"] = command
+            observed["env"] = kwargs.get("env")
+        return production_run(*args, **kwargs)
+
+    monkeypatch.setattr(subprocess, "run", capturing_run)
+    repository = _clone_contract_repository(tmp_path, name="lfs-hermetic-clone")
+    assert os.environ.get("GIT_LFS_SKIP_SMUDGE") == original_skip
+    assert observed.get("command") is not None
+    assert "--no-local" in observed["command"]
+    clone_env = observed["env"]
+    assert isinstance(clone_env, dict)
+    assert clone_env.get("GIT_LFS_SKIP_SMUDGE") == "1"
+    assert clone_env is not os.environ
+    assert (repository / ".git").is_dir()
+    clip_pointer = repository / "weight" / "train_on_mvtec" / "CLIP.pth"
+    if clip_pointer.is_file():
+        pointer_text = clip_pointer.read_text(encoding="utf-8")
+        assert pointer_text.startswith("version https://git-lfs.github.com/spec/v1")
+        assert "596f3ed0c0cfe78a314b41fc42a8adfc26b86ab1928f058ce256135cb407b32c" in pointer_text
+        assert clip_pointer.stat().st_size < 1024
+
+    config = subject.load_contribution_targets_config(fixtures.OFFICIAL_CONFIG_PATH)
+    identity = subject.verify_contribution_repository_identity(
+        config=config, repository_root=repository
+    )
+    assert identity.contract_tag == "b2-contribution-target-contract-v1"
+    assert identity.contract_commit == "29591668c3228f6cebd7fd923ae1c39c6dad49bc"
+    assert identity.head_is_descendant is True
+    assert identity.worktree_clean is True
+
+    _git(repository, "tag", "-d", config.expected_contribution_contract_tag)
+    with pytest.raises(subject.ContributionTargetError) as missing_tag:
+        subject.verify_contribution_repository_identity(
+            config=config, repository_root=repository
+        )
+    assert _error_code(missing_tag) == "B2_CONTRIBUTION_CONTRACT_TAG_INVALID"
 
 
 def test_repository_identity_verifier_accepts_a_clean_descendant(tmp_path: Path) -> None:
