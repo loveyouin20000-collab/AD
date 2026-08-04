@@ -3077,8 +3077,12 @@ def _materialize(
         expected_plan_sha256 = subject.run_contribution_target_collection(
             config=config, inputs=inputs
         ).plan["contribution_plan_scientific_sha256"]
+    pinned = dataclasses.replace(
+        config,
+        expected_accepted_input_plan_sha256=expected_plan_sha256,
+    )
     return subject.materialize_contribution_target_collection(
-        config=config,
+        config=pinned,
         inputs=inputs,
         output_run_dir=run_dir,
         expected_plan_sha256=expected_plan_sha256,
@@ -3123,6 +3127,18 @@ def test_official_b2_04b_config_has_independent_pinned_identity() -> None:
     assert official.expected_contribution_contract_commit == (
         "29591668c3228f6cebd7fd923ae1c39c6dad49bc"
     )
+    assert official.fixture_contract_plan_sha256 == fixtures.FIXTURE_CONTRACT_PLAN_SHA256
+    assert official.expected_accepted_input_plan_sha256 == (
+        fixtures.ACCEPTED_INPUT_CONTRIBUTION_PLAN_SHA256
+    )
+    assert official.fixture_contract_plan_sha256 != (
+        official.expected_accepted_input_plan_sha256
+    )
+    assert official.expected_accepted_input_plan_sha256 != (
+        fixtures.SUPERSEDED_RUN_CONTROL_FIXTURE_PLAN_SHA256
+    )
+    assert gate_c.fixture_contract_plan_sha256 is None
+    assert gate_c.expected_accepted_input_plan_sha256 is None
 
     identity_fields = {
         "configuration_id",
@@ -3131,6 +3147,8 @@ def test_official_b2_04b_config_has_independent_pinned_identity() -> None:
         "repository_identity_gate_enabled",
         "expected_contribution_contract_tag",
         "expected_contribution_contract_commit",
+        "fixture_contract_plan_sha256",
+        "expected_accepted_input_plan_sha256",
     }
     for field in official.__dataclass_fields__:
         if field not in identity_fields:
@@ -3835,7 +3853,7 @@ def test_official_materialization_requires_the_expected_plan_hash(
             output_run_dir=tmp_path / "run",
             expected_plan_sha256=None,
         )
-    assert _error_code(excinfo) == "B2_CONTRIBUTION_EXPECTED_PLAN_SHA_MISSING"
+    assert _error_code(excinfo) == "B2_CONTRIBUTION_EXPECTED_PLAN_REQUIRED"
     assert not (tmp_path / "run").exists()
 
 
@@ -3850,7 +3868,7 @@ def test_official_materialization_rejects_a_malformed_expected_plan_hash(
             output_run_dir=tmp_path / "run",
             expected_plan_sha256="not-a-sha",
         )
-    assert _error_code(excinfo) == "B2_CONTRIBUTION_EXPECTED_PLAN_SHA_MALFORMED"
+    assert _error_code(excinfo) == "B2_CONTRIBUTION_EXPECTED_PLAN_INVALID"
     assert not (tmp_path / "run").exists()
 
 
@@ -3866,9 +3884,141 @@ def test_expected_plan_hash_mismatch_fails_before_any_write(
             output_run_dir=tmp_path / "run",
             expected_plan_sha256="a" * 64,
         )
-    assert _error_code(excinfo) == "B2_CONTRIBUTION_EXPECTED_PLAN_SHA_MISMATCH"
+    assert _error_code(excinfo) == "B2_CONTRIBUTION_CONFIG_PLAN_MISMATCH"
     assert not (tmp_path / "run").exists()
     assert _snapshot_tree(tmp_path) == before
+
+
+def test_fixture_contract_plan_cannot_authorize_official_materialization(
+    tmp_path: Path,
+) -> None:
+    payload = fixtures.official_config_payload()
+    payload["expected_accepted_input_plan_sha256"] = fixtures.FIXTURE_CONTRACT_PLAN_SHA256
+    path = fixtures.write_config(tmp_path, payload, name="official_fixture_as_accepted.json")
+    with pytest.raises(subject.ContributionTargetError) as excinfo:
+        subject.load_contribution_targets_config(path)
+    assert _error_code(excinfo) == "B2_CONTRIBUTION_CONFIG_DRIFT"
+
+
+def test_superseded_fixture_plan_cannot_authorize_official_materialization(
+    tmp_path: Path,
+) -> None:
+    payload = fixtures.official_config_payload()
+    payload["expected_accepted_input_plan_sha256"] = (
+        fixtures.SUPERSEDED_RUN_CONTROL_FIXTURE_PLAN_SHA256
+    )
+    path = fixtures.write_config(
+        tmp_path, payload, name="official_superseded_as_accepted.json"
+    )
+    with pytest.raises(subject.ContributionTargetError) as excinfo:
+        subject.load_contribution_targets_config(path)
+    assert _error_code(excinfo) == "B2_CONTRIBUTION_CONFIG_DRIFT"
+
+
+def test_correct_cli_wrong_config_plan_rejected_before_any_write(
+    tmp_path: Path, input_bundle: Any
+) -> None:
+    recomputed = subject.run_contribution_target_collection(
+        config=_official_config(tmp_path / "baseline"), inputs=input_bundle
+    ).plan["contribution_plan_scientific_sha256"]
+    config = _official_config(
+        tmp_path,
+        expected_accepted_input_plan_sha256="0" * 64,
+    )
+    output_root = tmp_path / "absent_output_root"
+    run_dir = output_root / "run"
+    before = _snapshot_tree(tmp_path)
+    with pytest.raises(subject.ContributionTargetError) as excinfo:
+        subject.materialize_contribution_target_collection(
+            config=config,
+            inputs=input_bundle,
+            output_run_dir=run_dir,
+            expected_plan_sha256=recomputed,
+        )
+    assert _error_code(excinfo) == "B2_CONTRIBUTION_CONFIG_PLAN_MISMATCH"
+    assert not output_root.exists()
+    assert _snapshot_tree(tmp_path) == before
+
+
+def test_wrong_cli_correct_config_plan_rejected_before_any_write(
+    tmp_path: Path, input_bundle: Any
+) -> None:
+    recomputed = subject.run_contribution_target_collection(
+        config=_official_config(tmp_path / "baseline"), inputs=input_bundle
+    ).plan["contribution_plan_scientific_sha256"]
+    config = _official_config(
+        tmp_path,
+        expected_accepted_input_plan_sha256=recomputed,
+    )
+    output_root = tmp_path / "absent_output_root"
+    run_dir = output_root / "run"
+    before = _snapshot_tree(tmp_path)
+    with pytest.raises(subject.ContributionTargetError) as excinfo:
+        subject.materialize_contribution_target_collection(
+            config=config,
+            inputs=input_bundle,
+            output_run_dir=run_dir,
+            expected_plan_sha256="a" * 64,
+        )
+    assert _error_code(excinfo) == "B2_CONTRIBUTION_CONFIG_PLAN_MISMATCH"
+    assert not output_root.exists()
+    assert _snapshot_tree(tmp_path) == before
+
+
+def test_cli_and_config_agree_but_recomputed_plan_differs_before_any_write(
+    tmp_path: Path, input_bundle: Any
+) -> None:
+    agreed = "b" * 64
+    config = _official_config(
+        tmp_path,
+        expected_accepted_input_plan_sha256=agreed,
+    )
+    output_root = tmp_path / "absent_output_root"
+    run_dir = output_root / "run"
+    before = _snapshot_tree(tmp_path)
+    with pytest.raises(subject.ContributionTargetError) as excinfo:
+        subject.materialize_contribution_target_collection(
+            config=config,
+            inputs=input_bundle,
+            output_run_dir=run_dir,
+            expected_plan_sha256=agreed,
+        )
+    assert _error_code(excinfo) == "B2_CONTRIBUTION_RECOMPUTED_PLAN_MISMATCH"
+    assert not output_root.exists()
+    assert _snapshot_tree(tmp_path) == before
+
+
+def test_three_way_plan_agreement_allows_persistence(
+    tmp_path: Path, input_bundle: Any
+) -> None:
+    recomputed = subject.run_contribution_target_collection(
+        config=_official_config(tmp_path / "baseline"), inputs=input_bundle
+    ).plan["contribution_plan_scientific_sha256"]
+    config = _official_config(
+        tmp_path,
+        expected_accepted_input_plan_sha256=recomputed,
+    )
+    result = subject.materialize_contribution_target_collection(
+        config=config,
+        inputs=input_bundle,
+        output_run_dir=tmp_path / "run",
+        expected_plan_sha256=recomputed,
+    )
+    assert result.contribution_plan_scientific_sha256 == recomputed
+    assert (tmp_path / "run" / "final_manifest.json").is_file()
+
+
+def test_historical_gate_c_config_and_schema_remain_unmodified() -> None:
+    raw = fixtures.TRACKED_CONFIG_PATH.read_bytes()
+    payload = json.loads(raw)
+    assert hashlib.sha256(raw).hexdigest() == (
+        "b1efaa3494e3fc93f50c9565ab42632a3c4458735746beb6de7125d75276beda"
+    )
+    assert "fixture_contract_plan_sha256" not in payload
+    assert "expected_accepted_input_plan_sha256" not in payload
+    assert payload["schema_version"] == 1
+    assert payload["contract_stage"] == "b2_04a"
+    assert payload["official_materialization_enabled"] is False
 
 
 def test_controlled_official_materialization_produces_a_verified_collection(

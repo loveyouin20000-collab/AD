@@ -410,7 +410,7 @@ def test_cli_rejects_a_malformed_expected_plan_hash(
     )
     assert code == 1
     assert _result_json(stdout, stderr)["code"] == (
-        "B2_CONTRIBUTION_EXPECTED_PLAN_SHA_MALFORMED"
+        "B2_CONTRIBUTION_EXPECTED_PLAN_INVALID"
     )
 
 
@@ -445,7 +445,7 @@ def test_cli_dry_run_rejects_a_mismatched_expected_plan_hash(
     )
     assert code == 1
     assert _result_json(stdout, stderr)["code"] == (
-        "B2_CONTRIBUTION_EXPECTED_PLAN_SHA_MISMATCH"
+        "B2_CONTRIBUTION_RECOMPUTED_PLAN_MISMATCH"
     )
 
 

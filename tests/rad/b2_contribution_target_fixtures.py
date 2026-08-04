@@ -58,6 +58,11 @@ FIXTURE_CONTRACT_PLAN_SHA256 = (
 SUPERSEDED_RUN_CONTROL_FIXTURE_PLAN_SHA256 = (
     "fa3d2435d684a310c81c151c48717afc9455401adce41fbe4d8a96f5c776a84e"
 )
+# Independently proven by real Dry-run A/B after the scientific-plan whitelist fix.
+# This is the only plan identity that may authorize official materialization.
+ACCEPTED_INPUT_CONTRIBUTION_PLAN_SHA256 = (
+    "c3034f54b2e8cc99bffa31d5165ce595625263736d747b5f9db0b97072da7bb0"
+)
 
 FIXTURE_ARTIFACT_KIND = "test_fixture"
 FIXTURE_CANDIDATE_LAYERS: tuple[int, ...] = (6, 12, 18, 24)
@@ -515,6 +520,10 @@ def controlled_official_config_payload(**overrides: Any) -> dict[str, Any]:
     payload["configuration_id"] = "b2_contribution_targets_controlled_official"
     payload["official_materialization_enabled"] = True
     payload["expected_input_artifact_kind"] = FIXTURE_ARTIFACT_KIND
+    # Controlled hermetic materialization recomputes the fixture contract plan.
+    # The tracked official config separately pins the accepted-input identity.
+    payload["fixture_contract_plan_sha256"] = FIXTURE_CONTRACT_PLAN_SHA256
+    payload["expected_accepted_input_plan_sha256"] = FIXTURE_CONTRACT_PLAN_SHA256
     payload.update(overrides)
     return payload
 

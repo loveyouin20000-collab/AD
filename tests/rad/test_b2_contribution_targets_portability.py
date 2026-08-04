@@ -212,6 +212,11 @@ def test_official_config_is_portable_and_long_contract_fields_remain_canonical()
         assert marker not in raw
     assert '"expected_contribution_contract_tag"' in raw
     assert '"expected_contribution_contract_commit"' in raw
+    assert '"fixture_contract_plan_sha256"' in raw
+    assert '"expected_accepted_input_plan_sha256"' in raw
+    assert fixtures.FIXTURE_CONTRACT_PLAN_SHA256 in raw
+    assert fixtures.ACCEPTED_INPUT_CONTRIBUTION_PLAN_SHA256 in raw
+    assert fixtures.SUPERSEDED_RUN_CONTROL_FIXTURE_PLAN_SHA256 not in raw
     for alias in ('"expected_contract_tag"', '"expected_contract_commit"'):
         assert alias not in raw
         assert alias.strip('"') not in loader_source

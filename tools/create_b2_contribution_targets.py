@@ -201,12 +201,12 @@ def _match_expected_plan(recomputed: str, expected: str | None) -> bool:
         return False
     if len(expected) != 64 or any(character not in "0123456789abcdef" for character in expected):
         raise ContributionTargetError(
-            "B2_CONTRIBUTION_EXPECTED_PLAN_SHA_MALFORMED",
+            "B2_CONTRIBUTION_EXPECTED_PLAN_INVALID",
             "the expected plan hash must be 64 lowercase hex characters",
         )
     if expected != recomputed:
         raise ContributionTargetError(
-            "B2_CONTRIBUTION_EXPECTED_PLAN_SHA_MISMATCH",
+            "B2_CONTRIBUTION_RECOMPUTED_PLAN_MISMATCH",
             f"recomputed plan hash {recomputed} does not match the expected {expected}",
         )
     return True

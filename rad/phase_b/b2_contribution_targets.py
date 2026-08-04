@@ -2390,6 +2390,17 @@ OFFICIAL_CONFIGURATION_ID = "b2_contribution_targets_official_v1"
 OFFICIAL_CONTRACT_STAGE = "b2_04b"
 EXPECTED_CONTRIBUTION_CONTRACT_TAG = "b2-contribution-target-contract-v1"
 EXPECTED_CONTRIBUTION_CONTRACT_COMMIT = "29591668c3228f6cebd7fd923ae1c39c6dad49bc"
+# Hermetic fixture regression only. Never authorizes official materialization.
+FIXTURE_CONTRACT_PLAN_SHA256 = (
+    "a072b67b9154b193dccd99e1123c2d5ef09583114e6b2840061cdfcf92ac93d5"
+)
+# Independently proven by real Dry-run A/B. Sole official materialization pin.
+EXPECTED_ACCEPTED_INPUT_PLAN_SHA256 = (
+    "c3034f54b2e8cc99bffa31d5165ce595625263736d747b5f9db0b97072da7bb0"
+)
+SUPERSEDED_RUN_CONTROL_FIXTURE_PLAN_SHA256 = (
+    "fa3d2435d684a310c81c151c48717afc9455401adce41fbe4d8a96f5c776a84e"
+)
 CONFIG_SCHEMA_VERSION = 1
 MANIFEST_SCHEMA_VERSION = 1
 
@@ -2522,6 +2533,8 @@ class ContributionTargetsConfig:
     repository_identity_gate_enabled: bool
     expected_contribution_contract_tag: str | None
     expected_contribution_contract_commit: str | None
+    fixture_contract_plan_sha256: str | None
+    expected_accepted_input_plan_sha256: str | None
 
 
 def _config_int(value: Any, field: str) -> int:
@@ -2572,6 +2585,14 @@ def _config_optional_str(value: Any, field: str) -> str | None:
     return _config_str(value, field)
 
 
+def _config_optional_sha256(value: Any, field: str) -> str | None:
+    if value is None:
+        return None
+    if not _is_sha256(value):
+        _fail("B2_CONTRIBUTION_CONFIG_INVALID", f"{field} must be 64 lowercase hex characters")
+    return str(value)
+
+
 def _numeric_mapping_equal(actual: Mapping[str, Any], expected: Mapping[str, Any]) -> bool:
     if set(actual) != set(expected):
         return False
@@ -2604,6 +2625,11 @@ def _validate_pinned_contribution_config(config: ContributionTargetsConfig) -> N
         and config.repository_identity_gate_enabled is True
         and config.expected_contribution_contract_tag == EXPECTED_CONTRIBUTION_CONTRACT_TAG
         and config.expected_contribution_contract_commit == EXPECTED_CONTRIBUTION_CONTRACT_COMMIT
+        and config.fixture_contract_plan_sha256 == FIXTURE_CONTRACT_PLAN_SHA256
+        and config.expected_accepted_input_plan_sha256 == EXPECTED_ACCEPTED_INPUT_PLAN_SHA256
+        and config.expected_accepted_input_plan_sha256 != config.fixture_contract_plan_sha256
+        and config.expected_accepted_input_plan_sha256
+        != SUPERSEDED_RUN_CONTROL_FIXTURE_PLAN_SHA256
     )
     if (
         config.schema_version != CONFIG_SCHEMA_VERSION
@@ -2647,6 +2673,13 @@ def _validate_pinned_contribution_config(config: ContributionTargetsConfig) -> N
         or config.primary_target_dtype != STATISTICS_DTYPE
         or (tracked and config.official_materialization_enabled is not False)
         or (tracked and config.expected_input_artifact_kind != PRODUCTION_ARTIFACT_KIND)
+        or (tracked and config.fixture_contract_plan_sha256 is not None)
+        or (tracked and config.expected_accepted_input_plan_sha256 is not None)
+        or (
+            config.official_materialization_enabled
+            and not official_profile
+            and config.expected_accepted_input_plan_sha256 is None
+        )
     ):
         _fail("B2_CONTRIBUTION_CONFIG_DRIFT", "contribution-target Gate-C config drifted")
     return None
@@ -2762,6 +2795,14 @@ def load_contribution_targets_config(path: Any) -> ContributionTargetsConfig:
         expected_contribution_contract_commit=_config_optional_str(
             raw.get("expected_contribution_contract_commit"),
             "expected_contribution_contract_commit",
+        ),
+        fixture_contract_plan_sha256=_config_optional_sha256(
+            raw.get("fixture_contract_plan_sha256"),
+            "fixture_contract_plan_sha256",
+        ),
+        expected_accepted_input_plan_sha256=_config_optional_sha256(
+            raw.get("expected_accepted_input_plan_sha256"),
+            "expected_accepted_input_plan_sha256",
         ),
     )
     _validate_pinned_contribution_config(config)
@@ -4436,6 +4477,13 @@ def require_official_materialization_enabled(config: ContributionTargetsConfig) 
 def _require_expected_plan_sha256(
     config: ContributionTargetsConfig, expected_plan_sha256: Any
 ) -> str:
+    """Require CLI, config, and later the recomputed plan to share one identity.
+
+    Returns the CLI expectation after confirming it is well formed and equal to
+    ``config.expected_accepted_input_plan_sha256``. The recomputed-plan check
+    happens only after scientific collection, still before any write.
+    """
+
     if not config.expected_plan_sha_required_for_official:
         _fail(
             "B2_CONTRIBUTION_CONFIG_DRIFT",
@@ -4443,15 +4491,46 @@ def _require_expected_plan_sha256(
         )
     if expected_plan_sha256 is None:
         _fail(
-            "B2_CONTRIBUTION_EXPECTED_PLAN_SHA_MISSING",
+            "B2_CONTRIBUTION_EXPECTED_PLAN_REQUIRED",
             "official materialization requires --expected-plan-sha256",
         )
     if not _is_sha256(expected_plan_sha256):
         _fail(
-            "B2_CONTRIBUTION_EXPECTED_PLAN_SHA_MALFORMED",
+            "B2_CONTRIBUTION_EXPECTED_PLAN_INVALID",
             "the expected plan hash must be 64 lowercase hex characters",
         )
-    return str(expected_plan_sha256)
+    pinned = config.expected_accepted_input_plan_sha256
+    if pinned is None:
+        _fail(
+            "B2_CONTRIBUTION_CONFIG_DRIFT",
+            "official materialization requires expected_accepted_input_plan_sha256",
+        )
+    if not _is_sha256(pinned):
+        _fail(
+            "B2_CONTRIBUTION_CONFIG_INVALID",
+            "expected_accepted_input_plan_sha256 must be 64 lowercase hex characters",
+        )
+    cli_expected = str(expected_plan_sha256)
+    if cli_expected != str(pinned):
+        _fail(
+            "B2_CONTRIBUTION_CONFIG_PLAN_MISMATCH",
+            "CLI --expected-plan-sha256 does not match "
+            "config.expected_accepted_input_plan_sha256",
+        )
+    if cli_expected == FIXTURE_CONTRACT_PLAN_SHA256 and (
+        config.configuration_id == OFFICIAL_CONFIGURATION_ID
+        or config.contract_stage == OFFICIAL_CONTRACT_STAGE
+    ):
+        _fail(
+            "B2_CONTRIBUTION_CONFIG_PLAN_MISMATCH",
+            "fixture_contract_plan_sha256 cannot authorize official materialization",
+        )
+    if cli_expected == SUPERSEDED_RUN_CONTROL_FIXTURE_PLAN_SHA256:
+        _fail(
+            "B2_CONTRIBUTION_CONFIG_PLAN_MISMATCH",
+            "superseded run-control fixture plan cannot authorize official materialization",
+        )
+    return cli_expected
 
 
 def materialize_contribution_target_collection(
@@ -4504,7 +4583,7 @@ def materialize_contribution_target_collection(
     recomputed = str(collection.plan["contribution_plan_scientific_sha256"])
     if recomputed != expected:
         _fail(
-            "B2_CONTRIBUTION_EXPECTED_PLAN_SHA_MISMATCH",
+            "B2_CONTRIBUTION_RECOMPUTED_PLAN_MISMATCH",
             f"recomputed plan hash {recomputed} does not match the expected {expected}",
         )
 

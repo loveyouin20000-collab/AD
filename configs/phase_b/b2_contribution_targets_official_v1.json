@@ -62,5 +62,7 @@
   "primary_target_dtype": "float64",
   "repository_identity_gate_enabled": true,
   "expected_contribution_contract_tag": "b2-contribution-target-contract-v1",
-  "expected_contribution_contract_commit": "29591668c3228f6cebd7fd923ae1c39c6dad49bc"
+  "expected_contribution_contract_commit": "29591668c3228f6cebd7fd923ae1c39c6dad49bc",
+  "fixture_contract_plan_sha256": "a072b67b9154b193dccd99e1123c2d5ef09583114e6b2840061cdfcf92ac93d5",
+  "expected_accepted_input_plan_sha256": "c3034f54b2e8cc99bffa31d5165ce595625263736d747b5f9db0b97072da7bb0"
 }
