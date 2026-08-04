@@ -234,3 +234,61 @@ def test_official_sum_preserving_fusion_equivalence_untouched() -> None:
     n_valid = valid.sum(dim=1).clamp_min(1).to(maps.dtype)
     expected = (maps * weights[:, :, None, None, None]).sum(dim=1) * n_valid[:, None, None, None]
     assert torch.equal(out, expected)
+
+
+@pytest.mark.parametrize(
+    ("depth", "players"),
+    [
+        (12, (6, 12)),
+        (18, (6, 12, 18)),
+        (24, (6, 12, 18, 24)),
+    ],
+)
+def test_exact_uniform_matches_production_where_representable(
+    depth: int, players: tuple[int, ...]
+) -> None:
+    from rad.models.dlcm import sum_preserving_fusion as official
+
+    n = len(players)
+    maps = torch.randn(2, n, 5, 5, dtype=torch.float32).contiguous()
+    weights = subject.reference_uniform_weights(n).view(1, n).expand(2, n).contiguous()
+    fused, path = subject.sum_preserving_fusion(
+        maps,
+        weights,
+        prediction_depth=depth,
+        player_layer_ids=players,
+        return_path=True,
+    )
+    assert path == "uniform_baseline"
+    assert torch.equal(fused, maps.sum(dim=1))
+    production = official(
+        maps.unsqueeze(2),
+        weights,
+        torch.ones(2, n, dtype=torch.bool),
+    ).squeeze(1)
+    if n in (2, 4):
+        assert torch.equal(fused, production)
+    else:
+        # Depth 18: 1/3 is not exact FP32; fast path restores baseline sum.
+        assert not torch.equal(fused, production)
+
+
+def test_dynamic_path_delegates_to_production_bitexact() -> None:
+    from rad.models.dlcm import sum_preserving_fusion as official
+
+    maps = torch.randn(1, 3, 4, 4, dtype=torch.float32).contiguous()
+    weights = torch.tensor([[0.5, 0.25, 0.25]], dtype=torch.float32)
+    fused, path = subject.sum_preserving_fusion(
+        maps,
+        weights,
+        prediction_depth=18,
+        player_layer_ids=(6, 12, 18),
+        return_path=True,
+    )
+    assert path == "dynamic_weighted"
+    production = official(
+        maps.unsqueeze(2),
+        weights,
+        torch.ones(1, 3, dtype=torch.bool),
+    ).squeeze(1)
+    assert torch.equal(fused, production)

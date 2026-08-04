@@ -851,12 +851,14 @@ def sum_preserving_fusion(
     return_path: bool = False,
     clamp_negative_eps: float = 1e-6,
 ) -> torch.Tensor | tuple[torch.Tensor, str]:
-    """B2 formal sum-preserving fusion with exact uniform fast path.
+    """B2 formal fusion: validated wrapper around production sum-preserving fusion.
 
-    Reuses the production sum-preserving formula ``A_d = n_d * sum_i w_i A_i``
-    with fixed layer-ID order FP32 accumulation. Does not modify
-    ``rad.models.dlcm.sum_preserving_fusion``.
+    Exact uniform bit patterns use the uniform_baseline fast path (ordered map
+    summation) required for depth-18 FP32 baseline restoration. Dynamic weights
+    delegate exclusively to ``rad.models.dlcm.sum_preserving_fusion``.
     """
+
+    from rad.models.dlcm import sum_preserving_fusion as production_sum_preserving_fusion
 
     validate_player_layer_ids(
         prediction_depth,
@@ -879,7 +881,6 @@ def sum_preserving_fusion(
         _fail("B2_DLCM_FUSION_SHAPE_INVALID", "H,W must be >= 1")
 
     n_d = anomaly_maps.shape[1]
-    # Weight validity.
     if bool((weights < -clamp_negative_eps).any()):
         _fail("B2_DLCM_WEIGHT_NEGATIVE", "weights below -1e-6")
     clamped = torch.where(
@@ -892,26 +893,35 @@ def sum_preserving_fusion(
         _fail("B2_DLCM_WEIGHT_SUM_INVALID", "weight rows must sum to 1 within 1e-6")
 
     ref = reference_uniform_weights(n_d, dtype=torch.float32).to(device=weights.device)
-    # Exact bit-pattern match against reference uniform vector.
     ref_row = ref.view(1, -1).expand_as(clamped)
     exact_uniform = bool(torch.equal(clamped, ref_row))
+
+    maps_5d = anomaly_maps.unsqueeze(2).contiguous()
+    valid_mask = torch.ones(
+        anomaly_maps.shape[0],
+        n_d,
+        dtype=torch.bool,
+        device=anomaly_maps.device,
+    )
+
     if exact_uniform:
-        # Uniform baseline: add maps directly in fixed layer order.
         fused = anomaly_maps[:, 0].clone()
         for idx in range(1, n_d):
             fused = fused + anomaly_maps[:, idx]
         path = "uniform_baseline"
+        # Representable uniforms (1/2, 1/4) must bit-match production equal-weight.
+        if n_d in (2, 4):
+            production = production_sum_preserving_fusion(
+                maps_5d, clamped, valid_mask
+            ).squeeze(1)
+            if not torch.equal(fused, production):
+                _fail(
+                    "B2_DLCM_FUSION_PRODUCTION_MISMATCH",
+                    "uniform fast path must equal production equal-weight fusion",
+                )
     else:
-        fused = torch.zeros(
-            anomaly_maps.shape[0],
-            anomaly_maps.shape[2],
-            anomaly_maps.shape[3],
-            dtype=torch.float32,
-            device=anomaly_maps.device,
-        )
-        for idx in range(n_d):
-            fused = fused + clamped[:, idx].view(-1, 1, 1) * anomaly_maps[:, idx]
-        fused = fused * float(n_d)
+        production = production_sum_preserving_fusion(maps_5d, clamped, valid_mask)
+        fused = production.squeeze(1).contiguous()
         path = "dynamic_weighted"
     if return_path:
         return fused, path
