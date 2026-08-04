@@ -23,6 +23,7 @@ from rad.phase_b.b2_dlcm import (
 
 LOADER_CONTRACT_VERSION = "b2_dlcm_loader_v1"
 DEPLOYMENT_SCHEMA_VERSION = "b2_dlcm_deployment_checkpoint_v1"
+FORMAL_LOCALIZATION_ADAPTER_ID = "b2_dlcm_formal_localization_v1"
 
 
 class B2DLCMDeploymentError(RuntimeError):
@@ -651,6 +652,7 @@ def evaluate_qualification_gates(
     delta_aupro_macro: float,
     per_category_localization: Mapping[str, Mapping[str, float]],
     best_epoch: int,
+    localization_evidence: FormalLocalizationGateEvidence | None = None,
 ) -> dict[str, Any]:
     target_ok = True
     loc_ok = True
@@ -668,6 +670,17 @@ def evaluate_qualification_gates(
         if fam["gt"] > fam["gt_uniform"] + 1e-4 or fam["teacher"] > fam["teacher_uniform"] + 1e-4:
             target_ok = False
             reasons.append(f"category_kl:{category}")
+    if localization_evidence is None:
+        loc_ok = False
+        reasons.append("formal_localization_adapter_missing")
+    else:
+        if localization_evidence.metric_source_identity != FORMAL_LOCALIZATION_ADAPTER_ID:
+            loc_ok = False
+            reasons.append("formal_localization_adapter_identity_invalid")
+        delta_pixel_ap_macro = localization_evidence.delta_pixel_ap_macro
+        delta_pixel_auroc_macro = localization_evidence.delta_pixel_auroc_macro
+        delta_aupro_macro = localization_evidence.delta_aupro_macro
+        per_category_localization = localization_evidence.per_category_localization
     if not (
         delta_pixel_ap_macro >= 0
         and delta_pixel_auroc_macro >= -1e-4
@@ -698,6 +711,143 @@ def evaluate_qualification_gates(
         "localization_passed": loc_ok,
         "reasons": reasons,
     }
+
+
+@dataclass(frozen=True)
+class FormalLocalizationMetrics:
+    metric_source_identity: str
+    pixel_auroc: float
+    pixel_ap: float
+    aupro: float
+    teacher_spearman: float
+    teacher_top1_overlap: float
+    invocation_proof: Mapping[str, bool]
+
+
+@dataclass(frozen=True)
+class FormalLocalizationGateEvidence:
+    metric_source_identity: str
+    delta_pixel_ap_macro: float
+    delta_pixel_auroc_macro: float
+    delta_aupro_macro: float
+    per_category_localization: Mapping[str, Mapping[str, float]]
+
+
+def compute_formal_localization_metrics(
+    *,
+    image_labels: Any,
+    image_scores: Any,
+    masks: Any,
+    anomaly_maps: Any,
+    teacher_map: Any | None = None,
+) -> FormalLocalizationMetrics:
+    """Formal adapter: production paper metrics + contribution teacher fidelity only."""
+
+    import numpy as np
+
+    from rad.evaluation import paper_metrics
+    from rad.phase_b import b2_contribution_targets as contrib_mod
+
+    proof = {
+        "compute_paper_metrics": False,
+        "spearman_fidelity": False,
+        "top1_overlap": False,
+    }
+    try:
+        metrics = paper_metrics.compute_paper_metrics(
+            image_labels=np.asarray(image_labels),
+            image_scores=np.asarray(image_scores),
+            masks=np.asarray(masks),
+            anomaly_maps=np.asarray(anomaly_maps),
+            boundary_enabled=False,
+        )
+        proof["compute_paper_metrics"] = True
+    except Exception as exc:  # noqa: BLE001 — fail closed with contract code
+        _fail("B2_DLCM_EVAL_METRIC_UNDEFINED", f"production paper metrics failed: {exc}")
+    if teacher_map is None:
+        _fail("B2_DLCM_EVAL_METRIC_UNDEFINED", "teacher_map required for formal adapter")
+    try:
+        anomaly_t = (
+            anomaly_maps
+            if isinstance(anomaly_maps, torch.Tensor)
+            else torch.as_tensor(anomaly_maps, dtype=torch.float32)
+        )
+        teacher_t = (
+            teacher_map
+            if isinstance(teacher_map, torch.Tensor)
+            else torch.as_tensor(teacher_map, dtype=torch.float32)
+        )
+        if anomaly_t.ndim == 2:
+            anomaly_t = anomaly_t.unsqueeze(0)
+            teacher_t = teacher_t.unsqueeze(0)
+        if anomaly_t.ndim != 3 or teacher_t.shape != anomaly_t.shape:
+            _fail(
+                "B2_DLCM_EVAL_METRIC_UNDEFINED",
+                "anomaly/teacher maps must be [H,W] or [N,H,W] with equal shapes",
+            )
+        spearman_vals: list[float] = []
+        overlap_vals: list[float] = []
+        for idx in range(int(anomaly_t.shape[0])):
+            spearman_vals.append(
+                float(contrib_mod.spearman_fidelity(anomaly_t[idx], teacher_t[idx]).raw)
+            )
+            overlap_vals.append(float(contrib_mod.top1_overlap(anomaly_t[idx], teacher_t[idx])))
+        proof["spearman_fidelity"] = True
+        proof["top1_overlap"] = True
+        spearman_raw = float(sum(spearman_vals) / len(spearman_vals))
+        overlap_raw = float(sum(overlap_vals) / len(overlap_vals))
+    except B2DLCMDeploymentError:
+        raise
+    except Exception as exc:  # noqa: BLE001
+        _fail("B2_DLCM_EVAL_METRIC_UNDEFINED", f"teacher fidelity metrics failed: {exc}")
+    if not all(proof.values()):
+        _fail("B2_DLCM_EVAL_METRIC_UNDEFINED", "incomplete production metric invocation")
+    return FormalLocalizationMetrics(
+        metric_source_identity=FORMAL_LOCALIZATION_ADAPTER_ID,
+        pixel_auroc=float(metrics.pixel_auroc),
+        pixel_ap=float(metrics.pixel_ap),
+        aupro=float(metrics.pixel_aupro),
+        teacher_spearman=spearman_raw,
+        teacher_top1_overlap=overlap_raw,
+        invocation_proof=dict(proof),
+    )
+
+
+def build_formal_localization_gate_evidence(
+    *,
+    per_category_metrics: Mapping[str, FormalLocalizationMetrics],
+    per_category_baseline: Mapping[str, FormalLocalizationMetrics],
+) -> FormalLocalizationGateEvidence:
+    if not per_category_metrics:
+        _fail("B2_DLCM_EVAL_METRIC_UNDEFINED", "no formal category metrics")
+    deltas: dict[str, dict[str, float]] = {}
+    ap_vals: list[float] = []
+    auroc_vals: list[float] = []
+    aupro_vals: list[float] = []
+    for category, metrics in sorted(per_category_metrics.items()):
+        if metrics.metric_source_identity != FORMAL_LOCALIZATION_ADAPTER_ID:
+            _fail("B2_DLCM_EVAL_METRIC_UNDEFINED", f"non-formal metrics for {category}")
+        if category not in per_category_baseline:
+            _fail("B2_DLCM_EVAL_METRIC_UNDEFINED", f"missing baseline for {category}")
+        baseline = per_category_baseline[category]
+        if baseline.metric_source_identity != FORMAL_LOCALIZATION_ADAPTER_ID:
+            _fail("B2_DLCM_EVAL_METRIC_UNDEFINED", f"non-formal baseline for {category}")
+        delta = {
+            "delta_pixel_ap": float(metrics.pixel_ap - baseline.pixel_ap),
+            "delta_pixel_auroc": float(metrics.pixel_auroc - baseline.pixel_auroc),
+            "delta_aupro": float(metrics.aupro - baseline.aupro),
+        }
+        deltas[category] = delta
+        ap_vals.append(delta["delta_pixel_ap"])
+        auroc_vals.append(delta["delta_pixel_auroc"])
+        aupro_vals.append(delta["delta_aupro"])
+    return FormalLocalizationGateEvidence(
+        metric_source_identity=FORMAL_LOCALIZATION_ADAPTER_ID,
+        delta_pixel_ap_macro=float(sum(ap_vals) / len(ap_vals)),
+        delta_pixel_auroc_macro=float(sum(auroc_vals) / len(auroc_vals)),
+        delta_aupro_macro=float(sum(aupro_vals) / len(aupro_vals)),
+        per_category_localization=deltas,
+    )
 
 
 def build_accepted_manifest_identities(

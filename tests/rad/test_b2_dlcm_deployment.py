@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from typing import Any
+
 import pytest
 import torch
 
@@ -127,6 +129,15 @@ def test_canonical_seed_selection_rules() -> None:
 
 
 def test_qualification_state_matrix() -> None:
+    evidence = subject.FormalLocalizationGateEvidence(
+        metric_source_identity=subject.FORMAL_LOCALIZATION_ADAPTER_ID,
+        delta_pixel_ap_macro=0.01,
+        delta_pixel_auroc_macro=0.0,
+        delta_aupro_macro=0.0,
+        per_category_localization={
+            "bottle": {"delta_pixel_ap": 0.0, "delta_pixel_auroc": 0.0, "delta_aupro": 0.0}
+        },
+    )
     base = dict(
         kl_dlcm_gt_macro=0.1,
         kl_uniform_gt_macro=0.2,
@@ -142,10 +153,24 @@ def test_qualification_state_matrix() -> None:
             "bottle": {"delta_pixel_ap": 0.0, "delta_pixel_auroc": 0.0, "delta_aupro": 0.0}
         },
         best_epoch=5,
+        localization_evidence=evidence,
     )
     assert subject.evaluate_qualification_gates(**base)["state"] == "deployment_qualified"
+    # Bare floats without formal evidence cannot qualify.
+    bare = dict(base)
+    bare["localization_evidence"] = None
+    assert subject.evaluate_qualification_gates(**bare)["deployment_qualified"] is False
+    loc_fail_evidence = subject.FormalLocalizationGateEvidence(
+        metric_source_identity=subject.FORMAL_LOCALIZATION_ADAPTER_ID,
+        delta_pixel_ap_macro=-0.01,
+        delta_pixel_auroc_macro=0.0,
+        delta_aupro_macro=0.0,
+        per_category_localization={
+            "bottle": {"delta_pixel_ap": 0.0, "delta_pixel_auroc": 0.0, "delta_aupro": 0.0}
+        },
+    )
     loc_fail = dict(base)
-    loc_fail["delta_pixel_ap_macro"] = -0.01
+    loc_fail["localization_evidence"] = loc_fail_evidence
     assert (
         subject.evaluate_qualification_gates(**loc_fail)["state"]
         == "trained_but_not_deployment_qualified"
@@ -159,6 +184,50 @@ def test_qualification_state_matrix() -> None:
     epoch0 = dict(base)
     epoch0["best_epoch"] = 0
     assert subject.evaluate_qualification_gates(**epoch0)["deployment_qualified"] is False
+
+
+def test_formal_localization_adapter_invokes_production(monkeypatch: pytest.MonkeyPatch) -> None:
+    import numpy as np
+
+    calls: list[str] = []
+    from rad.evaluation import paper_metrics
+    from rad.phase_b import b2_contribution_targets as contrib_mod
+
+    real_compute = paper_metrics.compute_paper_metrics
+    real_spearman = contrib_mod.spearman_fidelity
+    real_top1 = contrib_mod.top1_overlap
+
+    def wrap(name: str, fn: Any):
+        def _inner(*args: Any, **kwargs: Any) -> Any:
+            calls.append(name)
+            return fn(*args, **kwargs)
+
+        return _inner
+
+    monkeypatch.setattr(paper_metrics, "compute_paper_metrics", wrap("paper", real_compute))
+    monkeypatch.setattr(contrib_mod, "spearman_fidelity", wrap("spearman", real_spearman))
+    monkeypatch.setattr(contrib_mod, "top1_overlap", wrap("top1", real_top1))
+
+    h = w = 8
+    masks = np.zeros((2, h, w), dtype=np.float64)
+    masks[1, 2:5, 2:5] = 1.0
+    maps = np.random.rand(2, h, w).astype(np.float64) * 0.1
+    maps[1, 2:5, 2:5] = 0.9
+    teacher = maps.copy()
+    labels = np.array([0.0, 1.0])
+    scores = np.array([0.1, 0.9])
+    metrics = subject.compute_formal_localization_metrics(
+        image_labels=labels,
+        image_scores=scores,
+        masks=masks,
+        anomaly_maps=maps,
+        teacher_map=teacher,
+    )
+    assert metrics.metric_source_identity == subject.FORMAL_LOCALIZATION_ADAPTER_ID
+    assert calls[0] == "paper"
+    assert calls.count("spearman") >= 1
+    assert calls.count("top1") >= 1
+    assert metrics.invocation_proof["compute_paper_metrics"] is True
 
 
 def test_unqualified_formal_loader_rejection() -> None:
