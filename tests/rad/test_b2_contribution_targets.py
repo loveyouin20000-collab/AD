@@ -67,10 +67,13 @@ Contract assumed by the Story 2 tests in this file (artifacts only):
 from __future__ import annotations
 
 import copy
+import dataclasses
 import hashlib
 import inspect
+import json
 import math
 import os
+import subprocess
 from pathlib import Path
 from typing import Any
 
@@ -141,7 +144,6 @@ def test_module_avoids_teacher_loading_and_target_domain() -> None:
         "build_backbone",
         "visa",
         "argparse",
-        "subprocess",
         "torch.backends",
     ):
         assert forbidden not in source
@@ -2665,10 +2667,7 @@ def test_contribution_plan_binds_all_seven_identities(
     )
 
 
-@pytest.mark.parametrize(
-    "mutate",
-    ["record", "calibration", "normalization", "official_flag"],
-)
+@pytest.mark.parametrize("mutate", ["record", "calibration", "normalization"])
 def test_contribution_plan_hash_changes_when_any_bound_identity_changes(
     target_fixture: Any,
     target_records: Any,
@@ -2686,24 +2685,160 @@ def test_contribution_plan_hash_changes_when_any_bound_identity_changes(
     records = copy.deepcopy(list(target_records))
     artifact = copy.deepcopy(calibration_artifact)
     statistics = copy.deepcopy(normalization)
-    official = False
     if mutate == "record":
         records[0]["contribution_target_record_scientific_sha256"] = "3" * 64
     elif mutate == "calibration":
         artifact["gt_map_calibration_scientific_sha256"] = "4" * 64
-    elif mutate == "normalization":
-        statistics["shapley_normalization_scientific_sha256"] = "5" * 64
     else:
-        official = True
+        statistics["shapley_normalization_scientific_sha256"] = "5" * 64
     mutated = subject.build_contribution_plan(
         records=records,
         calibration_artifact=artifact,
         normalization=statistics,
         candidate_layers=target_fixture.candidate_layers,
         prediction_depths=target_fixture.prediction_depths,
-        official_materialization_enabled=official,
     )["contribution_plan_scientific_sha256"]
     assert mutated != baseline
+
+
+# --- scientific plan identity versus operational provenance -----------------
+#
+# Run control, repository gating, and output location describe *how* a plan was
+# executed, never *what* was computed. They may travel with the plan payload as
+# operational attestation, but they can never move the scientific identity.
+
+
+_OPERATIONAL_PLAN_FIELDS: tuple[tuple[str, Any], ...] = (
+    ("official_materialization_enabled", True),
+    ("repository_identity_gate_enabled", True),
+    ("resume_enabled", True),
+    ("expected_plan_sha_required_for_official", False),
+    ("expected_contribution_contract_tag", "b2-contribution-target-contract-v1"),
+    ("expected_contribution_contract_commit", "2" * 40),
+    ("generation_commit", "9" * 40),
+    ("observed_head_commit", "8" * 40),
+    ("worktree_clean", False),
+    ("git_branch", "some-other-branch"),
+    ("worktree_path", "/tmp/some-other-worktree"),
+    ("absolute_output_path", "/tmp/some-other-run"),
+    ("output_dir", "/tmp/some-other-run"),
+    ("output_root", "/tmp/some-other-root"),
+    ("cli_mode", "official"),
+    ("mode", "dry_run"),
+    ("timestamp", "2026-07-30T00:00:00Z"),
+    ("runtime_attestation_sha256", "7" * 64),
+    ("plan_file_sha256", "6" * 64),
+)
+
+_SCIENTIFIC_PLAN_MUTATIONS: tuple[tuple[str, Any], ...] = (
+    ("gt_map_calibration_scientific_sha256", "a" * 64),
+    ("contribution_target_sample_coverage_sha256", "b" * 64),
+    ("contribution_target_collection_scientific_sha256", "c" * 64),
+    ("shapley_normalization_scientific_sha256", "d" * 64),
+    ("training_target_coverage_sha256", "e" * 64),
+    ("calibration_target_coverage_sha256", "f" * 64),
+    ("evaluation_target_coverage_sha256", "0" * 64),
+    ("planned_record_count", 31),
+    ("planned_split_counts", {"training": 15, "calibration": 9, "evaluation": 8}),
+    ("candidate_layers", [6, 12, 18]),
+    ("prediction_depths", [12, 18]),
+    ("teacher_forward_count", 1),
+    ("teacher_cache_scientific_sha256", "1" * 64),
+    ("descriptor_collection_scientific_sha256", "2" * 64),
+    ("split_scientific_sha256", "3" * 64),
+    ("checkpoint_sha256", "4" * 64),
+    ("execution_profile_sha256", "5" * 64),
+)
+
+
+@pytest.fixture(scope="module")
+def baseline_plan(
+    target_fixture: Any,
+    target_records: Any,
+    calibration_artifact: Any,
+    normalization: Any,
+) -> dict[str, Any]:
+    return subject.build_contribution_plan(
+        records=target_records,
+        calibration_artifact=calibration_artifact,
+        normalization=normalization,
+        candidate_layers=target_fixture.candidate_layers,
+        prediction_depths=target_fixture.prediction_depths,
+    )
+
+
+def test_official_materialization_flag_never_moves_the_plan_scientific_identity(
+    target_fixture: Any,
+    target_records: Any,
+    calibration_artifact: Any,
+    normalization: Any,
+) -> None:
+    hashes = {
+        subject.build_contribution_plan(
+            records=target_records,
+            calibration_artifact=calibration_artifact,
+            normalization=normalization,
+            candidate_layers=target_fixture.candidate_layers,
+            prediction_depths=target_fixture.prediction_depths,
+            official_materialization_enabled=enabled,
+        )["contribution_plan_scientific_sha256"]
+        for enabled in (False, True)
+    }
+    assert len(hashes) == 1
+
+
+@pytest.mark.parametrize(("field", "value"), _OPERATIONAL_PLAN_FIELDS)
+def test_operational_plan_fields_never_move_the_plan_scientific_identity(
+    baseline_plan: dict[str, Any], field: str, value: Any
+) -> None:
+    baseline = subject._plan_scientific_sha256(baseline_plan)
+    assert baseline == baseline_plan["contribution_plan_scientific_sha256"]
+    attested = copy.deepcopy(baseline_plan)
+    attested[field] = value
+    assert subject._plan_scientific_sha256(attested) == baseline
+
+
+@pytest.mark.parametrize(("field", "value"), _SCIENTIFIC_PLAN_MUTATIONS)
+def test_scientific_plan_fields_still_move_the_plan_scientific_identity(
+    baseline_plan: dict[str, Any], field: str, value: Any
+) -> None:
+    baseline = subject._plan_scientific_sha256(baseline_plan)
+    mutated = copy.deepcopy(baseline_plan)
+    assert mutated[field] != value
+    mutated[field] = value
+    assert subject._plan_scientific_sha256(mutated) != baseline
+
+
+@pytest.mark.parametrize(
+    "field",
+    [
+        "planned_ordered_stable_sample_ids",
+        "contribution_target_record_scientific_sha256_by_id",
+        "contract_versions",
+    ],
+)
+def test_structured_scientific_plan_fields_still_move_the_identity(
+    baseline_plan: dict[str, Any], field: str
+) -> None:
+    baseline = subject._plan_scientific_sha256(baseline_plan)
+    mutated = copy.deepcopy(baseline_plan)
+    if field == "planned_ordered_stable_sample_ids":
+        mutated[field] = list(reversed(mutated[field]))
+    elif field == "contribution_target_record_scientific_sha256_by_id":
+        first = sorted(mutated[field])[0]
+        mutated[field][first] = "9" * 64
+    else:
+        mutated[field] = {**mutated[field], "utility": "drifted_utility_contract"}
+    assert subject._plan_scientific_sha256(mutated) != baseline
+
+
+def test_plan_whitelist_declares_run_control_as_operational_only() -> None:
+    assert set(subject._PLAN_SCIENTIFIC_KEYS).isdisjoint(subject._NON_SCIENTIFIC_PLAN_KEYS)
+    for field, _value in _OPERATIONAL_PLAN_FIELDS:
+        assert field not in subject._PLAN_SCIENTIFIC_KEYS
+        assert field in subject._NON_SCIENTIFIC_PLAN_KEYS
+    for field, _value in _SCIENTIFIC_PLAN_MUTATIONS:
+        assert field in subject._PLAN_SCIENTIFIC_KEYS
 
 
 def test_contribution_plan_rejects_wrong_split_counts(
@@ -2901,6 +3036,172 @@ def _official_config(tmp_path: Path, **overrides: Any) -> Any:
     )
 
 
+def _clone_subprocess_env() -> dict[str, str]:
+    """Environment for identity-test clones only; never mutates ``os.environ``."""
+
+    clone_env = os.environ.copy()
+    clone_env["GIT_LFS_SKIP_SMUDGE"] = "1"
+    return clone_env
+
+
+# Captured before tests may monkeypatch ``fixtures.REPO_ROOT``.
+_IDENTITY_HISTORY_SEED_ROOT = Path(fixtures.REPO_ROOT)
+
+
+def _git_probe(
+    repository: Path, *arguments: str, env: dict[str, str] | None = None
+) -> subprocess.CompletedProcess[str]:
+    return subprocess.run(
+        ["git", "-C", str(repository), *arguments],
+        check=False,
+        capture_output=True,
+        text=True,
+        env=env,
+    )
+
+
+def _resolve_contract_identity_remote_url(*, env: dict[str, str]) -> str:
+    """Resolve a fetch URL that can supply the frozen contract tag/history.
+
+    Prefer the workspace ``origin`` when it is a network remote (as on GitHub
+    Actions). Otherwise prefer the import-time seed checkout when it already
+    carries the contract tag (local full worktrees).
+    """
+
+    tag = subject.EXPECTED_CONTRIBUTION_CONTRACT_TAG
+    commit = subject.EXPECTED_CONTRIBUTION_CONTRACT_COMMIT
+    origin = _git_probe(fixtures.REPO_ROOT, "remote", "get-url", "origin", env=env).stdout.strip()
+    if origin.startswith(("http://", "https://", "git@", "ssh://")):
+        return origin
+    seed_tag = _git_probe(
+        _IDENTITY_HISTORY_SEED_ROOT,
+        "rev-parse",
+        "--verify",
+        f"{tag}^{{commit}}",
+        env=env,
+    )
+    if seed_tag.returncode == 0 and seed_tag.stdout.strip() == commit:
+        return str(_IDENTITY_HISTORY_SEED_ROOT)
+    if origin:
+        return origin
+    return "https://github.com/loveyouin20000-collab/AD.git"
+
+
+def _ensure_contract_identity_history(repository: Path, *, env: dict[str, str]) -> None:
+    """Restore frozen contract tag/ancestry omitted by shallow, tagless CI checkouts.
+
+    Identity tests still use ``git clone --no-local`` from the workspace. GitHub
+    Actions defaults to ``fetch-depth: 1`` without tags, so the clone cannot
+    resolve ``b2-contribution-target-contract-v1`` until history is fetched from
+    a remote that carries the frozen tag. LFS skip stays scoped to ``env``.
+    """
+
+    tag = subject.EXPECTED_CONTRIBUTION_CONTRACT_TAG
+    commit = subject.EXPECTED_CONTRIBUTION_CONTRACT_COMMIT
+    tag_probe = _git_probe(repository, "rev-parse", "--verify", f"{tag}^{{commit}}", env=env)
+    ancestor_probe = _git_probe(
+        repository, "merge-base", "--is-ancestor", commit, "HEAD", env=env
+    )
+    if (
+        tag_probe.returncode == 0
+        and tag_probe.stdout.strip() == commit
+        and ancestor_probe.returncode == 0
+    ):
+        return
+
+    remote_url = _resolve_contract_identity_remote_url(env=env)
+    remote_name = "contract-identity-origin"
+    _git_probe(repository, "remote", "remove", remote_name, env=env)
+    subprocess.run(
+        ["git", "-C", str(repository), "remote", "add", remote_name, remote_url],
+        check=True,
+        capture_output=True,
+        text=True,
+        env=env,
+    )
+    subprocess.run(
+        [
+            "git",
+            "-C",
+            str(repository),
+            "fetch",
+            "--quiet",
+            remote_name,
+            f"+refs/tags/{tag}:refs/tags/{tag}",
+        ],
+        check=True,
+        capture_output=True,
+        text=True,
+        env=env,
+    )
+    unshallow = subprocess.run(
+        ["git", "-C", str(repository), "fetch", "--quiet", "--unshallow", remote_name],
+        check=False,
+        capture_output=True,
+        text=True,
+        env=env,
+    )
+    if unshallow.returncode != 0:
+        subprocess.run(
+            ["git", "-C", str(repository), "fetch", "--quiet", "--deepen=500", remote_name],
+            check=False,
+            capture_output=True,
+            text=True,
+            env=env,
+        )
+        subprocess.run(
+            ["git", "-C", str(repository), "fetch", "--quiet", remote_name, commit],
+            check=True,
+            capture_output=True,
+            text=True,
+            env=env,
+        )
+
+    tag_probe = _git_probe(repository, "rev-parse", "--verify", f"{tag}^{{commit}}", env=env)
+    ancestor_probe = _git_probe(
+        repository, "merge-base", "--is-ancestor", commit, "HEAD", env=env
+    )
+    if (
+        tag_probe.returncode != 0
+        or tag_probe.stdout.strip() != commit
+        or ancestor_probe.returncode != 0
+    ):
+        raise AssertionError(
+            "identity clone failed to materialize the frozen contribution contract history"
+        )
+
+
+def _clone_contract_repository(tmp_path: Path, *, name: str = "contract-repository") -> Path:
+    repository = tmp_path / name
+    clone_env = _clone_subprocess_env()
+    subprocess.run(
+        ["git", "clone", "--quiet", "--no-local", str(fixtures.REPO_ROOT), str(repository)],
+        check=True,
+        env=clone_env,
+    )
+    _ensure_contract_identity_history(repository, env=clone_env)
+    return repository
+
+
+def _git(repository: Path, *arguments: str) -> str:
+    completed = subprocess.run(
+        [
+            "git",
+            "-C",
+            str(repository),
+            "-c",
+            "user.name=b2 negative control",
+            "-c",
+            "user.email=b2@example.invalid",
+            *arguments,
+        ],
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+    return completed.stdout.strip()
+
+
 def _materialize(
     tmp_path: Path,
     config: Any,
@@ -2914,8 +3215,12 @@ def _materialize(
         expected_plan_sha256 = subject.run_contribution_target_collection(
             config=config, inputs=inputs
         ).plan["contribution_plan_scientific_sha256"]
+    pinned = dataclasses.replace(
+        config,
+        expected_accepted_input_plan_sha256=expected_plan_sha256,
+    )
     return subject.materialize_contribution_target_collection(
-        config=config,
+        config=pinned,
         inputs=inputs,
         output_run_dir=run_dir,
         expected_plan_sha256=expected_plan_sha256,
@@ -2944,6 +3249,73 @@ def test_tracked_gate_c_config_loads_with_official_materialization_disabled(
     assert tracked_config.resume_enabled is False
     assert tracked_config.dry_run_complete_compute is True
     assert tracked_config.expected_plan_sha_required_for_official is True
+
+
+def test_official_b2_04b_config_has_independent_pinned_identity() -> None:
+    official = subject.load_contribution_targets_config(fixtures.OFFICIAL_CONFIG_PATH)
+    gate_c = subject.load_contribution_targets_config(fixtures.TRACKED_CONFIG_PATH)
+
+    assert official.configuration_id == "b2_contribution_targets_official_v1"
+    assert official.contract_stage == "b2_04b"
+    assert official.official_materialization_enabled is True
+    assert official.repository_identity_gate_enabled is True
+    assert official.resume_enabled is False
+    assert official.expected_plan_sha_required_for_official is True
+    assert official.expected_contribution_contract_tag == "b2-contribution-target-contract-v1"
+    assert official.expected_contribution_contract_commit == (
+        "29591668c3228f6cebd7fd923ae1c39c6dad49bc"
+    )
+    assert official.fixture_contract_plan_sha256 == fixtures.FIXTURE_CONTRACT_PLAN_SHA256
+    assert official.expected_accepted_input_plan_sha256 == (
+        fixtures.ACCEPTED_INPUT_CONTRIBUTION_PLAN_SHA256
+    )
+    assert official.fixture_contract_plan_sha256 != (
+        official.expected_accepted_input_plan_sha256
+    )
+    assert official.expected_accepted_input_plan_sha256 != (
+        fixtures.SUPERSEDED_RUN_CONTROL_FIXTURE_PLAN_SHA256
+    )
+    assert gate_c.fixture_contract_plan_sha256 is None
+    assert gate_c.expected_accepted_input_plan_sha256 is None
+
+    identity_fields = {
+        "configuration_id",
+        "contract_stage",
+        "official_materialization_enabled",
+        "repository_identity_gate_enabled",
+        "expected_contribution_contract_tag",
+        "expected_contribution_contract_commit",
+        "fixture_contract_plan_sha256",
+        "expected_accepted_input_plan_sha256",
+    }
+    for field in official.__dataclass_fields__:
+        if field not in identity_fields:
+            assert getattr(official, field) == getattr(gate_c, field)
+
+
+@pytest.mark.parametrize(
+    "override",
+    [
+        {"contract_stage": "b2_04a"},
+        {"official_materialization_enabled": False},
+        {"repository_identity_gate_enabled": False},
+        {"resume_enabled": True},
+        {"expected_contribution_contract_tag": None},
+        {"expected_contribution_contract_tag": "moved-tag"},
+        {"expected_contribution_contract_commit": None},
+        {"expected_contribution_contract_commit": "0" * 40},
+    ],
+)
+def test_official_b2_04b_config_drift_fails_closed(
+    tmp_path: Path, override: dict[str, Any]
+) -> None:
+    payload = fixtures.official_config_payload()
+    payload.update(override)
+    with pytest.raises(subject.ContributionTargetError) as excinfo:
+        subject.load_contribution_targets_config(
+            fixtures.write_config(tmp_path, payload, name="official-drift.json")
+        )
+    assert _error_code(excinfo) == "B2_CONTRIBUTION_CONFIG_DRIFT"
 
 
 def test_tracked_config_carries_no_machine_local_paths() -> None:
@@ -3097,6 +3469,36 @@ def test_dry_run_returns_the_frozen_plan_semantics(
     assert result["official_materialization_enabled"] is False
 
 
+def test_hermetic_fixture_plan_regression(
+    tracked_config: Any, input_bundle: Any
+) -> None:
+    """Pin the hermetic B2-04A contract plan, never an accepted-input identity."""
+
+    result = subject.dry_run_contribution_targets(
+        config=tracked_config, inputs=input_bundle
+    )
+    assert result["artifact_kind"] == subject.TEST_FIXTURE_ARTIFACT_KIND
+    assert result["contribution_plan_scientific_sha256"] == (
+        fixtures.FIXTURE_CONTRACT_PLAN_SHA256
+    )
+    assert result["contribution_plan_scientific_sha256"] != (
+        fixtures.SUPERSEDED_RUN_CONTROL_FIXTURE_PLAN_SHA256
+    )
+
+
+def test_hermetic_fixture_plan_regression_ignores_official_enablement(
+    tracked_config: Any, input_bundle: Any, tmp_path: Path
+) -> None:
+    official = _official_config(tmp_path)
+    assert tracked_config.official_materialization_enabled is False
+    assert official.official_materialization_enabled is True
+    assert subject.dry_run_contribution_targets(config=official, inputs=input_bundle)[
+        "contribution_plan_scientific_sha256"
+    ] == subject.dry_run_contribution_targets(
+        config=tracked_config, inputs=input_bundle
+    )["contribution_plan_scientific_sha256"]
+
+
 def test_dry_run_exposes_all_seven_layered_identities(
     tracked_config: Any, input_bundle: Any, collection: Any
 ) -> None:
@@ -3169,7 +3571,456 @@ def test_fixture_inputs_are_refused_when_the_config_expects_production(
     assert not (tmp_path / "run").exists()
 
 
+# --- historical accepted production manifests -------------------------------
+
+
+LEGACY_TEACHER_CONFIGURATION_ID = "b2_teacher_cache_gate_c"
+LEGACY_DESCRIPTOR_CONFIGURATION_ID = "b2_descriptor_artifacts_gate_c"
+
+
+def _rewrite_as_historical_manifest(
+    manifest_path: Path,
+    *,
+    configuration_id: str | None,
+    artifact_kind: str | None = None,
+) -> None:
+    """Rewrite one manifest in the historical accepted schema.
+
+    The accepted teacher-cache and descriptor manifests predate the
+    ``artifact_kind`` field and identify themselves through ``configuration_id``.
+    """
+
+    payload = json.loads(manifest_path.read_text(encoding="utf-8"))
+    payload.pop("artifact_kind", None)
+    payload.pop("configuration_id", None)
+    if configuration_id is not None:
+        payload["configuration_id"] = configuration_id
+    if artifact_kind is not None:
+        payload["artifact_kind"] = artifact_kind
+    manifest_path.write_text(
+        json.dumps(payload, indent=2, sort_keys=True) + "\n", encoding="utf-8"
+    )
+
+
+def _historical_manifest_target(layout: Any, label: str) -> tuple[Path, Path]:
+    if label == "teacher-cache":
+        return layout.teacher_cache_manifest, layout.teacher_cache_root
+    return layout.descriptor_manifest, layout.descriptor_root
+
+
+def test_loader_normalizes_historical_production_manifests_without_artifact_kind(
+    tmp_path: Path,
+) -> None:
+    layout = fixtures.prepare_hermetic_contribution_inputs(tmp_path)
+    for label, configuration_id in (
+        ("teacher-cache", LEGACY_TEACHER_CONFIGURATION_ID),
+        ("descriptor", LEGACY_DESCRIPTOR_CONFIGURATION_ID),
+    ):
+        manifest_path, _root = _historical_manifest_target(layout, label)
+        _rewrite_as_historical_manifest(manifest_path, configuration_id=configuration_id)
+
+    for label in ("teacher-cache", "descriptor"):
+        manifest_path, root = _historical_manifest_target(layout, label)
+        loaded = subject._load_input_manifest(
+            manifest_path=manifest_path, root=root, label=label
+        )
+        assert loaded["artifact_kind"] == subject.PRODUCTION_ARTIFACT_KIND
+        on_disk = json.loads(manifest_path.read_text(encoding="utf-8"))
+        assert "artifact_kind" not in on_disk
+
+
+@pytest.mark.parametrize(
+    ("label", "configuration_id"),
+    [
+        ("teacher-cache", None),
+        ("teacher-cache", "b2_teacher_cache_gate_b"),
+        ("teacher-cache", LEGACY_DESCRIPTOR_CONFIGURATION_ID),
+        ("descriptor", None),
+        ("descriptor", "b2_descriptor_artifacts_gate_b"),
+        ("descriptor", LEGACY_TEACHER_CONFIGURATION_ID),
+    ],
+)
+def test_missing_artifact_kind_requires_the_exact_accepted_configuration_id(
+    tmp_path: Path, label: str, configuration_id: str | None
+) -> None:
+    layout = fixtures.prepare_hermetic_contribution_inputs(tmp_path)
+    manifest_path, root = _historical_manifest_target(layout, label)
+    _rewrite_as_historical_manifest(manifest_path, configuration_id=configuration_id)
+    with pytest.raises(subject.ContributionTargetError) as excinfo:
+        subject._load_input_manifest(manifest_path=manifest_path, root=root, label=label)
+    assert _error_code(excinfo) == "B2_TARGET_ARTIFACT_KIND_INVALID"
+
+
+@pytest.mark.parametrize("label", ["teacher-cache", "descriptor"])
+@pytest.mark.parametrize(
+    ("declared_kind", "accepted_kind"),
+    [
+        ("production", "production"),
+        ("test_fixture", "test_fixture"),
+        ("legacy_production", None),
+        ("", None),
+    ],
+)
+def test_declared_artifact_kind_is_never_inferred_away(
+    tmp_path: Path, label: str, declared_kind: str, accepted_kind: str | None
+) -> None:
+    layout = fixtures.prepare_hermetic_contribution_inputs(tmp_path)
+    manifest_path, root = _historical_manifest_target(layout, label)
+    accepted_configuration_id = (
+        LEGACY_TEACHER_CONFIGURATION_ID
+        if label == "teacher-cache"
+        else LEGACY_DESCRIPTOR_CONFIGURATION_ID
+    )
+    _rewrite_as_historical_manifest(
+        manifest_path,
+        configuration_id=accepted_configuration_id,
+        artifact_kind=declared_kind,
+    )
+    if accepted_kind is None:
+        with pytest.raises(subject.ContributionTargetError) as excinfo:
+            subject._load_input_manifest(
+                manifest_path=manifest_path, root=root, label=label
+            )
+        assert _error_code(excinfo) == "B2_TARGET_ARTIFACT_KIND_INVALID"
+        return
+    loaded = subject._load_input_manifest(
+        manifest_path=manifest_path, root=root, label=label
+    )
+    assert loaded["artifact_kind"] == accepted_kind
+
+
+def test_historical_production_manifests_still_face_every_downstream_pin(
+    tmp_path: Path,
+) -> None:
+    layout = fixtures.prepare_hermetic_contribution_inputs(tmp_path)
+    _rewrite_as_historical_manifest(
+        layout.teacher_cache_manifest, configuration_id=LEGACY_TEACHER_CONFIGURATION_ID
+    )
+    _rewrite_as_historical_manifest(
+        layout.descriptor_manifest, configuration_id=LEGACY_DESCRIPTOR_CONFIGURATION_ID
+    )
+    config = subject.load_contribution_targets_config(fixtures.TRACKED_CONFIG_PATH)
+    assert config.expected_input_artifact_kind == subject.PRODUCTION_ARTIFACT_KIND
+    with pytest.raises(subject.ContributionTargetError) as excinfo:
+        subject.load_contribution_inputs_from_disk(
+            config=config,
+            teacher_cache_manifest_path=layout.teacher_cache_manifest,
+            teacher_cache_root=layout.teacher_cache_root,
+            descriptor_manifest_path=layout.descriptor_manifest,
+            descriptor_root=layout.descriptor_root,
+            mvtec_root=layout.mvtec_root,
+        )
+    assert _error_code(excinfo) == "B2_CONTRIBUTION_UPSTREAM_IDENTITY_MISMATCH"
+
+
+def test_historical_manifest_pair_must_agree_on_the_inferred_kind(
+    tmp_path: Path,
+) -> None:
+    layout = fixtures.prepare_hermetic_contribution_inputs(tmp_path)
+    _rewrite_as_historical_manifest(
+        layout.teacher_cache_manifest, configuration_id=LEGACY_TEACHER_CONFIGURATION_ID
+    )
+    config = subject.load_contribution_targets_config(fixtures.TRACKED_CONFIG_PATH)
+    with pytest.raises(subject.ContributionTargetError) as excinfo:
+        subject.load_contribution_inputs_from_disk(
+            config=config,
+            teacher_cache_manifest_path=layout.teacher_cache_manifest,
+            teacher_cache_root=layout.teacher_cache_root,
+            descriptor_manifest_path=layout.descriptor_manifest,
+            descriptor_root=layout.descriptor_root,
+            mvtec_root=layout.mvtec_root,
+        )
+    assert _error_code(excinfo) == "B2_TARGET_ARTIFACT_KIND_INVALID"
+
+
+def test_fixture_loader_accepts_mvtec_root_without_using_it(
+    tmp_path: Path, tracked_config: Any, target_fixture: Any
+) -> None:
+    layout = fixtures.prepare_hermetic_contribution_inputs(tmp_path, fixture=target_fixture)
+    bundle = subject.load_contribution_inputs_from_disk(
+        config=tracked_config,
+        teacher_cache_manifest_path=layout.teacher_cache_manifest,
+        teacher_cache_root=layout.teacher_cache_root,
+        descriptor_manifest_path=layout.descriptor_manifest,
+        descriptor_root=layout.descriptor_root,
+        mvtec_root=layout.mvtec_root,
+    )
+    assert bundle.artifact_kind == subject.TEST_FIXTURE_ARTIFACT_KIND
+    assert len(bundle.samples) == len(target_fixture.samples)
+
+
+def test_production_inputs_require_an_explicit_mvtec_root(tmp_path: Path) -> None:
+    layout = fixtures.prepare_hermetic_contribution_inputs(tmp_path)
+    _rewrite_as_historical_manifest(
+        layout.teacher_cache_manifest, configuration_id=LEGACY_TEACHER_CONFIGURATION_ID
+    )
+    _rewrite_as_historical_manifest(
+        layout.descriptor_manifest, configuration_id=LEGACY_DESCRIPTOR_CONFIGURATION_ID
+    )
+    config = subject.load_contribution_targets_config(fixtures.TRACKED_CONFIG_PATH)
+    with pytest.raises(subject.ContributionTargetError) as excinfo:
+        subject.load_contribution_inputs_from_disk(
+            config=config,
+            teacher_cache_manifest_path=layout.teacher_cache_manifest,
+            teacher_cache_root=layout.teacher_cache_root,
+            descriptor_manifest_path=layout.descriptor_manifest,
+            descriptor_root=layout.descriptor_root,
+        )
+    assert _error_code(excinfo) == "B2_CONTRIBUTION_SOURCE_ROOT_REQUIRED"
+
+
+def test_production_maps_and_mask_are_read_from_teacher_scientific_tensors() -> None:
+    layers = (6, 12)
+    depths = (12,)
+    shape = (1, 1, 4, 4)
+    maps = {
+        12: {
+            6: torch.full(shape, 0.25, dtype=torch.float32),
+            12: torch.full(shape, 0.75, dtype=torch.float32),
+        }
+    }
+    full_depth = torch.full(shape, 0.5, dtype=torch.float32)
+    mask = torch.zeros(shape, dtype=torch.float32)
+    mask[..., 1:3, 1:3] = 1.0
+    tensors = {
+        "causal_map:12:6": {"tensor": maps[12][6]},
+        "causal_map:12:12": {"tensor": maps[12][12]},
+        "full_depth_map": {"tensor": full_depth},
+        "anomalous_mask": {"tensor": mask},
+    }
+    teacher_record = {
+        "candidate_layers": list(layers),
+        "prediction_depths": list(depths),
+        "image_label": 1,
+        "tensors": tensors,
+    }
+    extracted_maps, extracted_full = subject.production_maps_from_teacher_record(
+        teacher_record
+    )
+    assert set(extracted_maps) == {12}
+    assert set(extracted_maps[12]) == {6, 12}
+    assert torch.equal(extracted_maps[12][6], maps[12][6])
+    assert torch.equal(extracted_full, full_depth)
+    extracted_mask = subject.production_mask_from_teacher_record(teacher_record)
+    assert torch.equal(extracted_mask, mask)
+
+    normal_record = {
+        "candidate_layers": list(layers),
+        "prediction_depths": list(depths),
+        "image_label": 0,
+        "tensors": {
+            "causal_map:12:6": {"tensor": maps[12][6]},
+            "causal_map:12:12": {"tensor": maps[12][12]},
+            "full_depth_map": {"tensor": full_depth},
+        },
+    }
+    zero_mask = subject.production_mask_from_teacher_record(normal_record)
+    assert tuple(zero_mask.shape) == shape
+    assert float(zero_mask.sum()) == 0.0
+
+
+def test_production_teacher_payload_rejects_missing_causal_map_tensor() -> None:
+    teacher_record = {
+        "candidate_layers": [6, 12],
+        "prediction_depths": [12],
+        "image_label": 0,
+        "tensors": {"full_depth_map": {"tensor": torch.zeros((1, 1, 2, 2))}},
+    }
+    with pytest.raises(subject.ContributionTargetError) as excinfo:
+        subject.production_maps_from_teacher_record(teacher_record)
+    assert _error_code(excinfo) == "B2_CONTRIBUTION_TEACHER_PAYLOAD_SCHEMA_INVALID"
+
+
 # --- official materialization gate -----------------------------------------
+
+
+def test_contract_repository_clone_skips_lfs_smudge_without_weakening_identity(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Identity clones must skip LFS smudge without weakening Git identity gates."""
+
+    original_skip = os.environ.get("GIT_LFS_SKIP_SMUDGE")
+    production_run = subprocess.run
+    observed_clones: list[dict[str, Any]] = []
+    observed_fetches: list[dict[str, Any]] = []
+
+    def capturing_run(*args: Any, **kwargs: Any) -> Any:
+        command = list(args[0]) if args else list(kwargs.get("args", []))
+        if command and command[0] == "git" and "clone" in command:
+            observed_clones.append({"command": command, "env": kwargs.get("env")})
+        if command and command[0] == "git" and "fetch" in command:
+            observed_fetches.append({"command": command, "env": kwargs.get("env")})
+        return production_run(*args, **kwargs)
+
+    monkeypatch.setattr(subprocess, "run", capturing_run)
+    repository = _clone_contract_repository(tmp_path, name="lfs-hermetic-clone")
+    assert os.environ.get("GIT_LFS_SKIP_SMUDGE") == original_skip
+    assert observed_clones
+    clone = observed_clones[0]
+    assert "--no-local" in clone["command"]
+    clone_env = clone["env"]
+    assert isinstance(clone_env, dict)
+    assert clone_env.get("GIT_LFS_SKIP_SMUDGE") == "1"
+    assert clone_env is not os.environ
+    for fetch in observed_fetches:
+        assert isinstance(fetch["env"], dict)
+        assert fetch["env"].get("GIT_LFS_SKIP_SMUDGE") == "1"
+        assert fetch["env"] is not os.environ
+    assert (repository / ".git").is_dir()
+    clip_pointer = repository / "weight" / "train_on_mvtec" / "CLIP.pth"
+    if clip_pointer.is_file():
+        pointer_text = clip_pointer.read_text(encoding="utf-8")
+        assert pointer_text.startswith("version https://git-lfs.github.com/spec/v1")
+        assert "596f3ed0c0cfe78a314b41fc42a8adfc26b86ab1928f058ce256135cb407b32c" in pointer_text
+        assert clip_pointer.stat().st_size < 1024
+
+    config = subject.load_contribution_targets_config(fixtures.OFFICIAL_CONFIG_PATH)
+    identity = subject.verify_contribution_repository_identity(
+        config=config, repository_root=repository
+    )
+    assert identity.contract_tag == "b2-contribution-target-contract-v1"
+    assert identity.contract_commit == "29591668c3228f6cebd7fd923ae1c39c6dad49bc"
+    assert identity.head_is_descendant is True
+    assert identity.worktree_clean is True
+
+    _git(repository, "tag", "-d", config.expected_contribution_contract_tag)
+    with pytest.raises(subject.ContributionTargetError) as missing_tag:
+        subject.verify_contribution_repository_identity(
+            config=config, repository_root=repository
+        )
+    assert _error_code(missing_tag) == "B2_CONTRIBUTION_CONTRACT_TAG_INVALID"
+
+
+def test_repository_identity_verifier_accepts_a_clean_descendant(tmp_path: Path) -> None:
+    repository = _clone_contract_repository(tmp_path)
+    config = subject.load_contribution_targets_config(fixtures.OFFICIAL_CONFIG_PATH)
+    identity = subject.verify_contribution_repository_identity(
+        config=config, repository_root=repository
+    )
+    assert identity.contract_tag == "b2-contribution-target-contract-v1"
+    assert identity.contract_commit == "29591668c3228f6cebd7fd923ae1c39c6dad49bc"
+    assert identity.generation_commit == subprocess.run(
+        ["git", "-C", str(repository), "rev-parse", "HEAD"],
+        check=True,
+        capture_output=True,
+        text=True,
+    ).stdout.strip()
+    assert identity.head_is_descendant is True
+    assert identity.worktree_clean is True
+
+
+def test_repository_identity_verifier_rejects_missing_or_moved_tag(tmp_path: Path) -> None:
+    repository = _clone_contract_repository(tmp_path)
+    config = subject.load_contribution_targets_config(fixtures.OFFICIAL_CONFIG_PATH)
+    subprocess.run(
+        ["git", "-C", str(repository), "tag", "-d", config.expected_contribution_contract_tag],
+        check=True,
+        capture_output=True,
+    )
+    with pytest.raises(subject.ContributionTargetError) as excinfo:
+        subject.verify_contribution_repository_identity(
+            config=config, repository_root=repository
+        )
+    assert _error_code(excinfo) == "B2_CONTRIBUTION_CONTRACT_TAG_INVALID"
+
+    subprocess.run(
+        [
+            "git",
+            "-C",
+            str(repository),
+            "tag",
+            config.expected_contribution_contract_tag,
+            "HEAD",
+        ],
+        check=True,
+    )
+    with pytest.raises(subject.ContributionTargetError) as excinfo:
+        subject.verify_contribution_repository_identity(
+            config=config, repository_root=repository
+        )
+    assert _error_code(excinfo) == "B2_CONTRIBUTION_CONTRACT_TAG_INVALID"
+
+
+def test_repository_identity_verifier_rejects_dirty_and_observed_head_mismatch(
+    tmp_path: Path,
+) -> None:
+    repository = _clone_contract_repository(tmp_path)
+    config = subject.load_contribution_targets_config(fixtures.OFFICIAL_CONFIG_PATH)
+    (repository / "untracked.txt").write_text("dirty\n", encoding="utf-8")
+    with pytest.raises(subject.ContributionTargetError) as excinfo:
+        subject.verify_contribution_repository_identity(
+            config=config, repository_root=repository
+        )
+    assert _error_code(excinfo) == "B2_CONTRIBUTION_WORKTREE_DIRTY"
+    (repository / "untracked.txt").unlink()
+
+    with pytest.raises(subject.ContributionTargetError) as excinfo:
+        subject.verify_contribution_repository_identity(
+            config=config,
+            repository_root=repository,
+            expected_generation_commit="0" * 40,
+        )
+    assert _error_code(excinfo) == "B2_CONTRIBUTION_GENERATION_COMMIT_CHANGED"
+
+
+def test_official_api_requires_repository_root_before_materialization(
+    tmp_path: Path, input_bundle: Any
+) -> None:
+    controlled = _official_config(tmp_path)
+    config = dataclasses.replace(
+        controlled,
+        repository_identity_gate_enabled=True,
+        expected_contribution_contract_tag="b2-contribution-target-contract-v1",
+        expected_contribution_contract_commit="29591668c3228f6cebd7fd923ae1c39c6dad49bc",
+    )
+    expected = subject.run_contribution_target_collection(
+        config=config, inputs=input_bundle
+    ).plan["contribution_plan_scientific_sha256"]
+    with pytest.raises(subject.ContributionTargetError) as excinfo:
+        subject.materialize_contribution_target_collection(
+            config=config,
+            inputs=input_bundle,
+            output_run_dir=tmp_path / "run",
+            expected_plan_sha256=expected,
+        )
+    assert _error_code(excinfo) == "B2_CONTRIBUTION_REPOSITORY_ROOT_REQUIRED"
+    assert not (tmp_path / "run").exists()
+
+
+def test_official_api_rechecks_repository_identity_before_any_write(
+    tmp_path: Path, input_bundle: Any, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    repository = _clone_contract_repository(tmp_path)
+    controlled = _official_config(tmp_path)
+    config = dataclasses.replace(
+        controlled,
+        repository_identity_gate_enabled=True,
+        expected_contribution_contract_tag="b2-contribution-target-contract-v1",
+        expected_contribution_contract_commit="29591668c3228f6cebd7fd923ae1c39c6dad49bc",
+    )
+    expected = subject.run_contribution_target_collection(
+        config=config, inputs=input_bundle
+    ).plan["contribution_plan_scientific_sha256"]
+    production_collection = subject.run_contribution_target_collection
+
+    def mutate_after_plan(**kwargs: Any) -> Any:
+        collection = production_collection(**kwargs)
+        (repository / "mutation-after-plan.txt").write_text("dirty\n", encoding="utf-8")
+        return collection
+
+    monkeypatch.setattr(
+        subject, "run_contribution_target_collection", mutate_after_plan
+    )
+    with pytest.raises(subject.ContributionTargetError) as excinfo:
+        subject.materialize_contribution_target_collection(
+            config=config,
+            inputs=input_bundle,
+            output_run_dir=tmp_path / "run",
+            expected_plan_sha256=expected,
+            repository_root=repository,
+        )
+    assert _error_code(excinfo) == "B2_CONTRIBUTION_WORKTREE_DIRTY"
+    assert not (tmp_path / "run").exists()
 
 
 def test_non_dry_run_is_refused_while_official_materialization_is_disabled(
@@ -3197,7 +4048,7 @@ def test_official_materialization_requires_the_expected_plan_hash(
             output_run_dir=tmp_path / "run",
             expected_plan_sha256=None,
         )
-    assert _error_code(excinfo) == "B2_CONTRIBUTION_EXPECTED_PLAN_SHA_MISSING"
+    assert _error_code(excinfo) == "B2_CONTRIBUTION_EXPECTED_PLAN_REQUIRED"
     assert not (tmp_path / "run").exists()
 
 
@@ -3212,7 +4063,7 @@ def test_official_materialization_rejects_a_malformed_expected_plan_hash(
             output_run_dir=tmp_path / "run",
             expected_plan_sha256="not-a-sha",
         )
-    assert _error_code(excinfo) == "B2_CONTRIBUTION_EXPECTED_PLAN_SHA_MALFORMED"
+    assert _error_code(excinfo) == "B2_CONTRIBUTION_EXPECTED_PLAN_INVALID"
     assert not (tmp_path / "run").exists()
 
 
@@ -3228,9 +4079,141 @@ def test_expected_plan_hash_mismatch_fails_before_any_write(
             output_run_dir=tmp_path / "run",
             expected_plan_sha256="a" * 64,
         )
-    assert _error_code(excinfo) == "B2_CONTRIBUTION_EXPECTED_PLAN_SHA_MISMATCH"
+    assert _error_code(excinfo) == "B2_CONTRIBUTION_CONFIG_PLAN_MISMATCH"
     assert not (tmp_path / "run").exists()
     assert _snapshot_tree(tmp_path) == before
+
+
+def test_fixture_contract_plan_cannot_authorize_official_materialization(
+    tmp_path: Path,
+) -> None:
+    payload = fixtures.official_config_payload()
+    payload["expected_accepted_input_plan_sha256"] = fixtures.FIXTURE_CONTRACT_PLAN_SHA256
+    path = fixtures.write_config(tmp_path, payload, name="official_fixture_as_accepted.json")
+    with pytest.raises(subject.ContributionTargetError) as excinfo:
+        subject.load_contribution_targets_config(path)
+    assert _error_code(excinfo) == "B2_CONTRIBUTION_CONFIG_DRIFT"
+
+
+def test_superseded_fixture_plan_cannot_authorize_official_materialization(
+    tmp_path: Path,
+) -> None:
+    payload = fixtures.official_config_payload()
+    payload["expected_accepted_input_plan_sha256"] = (
+        fixtures.SUPERSEDED_RUN_CONTROL_FIXTURE_PLAN_SHA256
+    )
+    path = fixtures.write_config(
+        tmp_path, payload, name="official_superseded_as_accepted.json"
+    )
+    with pytest.raises(subject.ContributionTargetError) as excinfo:
+        subject.load_contribution_targets_config(path)
+    assert _error_code(excinfo) == "B2_CONTRIBUTION_CONFIG_DRIFT"
+
+
+def test_correct_cli_wrong_config_plan_rejected_before_any_write(
+    tmp_path: Path, input_bundle: Any
+) -> None:
+    recomputed = subject.run_contribution_target_collection(
+        config=_official_config(tmp_path / "baseline"), inputs=input_bundle
+    ).plan["contribution_plan_scientific_sha256"]
+    config = _official_config(
+        tmp_path,
+        expected_accepted_input_plan_sha256="0" * 64,
+    )
+    output_root = tmp_path / "absent_output_root"
+    run_dir = output_root / "run"
+    before = _snapshot_tree(tmp_path)
+    with pytest.raises(subject.ContributionTargetError) as excinfo:
+        subject.materialize_contribution_target_collection(
+            config=config,
+            inputs=input_bundle,
+            output_run_dir=run_dir,
+            expected_plan_sha256=recomputed,
+        )
+    assert _error_code(excinfo) == "B2_CONTRIBUTION_CONFIG_PLAN_MISMATCH"
+    assert not output_root.exists()
+    assert _snapshot_tree(tmp_path) == before
+
+
+def test_wrong_cli_correct_config_plan_rejected_before_any_write(
+    tmp_path: Path, input_bundle: Any
+) -> None:
+    recomputed = subject.run_contribution_target_collection(
+        config=_official_config(tmp_path / "baseline"), inputs=input_bundle
+    ).plan["contribution_plan_scientific_sha256"]
+    config = _official_config(
+        tmp_path,
+        expected_accepted_input_plan_sha256=recomputed,
+    )
+    output_root = tmp_path / "absent_output_root"
+    run_dir = output_root / "run"
+    before = _snapshot_tree(tmp_path)
+    with pytest.raises(subject.ContributionTargetError) as excinfo:
+        subject.materialize_contribution_target_collection(
+            config=config,
+            inputs=input_bundle,
+            output_run_dir=run_dir,
+            expected_plan_sha256="a" * 64,
+        )
+    assert _error_code(excinfo) == "B2_CONTRIBUTION_CONFIG_PLAN_MISMATCH"
+    assert not output_root.exists()
+    assert _snapshot_tree(tmp_path) == before
+
+
+def test_cli_and_config_agree_but_recomputed_plan_differs_before_any_write(
+    tmp_path: Path, input_bundle: Any
+) -> None:
+    agreed = "b" * 64
+    config = _official_config(
+        tmp_path,
+        expected_accepted_input_plan_sha256=agreed,
+    )
+    output_root = tmp_path / "absent_output_root"
+    run_dir = output_root / "run"
+    before = _snapshot_tree(tmp_path)
+    with pytest.raises(subject.ContributionTargetError) as excinfo:
+        subject.materialize_contribution_target_collection(
+            config=config,
+            inputs=input_bundle,
+            output_run_dir=run_dir,
+            expected_plan_sha256=agreed,
+        )
+    assert _error_code(excinfo) == "B2_CONTRIBUTION_RECOMPUTED_PLAN_MISMATCH"
+    assert not output_root.exists()
+    assert _snapshot_tree(tmp_path) == before
+
+
+def test_three_way_plan_agreement_allows_persistence(
+    tmp_path: Path, input_bundle: Any
+) -> None:
+    recomputed = subject.run_contribution_target_collection(
+        config=_official_config(tmp_path / "baseline"), inputs=input_bundle
+    ).plan["contribution_plan_scientific_sha256"]
+    config = _official_config(
+        tmp_path,
+        expected_accepted_input_plan_sha256=recomputed,
+    )
+    result = subject.materialize_contribution_target_collection(
+        config=config,
+        inputs=input_bundle,
+        output_run_dir=tmp_path / "run",
+        expected_plan_sha256=recomputed,
+    )
+    assert result.contribution_plan_scientific_sha256 == recomputed
+    assert (tmp_path / "run" / "final_manifest.json").is_file()
+
+
+def test_historical_gate_c_config_and_schema_remain_unmodified() -> None:
+    raw = fixtures.TRACKED_CONFIG_PATH.read_bytes()
+    payload = json.loads(raw)
+    assert hashlib.sha256(raw).hexdigest() == (
+        "b1efaa3494e3fc93f50c9565ab42632a3c4458735746beb6de7125d75276beda"
+    )
+    assert "fixture_contract_plan_sha256" not in payload
+    assert "expected_accepted_input_plan_sha256" not in payload
+    assert payload["schema_version"] == 1
+    assert payload["contract_stage"] == "b2_04a"
+    assert payload["official_materialization_enabled"] is False
 
 
 def test_controlled_official_materialization_produces_a_verified_collection(
@@ -3578,3 +4561,343 @@ def test_passed_manifest_requires_verified_record_entries(
     assert _error_code(excinfo) == (
         "B2_CONTRIBUTION_PASSED_MANIFEST_REQUIRES_VERIFIED_RECORDS"
     )
+
+
+# --- verified collection comparison ----------------------------------------
+
+
+def test_comparison_accepts_two_independently_verified_identical_runs(
+    tmp_path: Path, input_bundle: Any
+) -> None:
+    config = _official_config(tmp_path)
+    first_result = _materialize(tmp_path, config, input_bundle, run_name="run-a")
+    second_result = _materialize(tmp_path, config, input_bundle, run_name="run-b")
+    first = subject.verify_contribution_target_collection(
+        config=config, run_dir=first_result.run_dir
+    )
+    second = subject.verify_contribution_target_collection(
+        config=config, run_dir=second_result.run_dir
+    )
+    comparison = subject.compare_contribution_target_collections(
+        first=first, second=second
+    )
+    assert comparison.scientifically_equivalent is True
+    assert comparison.reasons == ()
+    for field in dataclasses.fields(comparison):
+        if field.name not in {"scientifically_equivalent", "reasons"}:
+            assert getattr(comparison, field.name) is True
+
+
+def test_comparison_rejects_unverified_inputs(
+    tmp_path: Path, input_bundle: Any
+) -> None:
+    config = _official_config(tmp_path)
+    result = _materialize(tmp_path, config, input_bundle)
+    verified = subject.verify_contribution_target_collection(
+        config=config, run_dir=result.run_dir
+    )
+    replaced = dataclasses.replace(verified)
+    copied = subject.VerifiedContributionTargetCollection(
+        **{
+            field.name: getattr(verified, field.name)
+            for field in dataclasses.fields(verified)
+            if field.init
+        }
+    )
+    for candidate in (result.manifest, result, replaced, copied):
+        for pair in (
+            {"first": candidate, "second": verified},
+            {"first": verified, "second": candidate},
+        ):
+            with pytest.raises(subject.ContributionTargetError) as excinfo:
+                subject.compare_contribution_target_collections(**pair)
+            assert _error_code(excinfo) == "B2_CONTRIBUTION_COLLECTION_NOT_VERIFIED"
+
+
+def test_verification_seal_is_instance_identity_not_a_copyable_token(
+    tmp_path: Path, input_bundle: Any
+) -> None:
+    config = _official_config(tmp_path)
+    result = _materialize(tmp_path, config, input_bundle)
+    verified = subject.verify_contribution_target_collection(
+        config=config, run_dir=result.run_dir
+    )
+    assert [
+        field.name
+        for field in dataclasses.fields(subject.VerifiedContributionTargetCollection)
+        if field.name.startswith("_")
+    ] == []
+    assert subject.compare_contribution_target_collections(
+        first=verified, second=verified
+    ).scientifically_equivalent is True
+
+
+def test_comparison_reports_descriptor_variant_scientific_mismatch(
+    tmp_path: Path,
+) -> None:
+    config = _official_config(tmp_path)
+    fixture_a = fixtures.build_contribution_target_fixture(descriptor_variant="A")
+    fixture_b = fixtures.build_contribution_target_fixture(descriptor_variant="B")
+    first_result = _materialize(
+        tmp_path,
+        config,
+        fixtures.fixture_input_bundle(fixture_a),
+        run_name="run-a",
+    )
+    second_result = _materialize(
+        tmp_path,
+        config,
+        fixtures.fixture_input_bundle(fixture_b),
+        run_name="run-b",
+    )
+    comparison = subject.compare_contribution_target_collections(
+        first=subject.verify_contribution_target_collection(
+            config=config, run_dir=first_result.run_dir
+        ),
+        second=subject.verify_contribution_target_collection(
+            config=config, run_dir=second_result.run_dir
+        ),
+    )
+    assert comparison.scientifically_equivalent is False
+    assert comparison.layered_identities_equal is False
+    assert comparison.record_scientific_hashes_equal is False
+    assert any("descriptor" in reason for reason in comparison.reasons)
+
+
+# --- categorized comparison mismatches --------------------------------------
+
+
+COMPARISON_MISMATCH_CASES: dict[str, tuple[str, str]] = {
+    "layered_identity_drift": (
+        "layered_identities_equal",
+        "layered scientific identity",
+    ),
+    "record_scientific_hash_drift": (
+        "record_scientific_hashes_equal",
+        "record scientific hash",
+    ),
+    "teacher_cache_identity_drift": (
+        "record_scientific_hashes_equal",
+        "teacher_cache_scientific_sha256",
+    ),
+    "descriptor_collection_identity_drift": (
+        "record_scientific_hashes_equal",
+        "descriptor_collection_scientific_sha256",
+    ),
+    "descriptor_record_identity_drift": (
+        "record_scientific_hashes_equal",
+        "descriptor_record_scientific_sha256",
+    ),
+    "coalition_utility_component_drift": (
+        "utility_tables_equal",
+        "coalition utility component",
+    ),
+    "raw_utility_drift": ("utility_tables_equal", "raw utility"),
+    "centered_value_drift": ("utility_tables_equal", "centered value"),
+    "empty_coalition_raw_utility_drift": (
+        "utility_tables_equal",
+        "empty coalition raw utility",
+    ),
+    "grand_coalition_centered_value_drift": (
+        "utility_tables_equal",
+        "grand coalition centered value",
+    ),
+    "signed_shapley_drift": ("signed_shapley_equal", "signed Shapley"),
+    "efficiency_residual_drift": ("signed_shapley_equal", "efficiency residual"),
+    "allocation_drift": ("allocations_equal", "allocation"),
+    "changed_split_membership": ("coverage_equal", "split membership"),
+    "gt_calibration_statistic_drift": ("gt_calibration_equal", "GT calibration"),
+    "shapley_normalization_statistic_drift": (
+        "shapley_normalization_equal",
+        "Shapley normalization",
+    ),
+    "nonzero_teacher_forward_count": (
+        "teacher_forward_count_equal",
+        "teacher forward count",
+    ),
+}
+
+_IDENTITY_DRIFT_FIELDS = {
+    "teacher_cache_identity_drift": "teacher_cache_scientific_sha256",
+    "descriptor_collection_identity_drift": "descriptor_collection_scientific_sha256",
+    "descriptor_record_identity_drift": "descriptor_record_scientific_sha256",
+}
+
+
+def _mutate_comparison_payload(payload: dict[str, Any], case: str) -> None:
+    delta = 1e-9
+    stable_id = sorted(payload["records_by_id"])[0]
+    record = payload["records_by_id"][stable_id]
+    depth_key = sorted(record["depth_targets"])[0]
+    depth = record["depth_targets"][depth_key]
+    coalition = depth["coalition_table"][1]
+    family = depth["gt_localization"]
+    if case == "layered_identity_drift":
+        payload["manifest"]["contribution_plan_scientific_sha256"] = "0" * 64
+    elif case == "record_scientific_hash_drift":
+        record["contribution_target_record_scientific_sha256"] = "0" * 64
+    elif case in _IDENTITY_DRIFT_FIELDS:
+        record[_IDENTITY_DRIFT_FIELDS[case]] = "0" * 64
+    elif case == "coalition_utility_component_drift":
+        components = coalition["gt_localization"]["utility_components"]
+        component = sorted(components)[0]
+        components[component] = float(components[component]) + delta
+    elif case == "raw_utility_drift":
+        coalition["gt_localization"]["raw_utility"] += delta
+    elif case == "centered_value_drift":
+        coalition["teacher_fidelity"]["centered_value"] += delta
+    elif case == "empty_coalition_raw_utility_drift":
+        family["empty_coalition_raw_utility"] += delta
+    elif case == "grand_coalition_centered_value_drift":
+        family["grand_coalition_centered_value"] += delta
+    elif case == "signed_shapley_drift":
+        layer = sorted(family["raw_signed_shapley_by_layer"])[0]
+        family["raw_signed_shapley_by_layer"][layer] += delta
+    elif case == "efficiency_residual_drift":
+        family["efficiency_residual"] += delta
+    elif case == "allocation_drift":
+        allocation = family["positive_allocation_target_by_layer"]
+        layers = sorted(allocation)
+        allocation[layers[0]], allocation[layers[-1]] = (
+            allocation[layers[-1]],
+            allocation[layers[0]],
+        )
+    elif case == "changed_split_membership":
+        record["split_membership"] = (
+            "calibration" if record["split_membership"] == "training" else "training"
+        )
+    elif case == "gt_calibration_statistic_drift":
+        by_depth = payload["calibration_artifact"]["by_depth"]
+        payload["calibration_artifact"]["by_depth"][sorted(by_depth)[0]]["q_low"] += delta
+    elif case == "shapley_normalization_statistic_drift":
+        axes = payload["normalization"]["axes"]["gt_localization"]
+        axes[sorted(axes)[0]]["layers"][0]["mean"] += delta
+    elif case == "nonzero_teacher_forward_count":
+        payload["teacher_forward_count"] = 1
+    else:  # pragma: no cover - guards against silent placeholder cases
+        raise AssertionError(f"unmapped categorized mismatch case: {case}")
+
+
+@pytest.fixture(scope="module")
+def verified_reference_payload(tmp_path_factory: pytest.TempPathFactory) -> dict[str, Any]:
+    root = tmp_path_factory.mktemp("categorized-comparison")
+    config = _official_config(root)
+    fixture = fixtures.build_contribution_target_fixture()
+    result = _materialize(root, config, fixtures.fixture_input_bundle(fixture))
+    verified = subject.verify_contribution_target_collection(
+        config=config, run_dir=result.run_dir
+    )
+    return subject._contribution_comparison_payload(verified)
+
+
+@pytest.mark.parametrize("case", sorted(COMPARISON_MISMATCH_CASES))
+def test_comparison_categorizes_every_scientific_mismatch(
+    case: str, verified_reference_payload: dict[str, Any]
+) -> None:
+    predicate, reason_fragment = COMPARISON_MISMATCH_CASES[case]
+    first = copy.deepcopy(verified_reference_payload)
+    second = copy.deepcopy(verified_reference_payload)
+    baseline = subject._compare_contribution_target_payloads(first=first, second=second)
+    assert baseline.scientifically_equivalent is True
+    assert baseline.reasons == ()
+
+    _mutate_comparison_payload(second, case)
+    comparison = subject._compare_contribution_target_payloads(first=first, second=second)
+    assert comparison.scientifically_equivalent is False
+    assert getattr(comparison, predicate) is False
+    assert any(reason_fragment in reason for reason in comparison.reasons)
+    untouched = [
+        field.name
+        for field in dataclasses.fields(comparison)
+        if field.name
+        not in {"scientifically_equivalent", "reasons", "file_byte_equal", predicate}
+    ]
+    assert all(getattr(comparison, name) is True for name in untouched)
+
+
+def test_comparison_reasons_name_the_sample_depth_and_family(
+    verified_reference_payload: dict[str, Any]
+) -> None:
+    first = copy.deepcopy(verified_reference_payload)
+    second = copy.deepcopy(verified_reference_payload)
+    stable_id = sorted(second["records_by_id"])[0]
+    depth_key = sorted(second["records_by_id"][stable_id]["depth_targets"])[0]
+    _mutate_comparison_payload(second, "raw_utility_drift")
+    comparison = subject._compare_contribution_target_payloads(first=first, second=second)
+    reason = next(reason for reason in comparison.reasons if "raw utility" in reason)
+    assert stable_id in reason
+    assert depth_key in reason
+    assert "gt_localization" in reason
+
+
+def test_verifier_rejects_a_nonzero_manifest_teacher_forward_count(
+    tmp_path: Path, input_bundle: Any
+) -> None:
+    config = _official_config(tmp_path)
+    result = _materialize(tmp_path, config, input_bundle)
+    manifest_path = result.run_dir / subject.FINAL_MANIFEST_NAME
+    payload = json.loads(manifest_path.read_text(encoding="utf-8"))
+    assert payload["teacher_forward_count"] == 0
+    payload["teacher_forward_count"] = 1
+    tampered = json.dumps(payload, indent=2, sort_keys=True, ensure_ascii=False) + "\n"
+    manifest_path.write_text(tampered, encoding="utf-8")
+    (result.run_dir / subject.FINAL_MANIFEST_RECEIPT_NAME).write_text(
+        hashlib.sha256(tampered.encode("utf-8")).hexdigest() + "\n", encoding="utf-8"
+    )
+    assert subject.verify_final_manifest_receipt(result.run_dir)
+    with pytest.raises(subject.ContributionTargetError) as excinfo:
+        subject.verify_contribution_target_collection(
+            config=config, run_dir=result.run_dir
+        )
+    assert _error_code(excinfo) == "B2_CONTRIBUTION_TEACHER_FORWARD_NONZERO"
+
+
+def _gate_enabled_official_config(tmp_path: Path) -> Any:
+    return dataclasses.replace(
+        _official_config(tmp_path),
+        repository_identity_gate_enabled=True,
+        expected_contribution_contract_tag="b2-contribution-target-contract-v1",
+        expected_contribution_contract_commit="29591668c3228f6cebd7fd923ae1c39c6dad49bc",
+    )
+
+
+@pytest.mark.parametrize("head", ["parent", "sibling", "unrelated"])
+def test_official_api_rejects_a_non_descendant_head(
+    tmp_path: Path, input_bundle: Any, head: str
+) -> None:
+    repository = _clone_contract_repository(tmp_path, name=f"repository-{head}")
+    contract_commit = "29591668c3228f6cebd7fd923ae1c39c6dad49bc"
+    parent_commit = _git(repository, "rev-parse", f"{contract_commit}^1")
+    if head == "parent":
+        _git(repository, "checkout", "--quiet", "--detach", parent_commit)
+    elif head == "sibling":
+        _git(repository, "checkout", "--quiet", "--detach", parent_commit)
+        (repository / "sibling-branch.txt").write_text("sibling\n", encoding="utf-8")
+        _git(repository, "add", "sibling-branch.txt")
+        _git(repository, "commit", "--quiet", "-m", "sibling commit")
+    else:
+        _git(repository, "checkout", "--quiet", "--orphan", "unrelated-history")
+        _git(repository, "rm", "-r", "-f", "-q", ".")
+        (repository / "unrelated.txt").write_text("unrelated\n", encoding="utf-8")
+        _git(repository, "add", "unrelated.txt")
+        _git(repository, "commit", "--quiet", "-m", "unrelated root commit")
+    assert _git(repository, "status", "--porcelain", "--untracked-files=all") == ""
+    assert _git(repository, "rev-parse", f"{contract_commit}^{{commit}}") == contract_commit
+
+    config = _gate_enabled_official_config(tmp_path)
+    run_dir = tmp_path / f"run-{head}"
+    with pytest.raises(subject.ContributionTargetError) as excinfo:
+        subject.materialize_contribution_target_collection(
+            config=config,
+            inputs=input_bundle,
+            output_run_dir=run_dir,
+            expected_plan_sha256="0" * 64,
+            repository_root=repository,
+        )
+    assert _error_code(excinfo) == "B2_CONTRIBUTION_HEAD_NOT_DESCENDANT"
+    assert not run_dir.exists()
+    with pytest.raises(subject.ContributionTargetError) as excinfo:
+        subject.verify_contribution_repository_identity(
+            config=config, repository_root=repository
+        )
+    assert _error_code(excinfo) == "B2_CONTRIBUTION_HEAD_NOT_DESCENDANT"

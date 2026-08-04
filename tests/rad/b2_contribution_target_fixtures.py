@@ -38,6 +38,31 @@ REPO_ROOT = Path(__file__).resolve().parents[2]
 TRACKED_CONFIG_PATH = (
     REPO_ROOT / "configs" / "phase_b" / "b2_contribution_targets_gate_c.json"
 )
+OFFICIAL_CONFIG_PATH = (
+    REPO_ROOT / "configs" / "phase_b" / "b2_contribution_targets_official_v1.json"
+)
+
+# Hermetic regression pin for the B2-04A contract fixture only. It proves the
+# frozen mathematics, the deterministic input ordering, and the no-write
+# dry-run over synthetic inputs. It is never an accepted-input plan identity and
+# never authorizes official materialization.
+#
+# Supersedes fa3d2435d684a310c81c151c48717afc9455401adce41fbe4d8a96f5c776a84e,
+# which hashed the run-control field ``official_materialization_enabled``. The
+# canonical payload lost exactly the 41 bytes of
+# ``"official_materialization_enabled":false``; all twenty remaining scientific
+# keys and values are byte-identical.
+FIXTURE_CONTRACT_PLAN_SHA256 = (
+    "a072b67b9154b193dccd99e1123c2d5ef09583114e6b2840061cdfcf92ac93d5"
+)
+SUPERSEDED_RUN_CONTROL_FIXTURE_PLAN_SHA256 = (
+    "fa3d2435d684a310c81c151c48717afc9455401adce41fbe4d8a96f5c776a84e"
+)
+# Independently proven by real Dry-run A/B after the scientific-plan whitelist fix.
+# This is the only plan identity that may authorize official materialization.
+ACCEPTED_INPUT_CONTRIBUTION_PLAN_SHA256 = (
+    "c3034f54b2e8cc99bffa31d5165ce595625263736d747b5f9db0b97072da7bb0"
+)
 
 FIXTURE_ARTIFACT_KIND = "test_fixture"
 FIXTURE_CANDIDATE_LAYERS: tuple[int, ...] = (6, 12, 18, 24)
@@ -455,6 +480,12 @@ def tracked_config_payload() -> dict[str, Any]:
     return json.loads(TRACKED_CONFIG_PATH.read_text(encoding="utf-8"))
 
 
+def official_config_payload() -> dict[str, Any]:
+    """Deep-copied B2-04B official configuration object."""
+
+    return json.loads(OFFICIAL_CONFIG_PATH.read_text(encoding="utf-8"))
+
+
 def write_config(
     tmp_path: Path,
     payload: Mapping[str, Any],
@@ -489,6 +520,10 @@ def controlled_official_config_payload(**overrides: Any) -> dict[str, Any]:
     payload["configuration_id"] = "b2_contribution_targets_controlled_official"
     payload["official_materialization_enabled"] = True
     payload["expected_input_artifact_kind"] = FIXTURE_ARTIFACT_KIND
+    # Controlled hermetic materialization recomputes the fixture contract plan.
+    # The tracked official config separately pins the accepted-input identity.
+    payload["fixture_contract_plan_sha256"] = FIXTURE_CONTRACT_PLAN_SHA256
+    payload["expected_accepted_input_plan_sha256"] = FIXTURE_CONTRACT_PLAN_SHA256
     payload.update(overrides)
     return payload
 

@@ -9,6 +9,7 @@ target-domain dataset, a teacher checkpoint, or a machine-local path.
 
 from __future__ import annotations
 
+import hashlib
 import json
 import random
 from pathlib import Path
@@ -22,18 +23,25 @@ import tests.rad.b2_contribution_target_fixtures as fixtures
 REPO_ROOT = Path(__file__).resolve().parents[2]
 DOMAIN_PATH = REPO_ROOT / "rad" / "phase_b" / "b2_contribution_targets.py"
 CLI_PATH = REPO_ROOT / "tools" / "create_b2_contribution_targets.py"
+QUALIFICATION_CLI_PATH = (
+    REPO_ROOT / "tools" / "qualify_b2_contribution_target_reproduction.py"
+)
+HISTORICAL_GATE_C_SHA256 = "b1efaa3494e3fc93f50c9565ab42632a3c4458735746beb6de7125d75276beda"
 
 TARGET_DOMAIN_MARKERS = ("VisA", "visa", "Visa")
 MACHINE_LOCAL_MARKERS = ("/root/", "/home/", "/mnt/", "autodl", "C:\\", "/tmp/")
 FORBIDDEN_DOMAIN_SYMBOLS = (
     "load_teacher_bundle",
     "build_backbone",
-    "subprocess",
-    "git rev-parse",
     "torch.backends",
     "torch.set_grad_enabled",
-    "mvtec",
 )
+# B2-04B resolves accepted source-domain identities inside the production API,
+# so the module names the source adapter. Only the caller may supply its root,
+# and every root must pass the source-only guard before any directory read.
+ACCEPTED_SOURCE_ADAPTER_SYMBOL = "MVTecAdapter"
+SOURCE_ROOT_ARGUMENT = "mvtec_root"
+SOURCE_ONLY_GUARD = "forbid_target_domain_access"
 
 
 @pytest.fixture(scope="module")
@@ -150,12 +158,40 @@ def test_domain_module_never_reaches_a_target_domain_checkpoint_or_local_path() 
         assert symbol not in source
 
 
+def test_domain_module_source_access_is_adapter_scoped_and_caller_supplied() -> None:
+    source = DOMAIN_PATH.read_text(encoding="utf-8")
+    assert ACCEPTED_SOURCE_ADAPTER_SYMBOL in source
+    assert SOURCE_ROOT_ARGUMENT in source
+    assert SOURCE_ONLY_GUARD in source
+    assert "adapters.mvtec import MVTecAdapter" in source
+
+
+@pytest.mark.parametrize(
+    "root",
+    ["visa", "datasets/visa", "visa/candle", "some/target/root"],
+)
+def test_source_root_indexing_refuses_a_target_domain_root(root: str) -> None:
+    with pytest.raises(Exception) as excinfo:
+        subject._index_mvtec_source_records(Path(root))
+    assert getattr(excinfo.value, "code", "") == "B2_CACHE_TARGET_ACCESS_FORBIDDEN"
+
+
+def test_source_root_indexing_fails_closed_on_a_missing_root(tmp_path: Path) -> None:
+    with pytest.raises(subject.ContributionTargetError) as excinfo:
+        subject._index_mvtec_source_records(tmp_path / "absent_source_root")
+    assert getattr(excinfo.value, "code", "") == "B2_CONTRIBUTION_SOURCE_ROOT_MISSING"
+
+
 def test_cli_never_reaches_a_target_domain_or_machine_local_path() -> None:
     source = CLI_PATH.read_text(encoding="utf-8")
     for marker in TARGET_DOMAIN_MARKERS:
         assert marker not in source
-    for marker in MACHINE_LOCAL_MARKERS:
-        assert marker not in source
+    for path in (CLI_PATH, QUALIFICATION_CLI_PATH):
+        portable_source = path.read_text(encoding="utf-8")
+        for marker in MACHINE_LOCAL_MARKERS:
+            assert marker not in portable_source
+        for forbidden in ("load_teacher_bundle", "build_backbone", "torch.load"):
+            assert forbidden not in portable_source
 
 
 def test_tracked_config_is_portable_and_keeps_official_materialization_disabled() -> None:
@@ -167,6 +203,26 @@ def test_tracked_config_is_portable_and_keeps_official_materialization_disabled(
     assert payload["contract_stage"] == "b2_04a"
     assert payload["candidate_layers"] == [6, 12, 18, 24]
     assert payload["prediction_depths"] == [12, 18, 24]
+
+
+def test_official_config_is_portable_and_long_contract_fields_remain_canonical() -> None:
+    raw = fixtures.OFFICIAL_CONFIG_PATH.read_text(encoding="utf-8")
+    loader_source = DOMAIN_PATH.read_text(encoding="utf-8")
+    for marker in (*TARGET_DOMAIN_MARKERS, *MACHINE_LOCAL_MARKERS):
+        assert marker not in raw
+    assert '"expected_contribution_contract_tag"' in raw
+    assert '"expected_contribution_contract_commit"' in raw
+    assert '"fixture_contract_plan_sha256"' in raw
+    assert '"expected_accepted_input_plan_sha256"' in raw
+    assert fixtures.FIXTURE_CONTRACT_PLAN_SHA256 in raw
+    assert fixtures.ACCEPTED_INPUT_CONTRIBUTION_PLAN_SHA256 in raw
+    assert fixtures.SUPERSEDED_RUN_CONTROL_FIXTURE_PLAN_SHA256 not in raw
+    for alias in ('"expected_contract_tag"', '"expected_contract_commit"'):
+        assert alias not in raw
+        assert alias.strip('"') not in loader_source
+    assert hashlib.sha256(fixtures.TRACKED_CONFIG_PATH.read_bytes()).hexdigest() == (
+        HISTORICAL_GATE_C_SHA256
+    )
 
 
 def test_candidate_layers_stay_configuration_driven(target_fixture: Any, tmp_path: Path) -> None:

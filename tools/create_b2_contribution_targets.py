@@ -1,11 +1,15 @@
 #!/usr/bin/env python3
-"""B2-04A contribution-target qualification CLI.
+"""B2 contribution-target materialization CLI.
 
-B2-04A is a contract-only increment: ``--dry-run`` performs the complete
-scientific computation (GT map calibration, all dual-family target records, the
-training-only Shapley normalization, every layered identity, and the plan hash)
-and writes nothing at all. A non-dry-run invocation with the tracked Gate-C
-configuration fails closed because official materialization is disabled.
+``--dry-run`` performs the complete scientific computation (GT map calibration,
+all dual-family target records, the training-only Shapley normalization, every
+layered identity, and the plan hash) and writes nothing at all.
+
+Non-dry-run behavior is configuration-driven. With the tracked Gate-C
+configuration it still fails closed because official materialization is
+disabled; with the official B2-04B configuration it materializes one fresh,
+fully verified run directory, and the repository identity gate additionally
+requires the frozen contract tag, a descendant HEAD, and a clean worktree.
 
 The CLI never loads a teacher checkpoint, never runs a backbone, never touches a
 target-domain dataset, and never selects a machine-local path of its own: every
@@ -127,6 +131,7 @@ def main(argv: list[str] | None = None) -> int:
                 teacher_cache_root=Path(args.teacher_cache_root),
                 descriptor_manifest_path=Path(args.descriptor_manifest),
                 descriptor_root=Path(args.descriptor_root),
+                mvtec_root=Path(args.mvtec_root),
                 seed=seed,
                 output_dir=output_dir,
             )
@@ -145,12 +150,14 @@ def main(argv: list[str] | None = None) -> int:
             teacher_cache_root=Path(args.teacher_cache_root),
             descriptor_manifest_path=Path(args.descriptor_manifest),
             descriptor_root=Path(args.descriptor_root),
+            mvtec_root=Path(args.mvtec_root),
         )
         materialized = materialize_contribution_target_collection(
             config=config,
             inputs=inputs,
             output_run_dir=output_dir,
             expected_plan_sha256=args.expected_plan_sha256,
+            repository_root=repository_root,
         )
         official = {
             "mode": mode,
@@ -194,12 +201,12 @@ def _match_expected_plan(recomputed: str, expected: str | None) -> bool:
         return False
     if len(expected) != 64 or any(character not in "0123456789abcdef" for character in expected):
         raise ContributionTargetError(
-            "B2_CONTRIBUTION_EXPECTED_PLAN_SHA_MALFORMED",
+            "B2_CONTRIBUTION_EXPECTED_PLAN_INVALID",
             "the expected plan hash must be 64 lowercase hex characters",
         )
     if expected != recomputed:
         raise ContributionTargetError(
-            "B2_CONTRIBUTION_EXPECTED_PLAN_SHA_MISMATCH",
+            "B2_CONTRIBUTION_RECOMPUTED_PLAN_MISMATCH",
             f"recomputed plan hash {recomputed} does not match the expected {expected}",
         )
     return True
