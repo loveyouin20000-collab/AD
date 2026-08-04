@@ -3036,15 +3036,123 @@ def _official_config(tmp_path: Path, **overrides: Any) -> Any:
     )
 
 
-def _clone_contract_repository(tmp_path: Path, *, name: str = "contract-repository") -> Path:
-    repository = tmp_path / name
+def _clone_subprocess_env() -> dict[str, str]:
+    """Environment for identity-test clones only; never mutates ``os.environ``."""
+
     clone_env = os.environ.copy()
     clone_env["GIT_LFS_SKIP_SMUDGE"] = "1"
+    return clone_env
+
+
+def _git_probe(
+    repository: Path, *arguments: str, env: dict[str, str] | None = None
+) -> subprocess.CompletedProcess[str]:
+    return subprocess.run(
+        ["git", "-C", str(repository), *arguments],
+        check=False,
+        capture_output=True,
+        text=True,
+        env=env,
+    )
+
+
+def _ensure_contract_identity_history(repository: Path, *, env: dict[str, str]) -> None:
+    """Restore frozen contract tag/ancestry omitted by shallow, tagless CI checkouts.
+
+    Identity tests still use ``git clone --no-local`` from the workspace. GitHub
+    Actions defaults to ``fetch-depth: 1`` without tags, so the clone cannot
+    resolve ``b2-contribution-target-contract-v1`` until history is fetched from
+    the workspace's configured origin. LFS skip stays scoped to ``env``.
+    """
+
+    tag = subject.EXPECTED_CONTRIBUTION_CONTRACT_TAG
+    commit = subject.EXPECTED_CONTRIBUTION_CONTRACT_COMMIT
+    tag_probe = _git_probe(repository, "rev-parse", "--verify", f"{tag}^{{commit}}", env=env)
+    ancestor_probe = _git_probe(
+        repository, "merge-base", "--is-ancestor", commit, "HEAD", env=env
+    )
+    if (
+        tag_probe.returncode == 0
+        and tag_probe.stdout.strip() == commit
+        and ancestor_probe.returncode == 0
+    ):
+        return
+
+    remote_url = _git_probe(fixtures.REPO_ROOT, "remote", "get-url", "origin").stdout.strip()
+    if not remote_url:
+        raise AssertionError(
+            "identity clone cannot recover contract history without an origin remote"
+        )
+    remote_name = "contract-identity-origin"
+    _git_probe(repository, "remote", "remove", remote_name, env=env)
+    subprocess.run(
+        ["git", "-C", str(repository), "remote", "add", remote_name, remote_url],
+        check=True,
+        capture_output=True,
+        text=True,
+        env=env,
+    )
+    subprocess.run(
+        [
+            "git",
+            "-C",
+            str(repository),
+            "fetch",
+            "--quiet",
+            remote_name,
+            f"+refs/tags/{tag}:refs/tags/{tag}",
+        ],
+        check=True,
+        capture_output=True,
+        text=True,
+        env=env,
+    )
+    unshallow = subprocess.run(
+        ["git", "-C", str(repository), "fetch", "--quiet", "--unshallow", remote_name],
+        check=False,
+        capture_output=True,
+        text=True,
+        env=env,
+    )
+    if unshallow.returncode != 0:
+        subprocess.run(
+            ["git", "-C", str(repository), "fetch", "--quiet", "--deepen=500", remote_name],
+            check=False,
+            capture_output=True,
+            text=True,
+            env=env,
+        )
+        subprocess.run(
+            ["git", "-C", str(repository), "fetch", "--quiet", remote_name, commit],
+            check=True,
+            capture_output=True,
+            text=True,
+            env=env,
+        )
+
+    tag_probe = _git_probe(repository, "rev-parse", "--verify", f"{tag}^{{commit}}", env=env)
+    ancestor_probe = _git_probe(
+        repository, "merge-base", "--is-ancestor", commit, "HEAD", env=env
+    )
+    if (
+        tag_probe.returncode != 0
+        or tag_probe.stdout.strip() != commit
+        or ancestor_probe.returncode != 0
+    ):
+        raise AssertionError(
+            "identity clone failed to materialize the frozen contribution contract history"
+        )
+
+
+def _clone_contract_repository(tmp_path: Path, *, name: str = "contract-repository") -> Path:
+    repository = tmp_path / name
+    clone_env = _clone_subprocess_env()
     subprocess.run(
         ["git", "clone", "--quiet", "--no-local", str(fixtures.REPO_ROOT), str(repository)],
         check=True,
         env=clone_env,
     )
+    _ensure_contract_identity_history(repository, env=clone_env)
     return repository
 
 
@@ -3706,26 +3814,31 @@ def test_contract_repository_clone_skips_lfs_smudge_without_weakening_identity(
 
     original_skip = os.environ.get("GIT_LFS_SKIP_SMUDGE")
     production_run = subprocess.run
-    observed: dict[str, Any] = {}
+    observed_clones: list[dict[str, Any]] = []
+    observed_fetches: list[dict[str, Any]] = []
 
     def capturing_run(*args: Any, **kwargs: Any) -> Any:
         command = list(args[0]) if args else list(kwargs.get("args", []))
-        if command[:2] == ["git", "clone"] or (
-            len(command) >= 2 and command[0] == "git" and "clone" in command
-        ):
-            observed["command"] = command
-            observed["env"] = kwargs.get("env")
+        if command and command[0] == "git" and "clone" in command:
+            observed_clones.append({"command": command, "env": kwargs.get("env")})
+        if command and command[0] == "git" and "fetch" in command:
+            observed_fetches.append({"command": command, "env": kwargs.get("env")})
         return production_run(*args, **kwargs)
 
     monkeypatch.setattr(subprocess, "run", capturing_run)
     repository = _clone_contract_repository(tmp_path, name="lfs-hermetic-clone")
     assert os.environ.get("GIT_LFS_SKIP_SMUDGE") == original_skip
-    assert observed.get("command") is not None
-    assert "--no-local" in observed["command"]
-    clone_env = observed["env"]
+    assert observed_clones
+    clone = observed_clones[0]
+    assert "--no-local" in clone["command"]
+    clone_env = clone["env"]
     assert isinstance(clone_env, dict)
     assert clone_env.get("GIT_LFS_SKIP_SMUDGE") == "1"
     assert clone_env is not os.environ
+    for fetch in observed_fetches:
+        assert isinstance(fetch["env"], dict)
+        assert fetch["env"].get("GIT_LFS_SKIP_SMUDGE") == "1"
+        assert fetch["env"] is not os.environ
     assert (repository / ".git").is_dir()
     clip_pointer = repository / "weight" / "train_on_mvtec" / "CLIP.pth"
     if clip_pointer.is_file():
@@ -3749,6 +3862,73 @@ def test_contract_repository_clone_skips_lfs_smudge_without_weakening_identity(
             config=config, repository_root=repository
         )
     assert _error_code(missing_tag) == "B2_CONTRIBUTION_CONTRACT_TAG_INVALID"
+
+
+def test_contract_repository_clone_recovers_identity_from_shallow_tagless_source(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """CI-shaped source: depth-1, no tags; helper must still unlock real identity gates."""
+
+    original_skip = os.environ.get("GIT_LFS_SKIP_SMUDGE")
+    shallow_source = tmp_path / "shallow-ci-source"
+    seed_env = _clone_subprocess_env()
+    subprocess.run(
+        [
+            "git",
+            "clone",
+            "--quiet",
+            "--depth",
+            "1",
+            "--no-local",
+            str(fixtures.REPO_ROOT),
+            str(shallow_source),
+        ],
+        check=True,
+        env=seed_env,
+    )
+    tags = subprocess.run(
+        ["git", "-C", str(shallow_source), "tag", "-l"],
+        check=True,
+        capture_output=True,
+        text=True,
+    ).stdout.split()
+    for tag in tags:
+        subprocess.run(
+            ["git", "-C", str(shallow_source), "tag", "-d", tag],
+            check=True,
+            capture_output=True,
+            text=True,
+        )
+    assert (
+        subprocess.run(
+            [
+                "git",
+                "-C",
+                str(shallow_source),
+                "rev-parse",
+                "--verify",
+                f"{subject.EXPECTED_CONTRIBUTION_CONTRACT_TAG}^{{commit}}",
+            ],
+            check=False,
+            capture_output=True,
+            text=True,
+        ).returncode
+        != 0
+    )
+    monkeypatch.setattr(fixtures, "REPO_ROOT", shallow_source)
+    repository = _clone_contract_repository(tmp_path, name="from-shallow-source")
+    assert os.environ.get("GIT_LFS_SKIP_SMUDGE") == original_skip
+    config = subject.load_contribution_targets_config(fixtures.OFFICIAL_CONFIG_PATH)
+    identity = subject.verify_contribution_repository_identity(
+        config=config, repository_root=repository
+    )
+    assert identity.contract_commit == subject.EXPECTED_CONTRIBUTION_CONTRACT_COMMIT
+    assert identity.head_is_descendant is True
+    assert identity.worktree_clean is True
+    parent = _git(
+        repository, "rev-parse", f"{subject.EXPECTED_CONTRIBUTION_CONTRACT_COMMIT}^1"
+    )
+    assert len(parent) == 40
 
 
 def test_repository_identity_verifier_accepts_a_clean_descendant(tmp_path: Path) -> None:
