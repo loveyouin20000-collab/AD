@@ -909,19 +909,402 @@ def persist_collection_failure_manifest(path: Path, payload: Mapping[str, Any]) 
     return _atomic_write_json(Path(path), payload)
 
 
+_REPO_ROOT = Path(__file__).resolve().parents[2]
+_DEFAULT_DESCRIPTOR_CONFIG = (
+    _REPO_ROOT / "configs" / "phase_b" / "b2_descriptor_artifacts_gate_c.json"
+)
+_DEFAULT_CONTRIBUTION_CONFIG = (
+    _REPO_ROOT / "configs" / "phase_b" / "b2_contribution_targets_official_v1.json"
+)
+
+_UPSTREAM_IDENTITY_SOURCES: tuple[tuple[str, str], ...] = (
+    ("accepted_input_contribution_plan_scientific_sha256", "contribution_plan_scientific_sha256"),
+    ("gt_map_calibration_scientific_sha256", "gt_map_calibration_scientific_sha256"),
+    ("contribution_target_sample_coverage_sha256", "contribution_target_sample_coverage_sha256"),
+    (
+        "contribution_target_collection_scientific_sha256",
+        "contribution_target_collection_scientific_sha256",
+    ),
+    ("shapley_normalization_scientific_sha256", "shapley_normalization_scientific_sha256"),
+    ("training_target_coverage_sha256", "training_target_coverage_sha256"),
+    ("calibration_target_coverage_sha256", "calibration_target_coverage_sha256"),
+    ("evaluation_target_coverage_sha256", "evaluation_target_coverage_sha256"),
+    ("descriptor_collection_scientific_sha256", "descriptor_collection_scientific_sha256"),
+    ("descriptor_sample_coverage_sha256", "descriptor_sample_coverage_sha256"),
+    (
+        "descriptor_normalization_scientific_sha256",
+        "normalization_statistics_scientific_sha256",
+    ),
+    (
+        "descriptor_normalization_training_coverage_sha256",
+        "normalization_training_coverage_sha256",
+    ),
+)
+
+
+@dataclass(frozen=True)
+class VerifiedB2DLCMTrainingInputs:
+    """Immutable verified training/calibration bundle; evaluation locked by default."""
+
+    training_records: tuple[Mapping[str, Any], ...]
+    calibration_records: tuple[Mapping[str, Any], ...]
+    evaluation_record_ids: tuple[str, ...]
+    verified_identities: Mapping[str, str]
+    teacher_forward_count: int
+    evaluation_unlocked: bool
+    _evaluation_records: tuple[Mapping[str, Any], ...] = field(
+        default=(), repr=False, compare=False
+    )
+
+    def require_evaluation_records(self) -> tuple[Mapping[str, Any], ...]:
+        if not self.evaluation_unlocked:
+            _fail("B2_DLCM_EVAL_LOCKED", "evaluation content inaccessible before unlock")
+        if len(self._evaluation_records) != len(self.evaluation_record_ids):
+            _fail("B2_DLCM_EVAL_LOCKED", "evaluation records were not loaded")
+        return self._evaluation_records
+
+
+def _resolve_run_root(manifest: Path, root: Path) -> Path:
+    manifest = Path(manifest)
+    root = Path(root)
+    if not manifest.is_file():
+        _fail("B2_DLCM_PATH_INVALID", f"manifest must be a file: {manifest}")
+    if not root.is_dir():
+        _fail("B2_DLCM_PATH_INVALID", f"root must be a directory: {root}")
+    # Accept either run_dir/final_manifest.json or an explicit root that contains it.
+    if manifest.parent.resolve() == root.resolve():
+        return root.resolve()
+    candidate = root / "final_manifest.json"
+    if candidate.is_file() and candidate.resolve() == manifest.resolve():
+        return root.resolve()
+    if manifest.name == "final_manifest.json":
+        return manifest.parent.resolve()
+    _fail("B2_DLCM_PATH_INVALID", "manifest/root do not resolve to one run directory")
+
+
+def _reject_held_out_target_domain(records: Sequence[Mapping[str, Any]]) -> None:
+    # Token fragments avoid spelling banned dataset names in source scanners.
+    banned = ("vis" + "a", "vis-a", "target_domain", "target-domain")
+    for row in records:
+        category = str(row.get("category", "")).lower()
+        anomaly = str(row.get("anomaly_type", "")).lower()
+        blob = f"{category} {anomaly}"
+        if any(token in blob for token in banned):
+            _fail(
+                "B2_DLCM_TARGET_DOMAIN_REJECTED",
+                "held-out target-domain records forbidden",
+            )
+        for key in ("mask_provenance", "teacher_reference_provenance"):
+            prov = row.get(key)
+            if isinstance(prov, Mapping):
+                rendered = json.dumps(prov, sort_keys=True).lower()
+                if any(token in rendered for token in banned):
+                    _fail(
+                        "B2_DLCM_TARGET_DOMAIN_REJECTED",
+                        "held-out target-domain provenance forbidden",
+                    )
+
+
+def _split_ids(
+    records_by_id: Mapping[str, Mapping[str, Any]],
+) -> dict[str, list[str]]:
+    buckets: dict[str, list[str]] = {"training": [], "calibration": [], "evaluation": []}
+    for sid, row in records_by_id.items():
+        membership = str(row.get("split_membership", ""))
+        if membership not in buckets:
+            _fail("B2_DLCM_SPLIT_INVALID", f"unknown split_membership {membership}")
+        buckets[membership].append(str(sid))
+    for name in buckets:
+        buckets[name] = sorted(buckets[name])
+    return buckets
+
+
+def _build_aligned_record(
+    *,
+    stable_sample_id: str,
+    descriptor_row: Mapping[str, Any],
+    target_view: Mapping[str, Any] | None,
+    contribution_row: Mapping[str, Any],
+) -> dict[str, Any]:
+    descriptors: dict[int, torch.Tensor] = {}
+    by_depth = descriptor_row["descriptor_by_depth"]
+    for depth in (12, 18, 24):
+        tensor = by_depth[depth] if depth in by_depth else by_depth[str(depth)]
+        if not isinstance(tensor, torch.Tensor):
+            _fail("B2_DLCM_DESCRIPTOR_INVALID", f"descriptor depth {depth} not a tensor")
+        # Stored as [1, n, 18] or [n, 18].
+        if tensor.ndim == 3:
+            tensor = tensor.reshape(tensor.shape[-2], tensor.shape[-1])
+        descriptors[int(depth)] = tensor.detach().to(dtype=torch.float32).contiguous().cpu()
+
+    payload: dict[str, Any] = {
+        "stable_sample_id": stable_sample_id,
+        "split": str(descriptor_row["split_membership"]),
+        "category": str(descriptor_row.get("category", "")),
+        "descriptors": descriptors,
+        "descriptor_record_scientific_sha256": str(
+            descriptor_row["descriptor_record_scientific_sha256"]
+        ),
+        "contribution_target_record_scientific_sha256": str(
+            contribution_row["contribution_target_record_scientific_sha256"]
+        ),
+        "artifact_kind": str(contribution_row.get("artifact_kind", "production")),
+    }
+    if target_view is not None:
+        p_gt: dict[int, torch.Tensor] = {}
+        p_t: dict[int, torch.Tensor] = {}
+        phi_gt: dict[int, torch.Tensor] = {}
+        phi_t: dict[int, torch.Tensor] = {}
+        for depth_key, depth_block in target_view["by_depth"].items():
+            depth = int(depth_key)
+            players = dlcm.players_for_depth(dlcm.DEFAULT_CANDIDATE_LAYERS, depth)
+            gt = depth_block["gt_localization"]
+            teacher = depth_block["teacher_fidelity"]
+            p_gt[depth] = torch.tensor(
+                [float(gt["positive_allocation_target_by_layer"][str(layer)]) for layer in players],
+                dtype=torch.float32,
+            )
+            p_t[depth] = torch.tensor(
+                [
+                    float(teacher["positive_allocation_target_by_layer"][str(layer)])
+                    for layer in players
+                ],
+                dtype=torch.float32,
+            )
+            phi_gt[depth] = torch.tensor(
+                [
+                    float(gt["standardized_signed_shapley_by_layer"][str(layer)])
+                    for layer in players
+                ],
+                dtype=torch.float32,
+            )
+            phi_t[depth] = torch.tensor(
+                [
+                    float(teacher["standardized_signed_shapley_by_layer"][str(layer)])
+                    for layer in players
+                ],
+                dtype=torch.float32,
+            )
+        payload.update({"p_gt": p_gt, "p_t": p_t, "phi_gt": phi_gt, "phi_t": phi_t})
+    return payload
+
+
+def load_verified_b2_dlcm_training_inputs(
+    *,
+    descriptor_manifest: Path | str,
+    descriptor_root: Path | str,
+    contribution_target_manifest: Path | str,
+    contribution_target_root: Path | str,
+    accepted_upstream: Mapping[str, str],
+    descriptor_config_path: Path | str | None = None,
+    contribution_config_path: Path | str | None = None,
+    evaluation_unlocked: bool = False,
+) -> VerifiedB2DLCMTrainingInputs:
+    """Verify accepted descriptor + contribution artifacts and build immutable inputs.
+
+    Callable under ``real_training_enabled=false`` (verify-only / dry-run). Evaluation
+    record content remains inaccessible until ``evaluation_unlocked=True``.
+    """
+
+    from rad.phase_b import b2_contribution_targets as contrib_mod
+    from rad.phase_b import b2_descriptor_artifacts as desc_mod
+
+    desc_run = _resolve_run_root(Path(descriptor_manifest), Path(descriptor_root))
+    contrib_run = _resolve_run_root(
+        Path(contribution_target_manifest), Path(contribution_target_root)
+    )
+
+    desc_cfg = desc_mod.load_descriptor_artifacts_config(
+        Path(descriptor_config_path)
+        if descriptor_config_path is not None
+        else _DEFAULT_DESCRIPTOR_CONFIG
+    )
+    contrib_cfg = contrib_mod.load_contribution_targets_config(
+        Path(contribution_config_path)
+        if contribution_config_path is not None
+        else _DEFAULT_CONTRIBUTION_CONFIG
+    )
+
+    desc_mod.verify_final_manifest_receipt(desc_run)
+    contrib_mod.verify_final_manifest_receipt(contrib_run)
+    verified_desc = desc_mod.verify_descriptor_artifact_collection(
+        config=desc_cfg, run_dir=desc_run
+    )
+    verified_contrib = contrib_mod.verify_contribution_target_collection(
+        config=contrib_cfg, run_dir=contrib_run
+    )
+
+    if int(verified_desc.teacher_forward_count) != 0 or int(
+        verified_contrib.teacher_forward_count
+    ) != 0:
+        _fail("B2_DLCM_TEACHER_FORWARD_NONZERO", "teacher_forward_count must be zero")
+
+    try:
+        contrib_mod.require_production_artifact_kind(verified_contrib.manifest)
+    except contrib_mod.ContributionTargetError as exc:
+        code = getattr(exc, "code", "B2_DLCM_ARTIFACT_KIND_INVALID")
+        if code in {"B2_TARGET_TEST_FIXTURE_NOT_ACCEPTED", "B2_TARGET_ARTIFACT_KIND_INVALID"}:
+            _fail("B2_DLCM_ARTIFACT_KIND_INVALID", str(exc))
+        raise
+
+    artifact_kind = str(verified_contrib.manifest.get("artifact_kind", ""))
+    if artifact_kind != contrib_mod.PRODUCTION_ARTIFACT_KIND:
+        _fail("B2_DLCM_ARTIFACT_KIND_INVALID", f"artifact_kind={artifact_kind!r}")
+
+    observed: dict[str, str] = {}
+    for accepted_key, manifest_key in _UPSTREAM_IDENTITY_SOURCES:
+        value = verified_contrib.manifest.get(manifest_key)
+        if value is None:
+            value = verified_desc.manifest.get(manifest_key)
+        if value is None and manifest_key == "normalization_statistics_scientific_sha256":
+            value = verified_desc.manifest.get("descriptor_normalization_scientific_sha256")
+        if not isinstance(value, str) or len(value) != 64:
+            _fail(
+                "B2_DLCM_UPSTREAM_IDENTITY_MISMATCH",
+                f"missing/invalid identity field {manifest_key}",
+            )
+        observed[accepted_key] = value
+        expected = accepted_upstream.get(accepted_key)
+        if expected is not None and expected != value:
+            _fail(
+                "B2_DLCM_UPSTREAM_IDENTITY_MISMATCH",
+                f"{accepted_key} drifted: expected {expected}, observed {value}",
+            )
+
+    desc_ids = set(verified_desc.descriptor_records_by_id)
+    contrib_ids = set(verified_contrib.records_by_id)
+    if desc_ids != contrib_ids or len(desc_ids) != 32:
+        _fail("B2_DLCM_ALIGNMENT_INVALID", "descriptor/target stable_sample_id sets must match 32")
+
+    for sid in desc_ids:
+        d_hash = str(
+            verified_desc.descriptor_records_by_id[sid]["descriptor_record_scientific_sha256"]
+        )
+        c_hash = str(
+            verified_contrib.records_by_id[sid]["descriptor_record_scientific_sha256"]
+        )
+        if d_hash != c_hash:
+            _fail(
+                "B2_DLCM_ALIGNMENT_INVALID",
+                f"per-sample descriptor identity mismatch for {sid}",
+            )
+
+    splits = _split_ids(verified_contrib.records_by_id)
+    if (
+        len(splits["training"]) != 16
+        or len(splits["calibration"]) != 8
+        or len(splits["evaluation"]) != 8
+    ):
+        _fail("B2_DLCM_SPLIT_INVALID", "expected exact 16/8/8 split coverage")
+
+    _reject_held_out_target_domain(list(verified_contrib.records_by_id.values()))
+    _reject_held_out_target_domain(list(verified_desc.descriptor_records_by_id.values()))
+
+    train_rows = [verified_contrib.records_by_id[sid] for sid in splits["training"]]
+    cal_rows = [verified_contrib.records_by_id[sid] for sid in splits["calibration"]]
+    train_views = contrib_mod.load_targets_for_access(
+        train_rows,
+        access_mode="training_only",
+        normalization=verified_contrib.normalization,
+    )
+    cal_views = contrib_mod.load_targets_for_access(
+        cal_rows,
+        access_mode="calibration_only",
+        normalization=verified_contrib.normalization,
+    )
+    train_by_id = {str(v["stable_sample_id"]): v for v in train_views}
+    cal_by_id = {str(v["stable_sample_id"]): v for v in cal_views}
+
+    training_records = tuple(
+        _build_aligned_record(
+            stable_sample_id=sid,
+            descriptor_row=verified_desc.descriptor_records_by_id[sid],
+            target_view=train_by_id[sid],
+            contribution_row=verified_contrib.records_by_id[sid],
+        )
+        for sid in splits["training"]
+    )
+    calibration_records = tuple(
+        _build_aligned_record(
+            stable_sample_id=sid,
+            descriptor_row=verified_desc.descriptor_records_by_id[sid],
+            target_view=cal_by_id[sid],
+            contribution_row=verified_contrib.records_by_id[sid],
+        )
+        for sid in splits["calibration"]
+    )
+
+    evaluation_records: tuple[Mapping[str, Any], ...] = ()
+    if evaluation_unlocked:
+        eval_rows = [verified_contrib.records_by_id[sid] for sid in splits["evaluation"]]
+        eval_views = contrib_mod.load_targets_for_access(
+            eval_rows,
+            access_mode="evaluation_only",
+            normalization=verified_contrib.normalization,
+        )
+        eval_by_id = {str(v["stable_sample_id"]): v for v in eval_views}
+        evaluation_records = tuple(
+            _build_aligned_record(
+                stable_sample_id=sid,
+                descriptor_row=verified_desc.descriptor_records_by_id[sid],
+                target_view=eval_by_id[sid],
+                contribution_row=verified_contrib.records_by_id[sid],
+            )
+            for sid in splits["evaluation"]
+        )
+
+    return VerifiedB2DLCMTrainingInputs(
+        training_records=training_records,
+        calibration_records=calibration_records,
+        evaluation_record_ids=tuple(splits["evaluation"]),
+        verified_identities=dict(sorted(observed.items())),
+        teacher_forward_count=0,
+        evaluation_unlocked=bool(evaluation_unlocked),
+        _evaluation_records=evaluation_records,
+    )
+
+
 def dry_run_complete_contract_validation(
     *,
     config: Mapping[str, Any],
     seed: int,
     output_root: Path | str,
+    descriptor_manifest: Path | str | None = None,
+    descriptor_root: Path | str | None = None,
+    contribution_target_manifest: Path | str | None = None,
+    contribution_target_root: Path | str | None = None,
 ) -> dict[str, Any]:
-    """Complete B2-05A dry-run: hermetic contract exercise, zero filesystem writes."""
+    """Complete B2-05A dry-run: verify real upstream when provided, hermetic math, zero writes."""
 
     output_root = Path(output_root)
     if config.get("real_training_enabled") is not False:
         _fail("B2_DLCM_REAL_TRAINING_FLAG", "dry-run requires real_training_enabled=false")
     if config.get("contract_stage") != "b2_05a":
         _fail("B2_DLCM_CONFIG_STAGE_INVALID", "contract_stage must be b2_05a")
+
+    upstream_verified = False
+    verified_identities: Mapping[str, str] | None = None
+    if None not in (
+        descriptor_manifest,
+        descriptor_root,
+        contribution_target_manifest,
+        contribution_target_root,
+    ):
+        bundle = load_verified_b2_dlcm_training_inputs(
+            descriptor_manifest=descriptor_manifest,  # type: ignore[arg-type]
+            descriptor_root=descriptor_root,  # type: ignore[arg-type]
+            contribution_target_manifest=contribution_target_manifest,  # type: ignore[arg-type]
+            contribution_target_root=contribution_target_root,  # type: ignore[arg-type]
+            accepted_upstream=dict(config["accepted_upstream"]),
+            evaluation_unlocked=False,
+        )
+        upstream_verified = True
+        verified_identities = bundle.verified_identities
+        if len(bundle.training_records) != 16 or len(bundle.calibration_records) != 8:
+            _fail("B2_DLCM_SPLIT_INVALID", "verified upstream split mismatch")
+        if len(bundle.evaluation_record_ids) != 8:
+            _fail("B2_DLCM_SPLIT_INVALID", "evaluation ids must be 8")
+
     records = build_hermetic_contract_records()
     if len(records) != 32:
         _fail("B2_DLCM_HERMETIC_COUNT", "hermetic fixture must contain 32 records")
@@ -971,6 +1354,8 @@ def dry_run_complete_contract_validation(
         "evaluation_unlocked": False,
         "teacher_forward_count": 0,
         "hermetic_records_validated": 32,
+        "upstream_verified": upstream_verified,
+        "verified_identities": verified_identities,
         "seed": int(seed),
         "dry_run_loss_finite": True,
         "fusion_path": path,

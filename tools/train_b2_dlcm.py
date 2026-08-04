@@ -145,6 +145,10 @@ def main(argv: list[str] | None = None) -> int:
             config=config,
             seed=seed,
             output_root=output_root,
+            descriptor_manifest=args.descriptor_manifest,
+            descriptor_root=args.descriptor_root,
+            contribution_target_manifest=args.contribution_target_manifest,
+            contribution_target_root=args.contribution_target_root,
         )
         if output_root.exists() and any(output_root.iterdir()) if output_root.exists() else False:
             # Dry-run must not create the output root.
