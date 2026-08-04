@@ -96,22 +96,73 @@ hostname, paths, times) stay in runtime attestation only.
 ## Deployment
 
 Deployment checkpoint embeds B2-03B normalization, golden CPU cases, and
-deployment-only state. Loader: CPU golden bit-exact → GPU \(10^{-6}\)
-qualification → immutable inference wrapper. Process-local positive cache only.
+deployment-only state. Every new process’s first accepted load executes:
+
+1. accepted-manifest verification (when formal);
+2. checkpoint verification;
+3. CPU golden bit-exact self-test (nine cases);
+4. GPU numerical qualification (\(\max|z_{\mathrm{GPU}}-z_{\mathrm{CPU}}|\le10^{-6}\),
+   same for weights; float32/finite/nonnegative/row-sum checks).
+
+Observed CPU/GPU errors enter **runtime attestation only**.
+
+Process-local **positive-only** qualification cache keys
+`(deployment_scientific_sha256, checkpoint_file_sha256, environment_contract_sha256,
+loader_contract_version, gpu_device_index, gpu_uuid, gpu_model)`. Failures are
+never cached; any checkpoint/env/device/loader or state/mode mutation forces
+requalification.
+
+### Immutable loader
+
+Returns `ImmutableDLCMInference`, not a bare `nn.Module`: permanent `eval()`,
+`requires_grad=False`, `torch.inference_mode()`, rejects `train(True)` /
+`load_state_dict` / device moves / parameter mutation. Formal
+`forward(raw_cpu_f32[B,n,18], depth, player_ids) -> weights` on the qualified
+device; `forward_diagnostic` is diagnostic-only. Player IDs must exactly match
+depth vocabularies; no reorder/repair/padding/pre-standardized mode.
+
+Batch independence is required for \(B\in\{1,2,4\}\)
+(\(\max|w^{\mathrm{single}}-w^{\mathrm{batch}}|\le10^{-6}\)).
 
 ## Fusion
 
 Extend production sum-preserving formula \(A_d=n_d\sum_i w_i A_i\) with fixed
 layer-order FP32 accumulation and **exact uniform bit-pattern** fast path
-(`uniform_baseline` adds maps; near-uniform does not trigger).
+(`uniform_baseline` adds maps; near-uniform does not trigger). Epoch 0 must hit
+the baseline path at depths 12/18/24.
 
-## Evaluation and gates
+## Evaluation unlock and artifacts
 
-Depth-24 category-macro gates for target learning (KL vs uniform) and
-localization (Pixel AP / AUROC / AUPRO deltas). Qualification states:
-`deployment_qualified`, `trained_but_not_deployment_qualified`,
-`localized_but_target_fidelity_unqualified`, or both-fail. Accepted manifest
-binds deploy / qualification / accepted scientific identities; `.pt` alone is
+Only after reproduction + deployment export:
+`evaluation_unlock.json(+.sha256)` with `evaluation_unlocked=true`. Loaders
+verify the artifact from disk; CLI booleans cannot unlock.
+
+After unlock, evaluate seed 17/29/43 bests and the canonical deployment
+checkpoint under `evaluation/`. Canonical reproduction may be compared for
+equality only and is excluded from seed statistics (`ddof=0`).
+
+### Target-fidelity metrics
+
+Per depth, GT and teacher separately: allocation KL, natural-log JSD (no ε),
+standardized signed Huber, pairwise ranking accuracy (`no_valid_pairs` excluded
+from averages), set-valued Top-1 agreement, Spearman (average ranks; both
+constant → 1; exactly one constant → 0). Dual diagnostic
+\(M_d^{\mathrm{dual}}=(M_d^{GT}+M_d^{T})/2\) is invalid if either family is.
+
+### Localization metrics
+
+Deployment weights + sum-preserving fusion. Per depth: Pixel AUROC/AP,
+PRO/AUPRO, teacher Spearman and Top-1% overlap. Depth 24 is primary; 12/18 are
+diagnostics. Depth-matched equal-weight baselines only (not full-depth for
+shallow). Category-macro is formal; pooled/per-category retained. Undefined
+formal metrics fail qualification (no 0/1/NaN fill).
+
+### Gates and accepted identity
+
+Depth-24 category-macro gates for target learning and localization determine
+V1 qualification states. Accepted manifest binds deploy / qualification /
+accepted scientific identities; formal loader requires the receipt + all three
+identities + upstream + `deployment_qualified=true`. A `.pt` alone is
 insufficient.
 
 ## Failure states
@@ -124,4 +175,5 @@ success final manifest.
 
 No teacher/backbone invocation, no VisA/target-domain access, no residual-gain
 supervision, no LSE, no early-exit policy, no real DLCM checkpoints in B2-05A,
-no evaluation unlock, no accepted deployment artifact generation from real runs.
+no real evaluation unlock, no accepted deployment artifact generation from real
+runs.

@@ -6,6 +6,7 @@ import hashlib
 import json
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
+from pathlib import Path
 from typing import Any, NoReturn, cast
 
 import torch
@@ -397,6 +398,10 @@ class ImmutableDLCMInference:
             _fail("B2_DLCM_INPUT_DTYPE", "formal inputs must be contiguous float32")
         if raw_descriptors.ndim != 3:
             _fail("B2_DLCM_INPUT_RANK", "formal inputs must be rank-3 [B,n,18]")
+        if int(raw_descriptors.shape[0]) < 1:
+            _fail("B2_DLCM_INPUT_BATCH", "batch size B must be >= 1")
+        if not bool(torch.isfinite(raw_descriptors).all()):
+            _fail("B2_DLCM_INPUT_NONFINITE", "formal inputs must be finite")
         normalized = apply_embedded_normalization(raw_descriptors, self._embedded_normalization)
         normalized = normalized.to(self._device)
         with torch.inference_mode():
@@ -437,6 +442,86 @@ def _cache_key_str(key: QualificationCacheKey) -> str:
     return _canonical_json_sha256(key.__dict__)
 
 
+def clear_qualification_cache() -> None:
+    _PROCESS_QUAL_CACHE.clear()
+
+
+def invalidate_qualification_cache_entry(wrapper: ImmutableDLCMInference) -> None:
+    wrapper._qualified = False
+    if wrapper._cache_key is not None:
+        _PROCESS_QUAL_CACHE.pop(_cache_key_str(wrapper._cache_key), None)
+
+
+def run_gpu_qualification(
+    checkpoint: Mapping[str, Any],
+    *,
+    device: torch.device,
+    gpu_atol: float = 1e-6,
+) -> dict[str, Any]:
+    """§40 GPU numerical qualification; errors recorded for runtime attestation."""
+
+    if device.type != "cuda":
+        _fail("B2_DLCM_GPU_QUAL_DEVICE", "GPU qualification requires CUDA device")
+    run_cpu_golden_self_test(checkpoint)
+    trunk = _instantiate_trunk_from_checkpoint(checkpoint)
+    trunk.load_state_dict(checkpoint["state_dict"], strict=True)
+    trunk.eval()
+    for param in trunk.parameters():
+        param.requires_grad_(False)
+    trunk.to(device)
+    trunk._reset_dropout_generators(device=device)
+    max_logit = 0.0
+    max_weight = 0.0
+    for case in checkpoint["golden_cases"]:
+        inp = case["input_tensor"].to(device, non_blocking=False)
+        with torch.no_grad():
+            logits, weights = trunk.forward(
+                inp,
+                prediction_depth=case["prediction_depth"],
+                player_layer_ids=tuple(
+                    dlcm.players_for_depth(
+                        checkpoint["candidate_layers"], case["prediction_depth"]
+                    )
+                ),
+            )
+        if weights.dtype != torch.float32 or not bool(torch.isfinite(weights).all()):
+            _fail("B2_DLCM_GPU_QUAL_FAIL", "GPU weights dtype/finite invalid")
+        if bool((weights < -1e-6).any()):
+            _fail("B2_DLCM_GPU_QUAL_FAIL", "GPU weights below -1e-6")
+        if not bool(
+            torch.allclose(
+                weights.sum(dim=-1),
+                torch.ones(weights.shape[0], device=weights.device),
+                atol=1e-6,
+            )
+        ):
+            _fail("B2_DLCM_GPU_QUAL_FAIL", "GPU weight row sums invalid")
+        cpu_logits = torch.tensor(
+            [dlcm.bits_hex_to_float(m) for m in case["expected_logits_bits"]],
+            dtype=torch.float32,
+        ).view_as(logits.cpu())
+        cpu_weights = torch.tensor(
+            [dlcm.bits_hex_to_float(m) for m in case["expected_weights_bits"]],
+            dtype=torch.float32,
+        ).view_as(weights.cpu())
+        max_logit = max(max_logit, float((logits.cpu() - cpu_logits).abs().max()))
+        max_weight = max(max_weight, float((weights.cpu() - cpu_weights).abs().max()))
+    if max_logit > gpu_atol or max_weight > gpu_atol:
+        _fail("B2_DLCM_GPU_QUAL_FAIL", "GPU vs CPU drift exceeds tolerance")
+    return {
+        "cases_run": 9,
+        "passed": True,
+        "max_logit_abs_error": max_logit,
+        "max_weight_abs_error": max_weight,
+        # Runtime attestation only — not scientific identity.
+        "runtime_attestation_fields": {
+            "gpu_device": str(device),
+            "max_logit_abs_error": max_logit,
+            "max_weight_abs_error": max_weight,
+        },
+    }
+
+
 def load_qualified_deployment(
     checkpoint: Mapping[str, Any],
     *,
@@ -448,8 +533,35 @@ def load_qualified_deployment(
     gpu_atol: float = 1e-6,
 ) -> ImmutableDLCMInference:
     if require_accepted_manifest is not None:
-        if not require_accepted_manifest.get("deployment_qualified", False):
-            _fail("B2_DLCM_NOT_ACCEPTED", "formal loader requires accepted qualified manifest")
+        verify_accepted_manifest_for_loader(
+            require_accepted_manifest,
+            deployment_scientific_sha256=str(checkpoint["deployment_scientific_sha256"]),
+            deployment_file_sha256=checkpoint_file_sha256,
+            expected_accepted_identity=str(
+                require_accepted_manifest.get("accepted_identity", "")
+            ),
+        )
+
+    key = QualificationCacheKey(
+        accepted_deployment_scientific_sha256=str(checkpoint["deployment_scientific_sha256"]),
+        checkpoint_file_sha256=checkpoint_file_sha256,
+        environment_contract_sha256=environment_contract_sha256,
+        loader_contract_version=LOADER_CONTRACT_VERSION,
+        gpu_device_index=(device.index or 0) if device.type == "cuda" else -1,
+        gpu_uuid=gpu_uuid,
+        gpu_model=torch.cuda.get_device_name(device) if device.type == "cuda" else "cpu",
+    )
+    cache_id = _cache_key_str(key)
+    cached = _PROCESS_QUAL_CACHE.get(cache_id)
+    if cached is not None and cached._qualified:
+        try:
+            cached._validate_alive()
+            return cached
+        except B2DLCMDeploymentError:
+            _PROCESS_QUAL_CACHE.pop(cache_id, None)
+
+    # First accepted load in this process: manifest (optional) + checkpoint golden
+    # CPU bit-exact + GPU numerical qualification when device is CUDA.
     run_cpu_golden_self_test(checkpoint)
     trunk = _instantiate_trunk_from_checkpoint(checkpoint)
     trunk.load_state_dict(checkpoint["state_dict"], strict=True)
@@ -458,46 +570,13 @@ def load_qualified_deployment(
         param.requires_grad_(False)
 
     if device.type == "cuda":
+        run_gpu_qualification(checkpoint, device=device, gpu_atol=gpu_atol)
         trunk.to(device)
         trunk._reset_dropout_generators(device=device)
-        # GPU qualification against golden CPU expectations.
-        for case in checkpoint["golden_cases"]:
-            inp = case["input_tensor"].to(device)
-            with torch.no_grad():
-                logits, weights = trunk.forward(
-                    inp,
-                    prediction_depth=case["prediction_depth"],
-                    player_layer_ids=tuple(
-                        dlcm.players_for_depth(
-                            checkpoint["candidate_layers"], case["prediction_depth"]
-                        )
-                    ),
-                )
-            cpu_logits = torch.tensor(
-                [dlcm.bits_hex_to_float(m) for m in case["expected_logits_bits"]],
-                dtype=torch.float32,
-            ).view_as(logits.cpu())
-            cpu_weights = torch.tensor(
-                [dlcm.bits_hex_to_float(m) for m in case["expected_weights_bits"]],
-                dtype=torch.float32,
-            ).view_as(weights.cpu())
-            if float((logits.cpu() - cpu_logits).abs().max()) > gpu_atol:
-                _fail("B2_DLCM_GPU_QUAL_FAIL", "GPU logits drift exceeds 1e-6")
-            if float((weights.cpu() - cpu_weights).abs().max()) > gpu_atol:
-                _fail("B2_DLCM_GPU_QUAL_FAIL", "GPU weights drift exceeds 1e-6")
     elif device.type != "cpu":
         _fail("B2_DLCM_DEVICE_INVALID", f"unsupported device {device}")
 
     state_id = dlcm.model_state_scientific_sha256(trunk)
-    key = QualificationCacheKey(
-        accepted_deployment_scientific_sha256=str(checkpoint["deployment_scientific_sha256"]),
-        checkpoint_file_sha256=checkpoint_file_sha256,
-        environment_contract_sha256=environment_contract_sha256,
-        loader_contract_version=LOADER_CONTRACT_VERSION,
-        gpu_device_index=device.index or 0 if device.type == "cuda" else -1,
-        gpu_uuid=gpu_uuid,
-        gpu_model=torch.cuda.get_device_name(device) if device.type == "cuda" else "cpu",
-    )
     wrapper = ImmutableDLCMInference(
         _model=trunk,
         _device=device,
@@ -508,7 +587,7 @@ def load_qualified_deployment(
         _candidate_layers=tuple(checkpoint["candidate_layers"]),
         _cache_key=key,
     )
-    _PROCESS_QUAL_CACHE[_cache_key_str(key)] = wrapper
+    _PROCESS_QUAL_CACHE[cache_id] = wrapper
     return wrapper
 
 
@@ -697,3 +776,398 @@ def spearman_average_ranks(x: torch.Tensor, y: torch.Tensor) -> float:
     if float(denom) == 0.0:
         return 0.0
     return float((rx * ry).sum() / denom)
+
+
+# ---------------------------------------------------------------------------
+# Evaluation unlock, seed collection, metrics aggregation, accepted manifests
+# ---------------------------------------------------------------------------
+
+EVALUATION_UNLOCK_SCHEMA_VERSION = "b2_dlcm_evaluation_unlock_v1"
+SEED_COLLECTION_SCHEMA_VERSION = "b2_dlcm_seed_collection_v1"
+EVALUATION_MANIFEST_SCHEMA_VERSION = "b2_dlcm_evaluation_manifest_v1"
+ACCEPTED_MANIFEST_SCHEMA_VERSION = "b2_dlcm_accepted_deployment_v1"
+
+
+def _atomic_write_json(path: Path, payload: Mapping[str, Any]) -> str:
+    import os
+
+    path = Path(path)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    encoded = json.dumps(payload, sort_keys=True, indent=2, ensure_ascii=False) + "\n"
+    raw = encoded.encode("utf-8")
+    tmp = path.with_suffix(path.suffix + ".tmp")
+    tmp.write_bytes(raw)
+    os.replace(tmp, path)
+    digest = hashlib.sha256(raw).hexdigest()
+    path.with_suffix(path.suffix + ".sha256").write_text(digest + "\n", encoding="utf-8")
+    return digest
+
+
+def pairwise_ranking_accuracy(
+    pred: torch.Tensor,
+    target: torch.Tensor,
+    *,
+    tie_tolerance: float = 1e-6,
+) -> dict[str, Any]:
+    """Pairwise ranking accuracy; no_valid_pairs is not scored as 0/1."""
+
+    if pred.ndim != 1 or target.ndim != 1 or pred.shape != target.shape:
+        _fail("B2_DLCM_RANK_ACC_SHAPE", "pred/target must be 1-D equal shape")
+    n = int(pred.numel())
+    correct = 0
+    valid = 0
+    for i in range(n):
+        for j in range(i + 1, n):
+            diff = float(target[i] - target[j])
+            if abs(diff) <= tie_tolerance:
+                continue
+            valid += 1
+            pred_diff = float(pred[i] - pred[j])
+            if (diff > 0 and pred_diff > 0) or (diff < 0 and pred_diff < 0):
+                correct += 1
+    if valid == 0:
+        return {
+            "status": "no_valid_pairs",
+            "accuracy": None,
+            "valid_pair_count": 0,
+        }
+    return {
+        "status": "ok",
+        "accuracy": correct / float(valid),
+        "valid_pair_count": valid,
+    }
+
+
+def build_evaluation_unlock_artifact(
+    *,
+    canonical_selection_identity: str,
+    reproduction_comparison: Mapping[str, Any],
+    trace_node_comparisons: Sequence[Mapping[str, Any]],
+    best_model_identity: str,
+    last_model_identity: str,
+    best_training_identity: str,
+    last_training_identity: str,
+    checkpoint_bytes_equal: bool,
+    deployment_scientific_identity: str,
+    environment_identity: str,
+    descriptor_normalization_identity: str,
+    contribution_target_identity: str,
+) -> dict[str, Any]:
+    payload = {
+        "schema_version": EVALUATION_UNLOCK_SCHEMA_VERSION,
+        "canonical_selection_identity": canonical_selection_identity,
+        "reproduction_comparison": dict(reproduction_comparison),
+        "trace_node_comparisons": list(trace_node_comparisons),
+        "best_model_identity": best_model_identity,
+        "last_model_identity": last_model_identity,
+        "best_training_identity": best_training_identity,
+        "last_training_identity": last_training_identity,
+        "checkpoint_bytes_equal": bool(checkpoint_bytes_equal),
+        "deployment_scientific_identity": deployment_scientific_identity,
+        "environment_identity": environment_identity,
+        "descriptor_normalization_identity": descriptor_normalization_identity,
+        "contribution_target_identity": contribution_target_identity,
+        "evaluation_unlocked": True,
+    }
+    payload["evaluation_unlock_scientific_sha256"] = _canonical_json_sha256(
+        {k: v for k, v in payload.items() if k != "evaluation_unlock_scientific_sha256"}
+    )
+    return payload
+
+
+def persist_evaluation_unlock(path: Path | str, unlock: Mapping[str, Any]) -> str:
+    return _atomic_write_json(Path(path), unlock)
+
+
+def require_evaluation_unlocked(
+    run_dir: Path | str,
+    *,
+    cli_unlock_flag: bool | None = None,
+) -> dict[str, Any]:
+    if cli_unlock_flag is True:
+        _fail(
+            "B2_DLCM_EVAL_CLI_BYPASS",
+            "evaluation unlock cannot be granted by a CLI boolean",
+        )
+    path = Path(run_dir) / "evaluation_unlock.json"
+    if not path.is_file():
+        _fail("B2_DLCM_EVAL_LOCKED", "evaluation_unlock.json missing; evaluation locked")
+    unlock = json.loads(path.read_text(encoding="utf-8"))
+    if unlock.get("evaluation_unlocked") is not True:
+        _fail("B2_DLCM_EVAL_LOCKED", "evaluation_unlocked is not true")
+    claimed = unlock.get("evaluation_unlock_scientific_sha256")
+    recomputed = _canonical_json_sha256(
+        {k: v for k, v in unlock.items() if k != "evaluation_unlock_scientific_sha256"}
+    )
+    if claimed != recomputed:
+        _fail("B2_DLCM_EVAL_UNLOCK_HASH", "evaluation unlock scientific hash mismatch")
+    receipt = path.with_suffix(path.suffix + ".sha256")
+    if not receipt.is_file():
+        _fail("B2_DLCM_EVAL_UNLOCK_RECEIPT", "evaluation unlock receipt missing")
+    return unlock
+
+
+def seed_collection_scientific_payload(manifest: Mapping[str, Any]) -> dict[str, Any]:
+    return {
+        "schema_version": manifest["schema_version"],
+        "ordered_seeds": list(manifest["ordered_seeds"]),
+        "seed_scientific_identities": dict(manifest["seed_scientific_identities"]),
+        "calibration_by_seed": dict(manifest["calibration_by_seed"]),
+        "best_epoch_by_seed": dict(manifest["best_epoch_by_seed"]),
+        "best_model_identity_by_seed": dict(manifest["best_model_identity_by_seed"]),
+        "training_config_identity": manifest["training_config_identity"],
+        "upstream_identities": dict(manifest["upstream_identities"]),
+        "environment_identity": manifest["environment_identity"],
+        "all_seeds_passed": manifest["all_seeds_passed"],
+        "evaluation_unlocked": manifest["evaluation_unlocked"],
+        "canonical_seed_selected": manifest["canonical_seed_selected"],
+    }
+
+
+def seed_collection_scientific_sha256(manifest: Mapping[str, Any]) -> str:
+    return _canonical_json_sha256(seed_collection_scientific_payload(manifest))
+
+
+def build_seed_collection_manifest(
+    seeds: Sequence[Mapping[str, Any]],
+    *,
+    training_config_identity: str,
+    upstream_identities: Mapping[str, str],
+) -> dict[str, Any]:
+    if [int(s["seed"]) for s in seeds] != [17, 29, 43]:
+        _fail("B2_DLCM_SEED_ORDER_INVALID", "seeds must be exactly [17,29,43]")
+    if any(s.get("status") != "passed" for s in seeds):
+        _fail("B2_DLCM_SEED_COLLECTION_INCOMPLETE", "all seeds must be passed")
+    env_ids = {s["environment_identity"] for s in seeds}
+    if len(env_ids) != 1:
+        _fail("B2_DLCM_ENV_IDENTITY_MISMATCH", "seed environment identities must agree")
+    manifest = {
+        "schema_version": SEED_COLLECTION_SCHEMA_VERSION,
+        "ordered_seeds": [17, 29, 43],
+        "seed_scientific_identities": {
+            str(s["seed"]): s["seed_scientific_sha256"] for s in seeds
+        },
+        "seed_file_sha256_by_seed": {str(s["seed"]): s["file_sha256"] for s in seeds},
+        "calibration_by_seed": {
+            str(s["seed"]): {
+                "primary": s["calibration_primary"],
+                "secondary": s["calibration_secondary"],
+            }
+            for s in seeds
+        },
+        "best_epoch_by_seed": {str(s["seed"]): int(s["best_epoch"]) for s in seeds},
+        "best_model_identity_by_seed": {
+            str(s["seed"]): s["best_model_state_identity"] for s in seeds
+        },
+        "training_config_identity": training_config_identity,
+        "upstream_identities": dict(upstream_identities),
+        "environment_identity": next(iter(env_ids)),
+        "all_seeds_passed": True,
+        "evaluation_unlocked": False,
+        "canonical_seed_selected": False,
+    }
+    manifest["seed_collection_scientific_sha256"] = seed_collection_scientific_sha256(manifest)
+    return manifest
+
+
+def verify_seed_collection_file_hashes(
+    manifest: Mapping[str, Any],
+    expected_by_seed: Mapping[int, str],
+) -> None:
+    for seed, digest in expected_by_seed.items():
+        got = manifest["seed_file_sha256_by_seed"].get(str(seed))
+        if got != digest:
+            _fail("B2_DLCM_SEED_FILE_SHA", f"seed {seed} file sha mismatch")
+
+
+def compare_reproduction(
+    original: Mapping[str, Any],
+    reproduction: Mapping[str, Any],
+) -> dict[str, Any]:
+    orig_nodes = list(original.get("nodes", []))
+    repro_nodes = list(reproduction.get("nodes", []))
+    limit = max(len(orig_nodes), len(repro_nodes))
+    for idx in range(limit):
+        if idx >= len(orig_nodes) or idx >= len(repro_nodes):
+            return {
+                "status": "canonical_reproduction_failed",
+                "first_mismatch": {"epoch": idx, "field": "nodes_length"},
+                "nodes_equal": False,
+            }
+        if orig_nodes[idx] != repro_nodes[idx]:
+            return {
+                "status": "canonical_reproduction_failed",
+                "first_mismatch": {
+                    "epoch": int(orig_nodes[idx].get("epoch", idx)),
+                    "field": "node",
+                },
+                "nodes_equal": False,
+            }
+    if original.get("model") != reproduction.get("model"):
+        return {
+            "status": "canonical_reproduction_failed",
+            "first_mismatch": {"epoch": None, "field": "model"},
+            "nodes_equal": True,
+        }
+    return {"status": "passed", "first_mismatch": None, "nodes_equal": True}
+
+
+def aggregate_target_fidelity(
+    per_sample: Sequence[Mapping[str, Any]],
+    *,
+    metric_path: Sequence[str],
+) -> dict[str, Any]:
+    def _dig(payload: Mapping[str, Any], path: Sequence[str]) -> float:
+        cur: Any = payload
+        for key in path:
+            cur = cur[key]
+        return float(cur)
+
+    by_category: dict[str, list[float]] = {}
+    all_values: list[float] = []
+    for sample in per_sample:
+        value = _dig(sample, metric_path)
+        all_values.append(value)
+        by_category.setdefault(str(sample["category"]), []).append(value)
+    per_category = {
+        category: sum(values) / float(len(values)) for category, values in sorted(by_category.items())
+    }
+    category_macro = sum(per_category.values()) / float(len(per_category))
+    pooled = sum(all_values) / float(len(all_values))
+    return {
+        "category_macro": category_macro,
+        "pooled_diagnostic": pooled,
+        "per_category": per_category,
+    }
+
+
+def three_seed_summary(values: Sequence[float], *, ddof: int = 0) -> dict[str, float]:
+    if ddof != 0:
+        _fail("B2_DLCM_SEED_SUMMARY_DDOF", "seed summary requires ddof=0")
+    if len(values) != 3:
+        _fail("B2_DLCM_SEED_SUMMARY_COUNT", "exactly three seed values required")
+    acc = [float(v) for v in values]
+    mean = sum(acc) / 3.0
+    var = sum((v - mean) ** 2 for v in acc) / 3.0
+    return {"mean": mean, "std": var**0.5}
+
+
+def build_evaluation_record(
+    *,
+    evaluated_checkpoint_scientific_identity: str,
+    evaluation_unlock_identity: str,
+    evaluation_split_coverage_sha256: str,
+    no_parameter_update_proof: bool,
+    depth_results: Mapping[int, Mapping[str, Any]],
+    per_category: Mapping[str, Mapping[str, Any]],
+    pooled: Mapping[str, Any],
+) -> dict[str, Any]:
+    if no_parameter_update_proof is not True:
+        _fail("B2_DLCM_EVAL_PARAM_UPDATE", "evaluation must prove no parameter updates")
+    return {
+        "evaluated_checkpoint_scientific_identity": evaluated_checkpoint_scientific_identity,
+        "evaluation_unlock_identity": evaluation_unlock_identity,
+        "evaluation_split_coverage_sha256": evaluation_split_coverage_sha256,
+        "no_parameter_update_proof": True,
+        "depth_results": {str(k): dict(v) for k, v in depth_results.items()},
+        "per_category": dict(per_category),
+        "pooled": dict(pooled),
+    }
+
+
+def build_evaluation_manifest(
+    *,
+    records: Mapping[str, Mapping[str, Any]],
+    unlock_identity: str,
+) -> dict[str, Any]:
+    required = {
+        "seed_17",
+        "seed_29",
+        "seed_43",
+        "canonical_deployment",
+    }
+    if set(records) != required:
+        _fail("B2_DLCM_EVAL_MANIFEST_KEYS", f"evaluation records must be exactly {sorted(required)}")
+    manifest = {
+        "schema_version": EVALUATION_MANIFEST_SCHEMA_VERSION,
+        "evaluation_unlock_identity": unlock_identity,
+        "record_identities": {
+            key: _canonical_json_sha256(dict(records[key])) for key in sorted(records)
+        },
+        "canonical_reproduction_excluded_from_statistics": True,
+        "seed_summary_ddof": 0,
+    }
+    manifest["evaluation_manifest_scientific_sha256"] = _canonical_json_sha256(
+        {k: v for k, v in manifest.items() if k != "evaluation_manifest_scientific_sha256"}
+    )
+    return manifest
+
+
+def persist_evaluation_bundle(
+    evaluation_dir: Path | str,
+    manifest: Mapping[str, Any],
+    record_files: Mapping[str, Mapping[str, Any]],
+) -> None:
+    out = Path(evaluation_dir)
+    out.mkdir(parents=True, exist_ok=True)
+    for name, payload in record_files.items():
+        _atomic_write_json(out / name, payload)
+    _atomic_write_json(out / "evaluation_manifest.json", manifest)
+
+
+def build_accepted_deployment_manifest(
+    *,
+    deploy_identity: str,
+    qualification_identity: str,
+    accepted_identity: str,
+    selection_identity: str,
+    deployment_scientific_sha256: str,
+    upstream_identities: Mapping[str, str],
+    deployment_qualified: bool,
+) -> dict[str, Any]:
+    return {
+        "schema_version": ACCEPTED_MANIFEST_SCHEMA_VERSION,
+        "deploy_identity": deploy_identity,
+        "qualification_identity": qualification_identity,
+        "accepted_identity": accepted_identity,
+        "selection_identity": selection_identity,
+        "deployment_scientific_sha256": deployment_scientific_sha256,
+        "upstream_identities": dict(upstream_identities),
+        "deployment_qualified": bool(deployment_qualified),
+    }
+
+
+def verify_accepted_manifest_for_loader(
+    manifest: Mapping[str, Any],
+    *,
+    deployment_scientific_sha256: str,
+    deployment_file_sha256: str,
+    expected_accepted_identity: str,
+) -> None:
+    if not isinstance(manifest, Mapping):
+        _fail("B2_DLCM_NOT_ACCEPTED", "accepted manifest required")
+    if manifest.get("deployment_qualified") is not True:
+        _fail("B2_DLCM_NOT_ACCEPTED", "deployment_qualified must be true")
+    if not deployment_file_sha256 or len(deployment_file_sha256) != 64:
+        _fail("B2_DLCM_NOT_ACCEPTED", "deployment file sha required")
+    if manifest.get("deployment_scientific_sha256") != deployment_scientific_sha256:
+        _fail("B2_DLCM_NOT_ACCEPTED", "deployment scientific identity mismatch")
+    if expected_accepted_identity and manifest.get("accepted_identity") != expected_accepted_identity:
+        _fail("B2_DLCM_NOT_ACCEPTED", "accepted identity mismatch")
+    for key in ("deploy_identity", "qualification_identity", "accepted_identity"):
+        if key not in manifest:
+            _fail("B2_DLCM_NOT_ACCEPTED", f"missing {key}")
+
+
+def require_formal_localization_defined(
+    per_category: Mapping[str, Mapping[str, Any]],
+) -> None:
+    required_metrics = ("pixel_ap", "pixel_auroc", "aupro")
+    for category, metrics in per_category.items():
+        for name in required_metrics:
+            value = metrics.get(name)
+            if value is None or (isinstance(value, float) and value != value):
+                _fail(
+                    "B2_DLCM_EVAL_METRIC_UNDEFINED",
+                    f"formal localization metric {name} undefined for {category}",
+                )
