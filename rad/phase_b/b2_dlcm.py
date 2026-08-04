@@ -490,11 +490,14 @@ class B2DLCMDeploymentTrunk(nn.Module):
     def __init__(
         self,
         seed: int | None = None,
+        *,
+        initialize: bool | None = None,
         **kwargs: Any,
     ) -> None:
         super().__init__()
         # Build full model without signed heads for state compatibility.
-        full = B2DLCM(seed=seed, initialize=seed is not None, **kwargs)
+        do_init = (seed is not None) if initialize is None else bool(initialize)
+        full = B2DLCM(seed=seed, initialize=do_init, **kwargs)
         self.candidate_layers = full.candidate_layers
         self.prediction_depths = full.prediction_depths
         self.descriptor_dimension = full.descriptor_dimension
