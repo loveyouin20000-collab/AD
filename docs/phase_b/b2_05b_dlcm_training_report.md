@@ -54,3 +54,11 @@ Seed manifests initially bound last-epoch model identities. Repaired to best-che
 ## Scope exclusions
 
 No residual-gain / LSE / early-exit; no VisA or target-domain access; no teacher/backbone rerun; raw run directory untracked; nothing pushed.
+
+## B2-05C0 follow-up (diagnosis only)
+
+Signed-diagnostic proxy using deployment weights has been removed from the
+evaluation code path. Qualification metrics and scientific identities above are
+unchanged. See `b2_05c0_signed_diagnostics_boundary.md` and
+`b2_05c0_target_conflict_diagnosis.md`.
+
