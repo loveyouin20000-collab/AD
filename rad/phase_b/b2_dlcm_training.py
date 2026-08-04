@@ -576,18 +576,19 @@ def _calibration_metrics(
             depth_primary: list[float] = []
             depth_secondary: list[float] = []
             for depth in model.prediction_depths:
-                desc = record.descriptors[depth].unsqueeze(0)
+                device_t = next(model.parameters()).device
+                desc = record.descriptors[depth].unsqueeze(0).to(device=device_t)
                 out = model.forward_training(desc, prediction_depth=depth)
                 alloc, parts = dlcm.allocation_loss(
                     out.deployment_logits,
-                    record.p_gt[depth].unsqueeze(0),
-                    record.p_t[depth].unsqueeze(0),
+                    record.p_gt[depth].unsqueeze(0).to(device=device_t),
+                    record.p_t[depth].unsqueeze(0).to(device=device_t),
                 )
                 s_gt, gt_parts = dlcm.signed_loss(
-                    out.gt_signed, record.phi_gt[depth].unsqueeze(0)
+                    out.gt_signed, record.phi_gt[depth].unsqueeze(0).to(device=device_t)
                 )
                 s_t, t_parts = dlcm.signed_loss(
-                    out.teacher_signed, record.phi_t[depth].unsqueeze(0)
+                    out.teacher_signed, record.phi_t[depth].unsqueeze(0).to(device=device_t)
                 )
                 depth_primary.append(float(0.5 * (parts["gt_kl"] + parts["teacher_kl"])))
                 depth_secondary.append(float(s_gt))
@@ -611,16 +612,37 @@ def run_hermetic_contract_training(
     patience: int = 50,
     device: str = "cpu",
     batch_size: int = 4,
+    environment_contract: Mapping[str, Any] | None = None,
+    allow_existing_output: bool = False,
+    mark_real_training_started: bool = False,
 ) -> dict[str, Any]:
-    """Hermetic contract-only training loop (not authoritative B2-05B training)."""
+    """Hermetic/official seed training loop.
+
+    When ``allow_existing_output`` is true, an existing run root may already hold
+    the immutable environment contract and prior sealed seeds.
+    """
 
     output_root = Path(output_root)
-    if output_root.exists() and any(output_root.iterdir()):
+    if output_root.exists() and any(output_root.iterdir()) and not allow_existing_output:
         _fail("B2_DLCM_OUTPUT_COLLISION", "output root must be empty/fresh")
     output_root.mkdir(parents=True, exist_ok=True)
 
-    env = collect_environment_contract(allow_cpu_for_hermetic=True)
-    persist_environment_contract(output_root / "environment_contract.json", env)
+    if environment_contract is None:
+        env = collect_environment_contract(allow_cpu_for_hermetic=(device == "cpu"))
+        persist_environment_contract(output_root / "environment_contract.json", env)
+    else:
+        env = dict(environment_contract)
+        env_path = output_root / "environment_contract.json"
+        if env_path.is_file():
+            existing = json.loads(env_path.read_text(encoding="utf-8"))
+            if environment_contract_sha256(existing) != environment_contract_sha256(env):
+                _fail("B2_DLCM_ENV_MISMATCH", "environment contract drifted")
+        else:
+            persist_environment_contract(env_path, env)
+
+    seed_dir = output_root / f"seed_{seed}"
+    if seed_dir.exists():
+        _fail("B2_DLCM_OUTPUT_COLLISION", f"seed directory already exists: seed_{seed}")
 
     by_split: dict[str, list[Any]] = {"training": [], "calibration": [], "evaluation": []}
     for record in records:
@@ -631,7 +653,6 @@ def run_hermetic_contract_training(
     if len(by_split["evaluation"]) != 8:
         _fail("B2_DLCM_SPLIT_INVALID", "expected 8 evaluation placeholders")
 
-    seed_dir = output_root / f"seed_{seed}"
     tx = EpochTransaction(seed_dir)
     model = dlcm.B2DLCM(seed=seed)
     if device != "cpu":
@@ -705,11 +726,22 @@ def run_hermetic_contract_training(
             optimizer.zero_grad(set_to_none=True)
             depth_payload: dict[int, dict[str, torch.Tensor]] = {}
             for depth in model.prediction_depths:
-                descs = torch.stack([id_to_record[i].descriptors[depth] for i in batch_ids], dim=0)
-                p_gt = torch.stack([id_to_record[i].p_gt[depth] for i in batch_ids], dim=0)
-                p_t = torch.stack([id_to_record[i].p_t[depth] for i in batch_ids], dim=0)
-                phi_gt = torch.stack([id_to_record[i].phi_gt[depth] for i in batch_ids], dim=0)
-                phi_t = torch.stack([id_to_record[i].phi_t[depth] for i in batch_ids], dim=0)
+                device_t = next(model.parameters()).device
+                descs = torch.stack(
+                    [id_to_record[i].descriptors[depth] for i in batch_ids], dim=0
+                ).to(device=device_t, dtype=torch.float32)
+                p_gt = torch.stack(
+                    [id_to_record[i].p_gt[depth] for i in batch_ids], dim=0
+                ).to(device=device_t, dtype=torch.float32)
+                p_t = torch.stack(
+                    [id_to_record[i].p_t[depth] for i in batch_ids], dim=0
+                ).to(device=device_t, dtype=torch.float32)
+                phi_gt = torch.stack(
+                    [id_to_record[i].phi_gt[depth] for i in batch_ids], dim=0
+                ).to(device=device_t, dtype=torch.float32)
+                phi_t = torch.stack(
+                    [id_to_record[i].phi_t[depth] for i in batch_ids], dim=0
+                ).to(device=device_t, dtype=torch.float32)
                 out = model.forward_training(descs, prediction_depth=depth)
                 depth_payload[depth] = {
                     "deployment_logits": out.deployment_logits,
@@ -736,7 +768,7 @@ def run_hermetic_contract_training(
                 )
                 return {
                     "status": "failed",
-                    "real_training_started": False,
+                    "real_training_started": bool(mark_real_training_started),
                     "evaluation_unlocked": False,
                 }
             loss.backward()
@@ -785,10 +817,16 @@ def run_hermetic_contract_training(
 
     return {
         "status": status if status != "running" else "completed_epoch",
-        "real_training_started": False,
+        "real_training_started": bool(mark_real_training_started),
         "evaluation_unlocked": False,
         "best_epoch": selector.best_epoch,
         "seed": seed,
+        "primary": selector.best_primary,
+        "secondary": selector.best_secondary,
+        "trace_chain_tail": chain.tail,
+        "model_state_scientific_sha256": dlcm.model_state_scientific_sha256(model),
+        "last_epoch": last_epoch,
+        "global_optimizer_step": schedule.global_optimizer_step,
     }
 
 
