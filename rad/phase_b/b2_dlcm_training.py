@@ -815,6 +815,22 @@ def run_hermetic_contract_training(
         if status == "early_stopped":
             break
 
+    best_path = seed_dir / "committed" / "best_training_checkpoint.pt"
+    best_payload = torch.load(best_path, map_location="cpu", weights_only=False)
+    best_model = dlcm.B2DLCM(
+        seed=None,
+        candidate_layers=model.candidate_layers,
+        prediction_depths=model.prediction_depths,
+        descriptor_dimension=model.descriptor_dimension,
+        layer_embedding_dimension=model.layer_embedding_dimension,
+        depth_embedding_dimension=model.depth_embedding_dimension,
+        hidden_dimension=model.hidden_dimension,
+        dropout_probability=model.dropout_probability,
+        initialize=False,
+    )
+    best_model.load_state_dict(best_payload["model"], strict=True)
+    best_identity = dlcm.model_state_scientific_sha256(best_model)
+
     return {
         "status": status if status != "running" else "completed_epoch",
         "real_training_started": bool(mark_real_training_started),
@@ -824,10 +840,34 @@ def run_hermetic_contract_training(
         "primary": selector.best_primary,
         "secondary": selector.best_secondary,
         "trace_chain_tail": chain.tail,
-        "model_state_scientific_sha256": dlcm.model_state_scientific_sha256(model),
+        "model_state_scientific_sha256": best_identity,
+        "last_model_state_scientific_sha256": dlcm.model_state_scientific_sha256(
+            # Identity of the live (last) model after training terminates.
+            # Move to CPU clone for stable hashing if currently on CUDA.
+            _cpu_identity_model(model)
+        ),
         "last_epoch": last_epoch,
         "global_optimizer_step": schedule.global_optimizer_step,
     }
+
+
+def _cpu_identity_model(model: dlcm.B2DLCM) -> dlcm.B2DLCM:
+    clone = dlcm.B2DLCM(
+        seed=None,
+        candidate_layers=model.candidate_layers,
+        prediction_depths=model.prediction_depths,
+        descriptor_dimension=model.descriptor_dimension,
+        layer_embedding_dimension=model.layer_embedding_dimension,
+        depth_embedding_dimension=model.depth_embedding_dimension,
+        hidden_dimension=model.hidden_dimension,
+        dropout_probability=model.dropout_probability,
+        initialize=False,
+    )
+    clone.load_state_dict(
+        {k: v.detach().cpu() for k, v in model.state_dict().items()},
+        strict=True,
+    )
+    return clone
 
 
 def build_hermetic_contract_records(*, map_hw: tuple[int, int] = (8, 8)) -> list[dict[str, Any]]:
