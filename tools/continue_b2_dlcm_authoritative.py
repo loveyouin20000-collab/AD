@@ -224,18 +224,9 @@ def main() -> int:
                         / "canonical_reproduction"
                         / f"seed_{canon_seed}"
                         / "committed"
-                        / "training_trace.json"
-                    ).read_text()
-                ).get("trace_chain_tail")
-                or json.loads(
-                    (
-                        output_root
-                        / "canonical_reproduction"
-                        / f"seed_{canon_seed}"
-                        / "committed"
                         / "epoch_state_manifest.json"
                     ).read_text()
-                ).get("trace_chain_tail", "unknown")
+                )["trace_chain_tail"]
             ),
             checkpoint_bytes_equal=training.sha256_file(orig_best)
             == training.sha256_file(repro_best),
