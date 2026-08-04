@@ -68,13 +68,24 @@ def _stack_layer_maps(
     return torch.stack(stacked, dim=0)
 
 
-def _fuse_maps(maps_nd: torch.Tensor, weights_1d: torch.Tensor) -> torch.Tensor:
-    """maps [n,H,W], weights [n] → fused [H,W] via production sum-preserving fusion."""
+def _fuse_maps(
+    maps_nd: torch.Tensor,
+    weights_1d: torch.Tensor,
+    *,
+    prediction_depth: int,
+    player_layer_ids: Sequence[int],
+) -> torch.Tensor:
+    """maps [n,H,W], weights [n] → fused [H,W] via B2 production-backed fusion."""
 
-    maps_5d = maps_nd.unsqueeze(0).unsqueeze(2)  # [1,n,1,H,W]
-    w = weights_1d.unsqueeze(0)
-    valid = torch.ones(1, maps_nd.shape[0], dtype=torch.bool)
-    fused, _path = dlcm.sum_preserving_fusion(maps_5d, w, valid)
+    maps_4d = maps_nd.unsqueeze(0)  # [1,n,H,W]
+    w = weights_1d.unsqueeze(0).contiguous()
+    fused, _path = dlcm.sum_preserving_fusion(
+        maps_4d.contiguous(),
+        w,
+        prediction_depth=int(prediction_depth),
+        player_layer_ids=player_layer_ids,
+        return_path=True,
+    )
     return fused.reshape(maps_nd.shape[-2], maps_nd.shape[-1]).contiguous()
 
 
@@ -188,8 +199,18 @@ def evaluate_checkpoint_on_records(
             depth_target_rows[int(depth)].append(row)
 
             layer_maps = _stack_layer_maps(maps_by_depth[int(depth)], players)
-            fused_dlcm = _fuse_maps(layer_maps, weights)
-            fused_base = _fuse_maps(layer_maps, uniform)
+            fused_dlcm = _fuse_maps(
+                layer_maps,
+                weights,
+                prediction_depth=int(depth),
+                player_layer_ids=players,
+            )
+            fused_base = _fuse_maps(
+                layer_maps,
+                uniform,
+                prediction_depth=int(depth),
+                player_layer_ids=players,
+            )
             # Teacher reference map: equal-weight fusion is the depth-matched baseline;
             # teacher fidelity localization uses the full-depth map when available, else
             # equal-weight fusion of teacher causal lattice at this depth.
