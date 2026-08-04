@@ -1,0 +1,199 @@
+{
+  "accepted_dlcm_training_plan_scientific_sha256": "59e20f4cb337ef42384f70bb8b3dad5211d906341b0a2d41f7e6847610635980",
+  "accepted_scientific_sha256": null,
+  "b2_05a_contract_commit": "b580715f3dbfce3e4a03fe4073a57f99e8027f25",
+  "b2_05a_contract_tag": "b2-dlcm-training-contract-v1",
+  "canonical_reproduction": {
+    "first_mismatch": null,
+    "nodes_equal": true,
+    "status": "passed"
+  },
+  "canonical_seed": 17,
+  "canonical_selection_scientific_sha256": "e3bc06dfa02d6109544648020680d907bf0fce5ed7a093372d74009f9e69e142",
+  "deployment_qualified": false,
+  "deployment_scientific_sha256": "4cbc6fb88f39ed86deacfbbe48580f7682453b94becb046ec6ef1b1302df378a",
+  "depth12_localization_macro": {
+    "delta_aupro_macro": 0.0022628918598310843,
+    "delta_pixel_ap_macro": 0.0038058743767055425,
+    "delta_pixel_auroc_macro": 0.0004892014915671705
+  },
+  "depth18_localization_macro": {
+    "delta_aupro_macro": 0.00031144192723181474,
+    "delta_pixel_ap_macro": -0.0009447040390683226,
+    "delta_pixel_auroc_macro": 0.0002891701920714751
+  },
+  "depth24_localization": {
+    "delta_aupro_macro": 0.0011251880787725987,
+    "delta_pixel_ap_macro": 0.004338163776924142,
+    "delta_pixel_auroc_macro": 0.0003357577873411288,
+    "metric_source_identity": "b2_dlcm_formal_localization_v1",
+    "per_category_absolute": {
+      "bottle": {
+        "aupro": 0.9836618786010934,
+        "baseline_aupro": 0.9814091304699888,
+        "baseline_pixel_ap": 0.8374647449813588,
+        "baseline_pixel_auroc": 0.9946990327847107,
+        "pixel_ap": 0.8415287838492693,
+        "pixel_auroc": 0.9952000479148679,
+        "teacher_spearman": 0.9990365510396799,
+        "teacher_top1_overlap": 0.9539865871833085
+      },
+      "carpet": {
+        "aupro": 0.9833662391065865,
+        "baseline_aupro": 0.983368611080146,
+        "baseline_pixel_ap": 0.9006493667300383,
+        "baseline_pixel_auroc": 0.9921577829373935,
+        "pixel_ap": 0.905261655415976,
+        "pixel_auroc": 0.9923282833819186,
+        "teacher_spearman": 0.9988650990200969,
+        "teacher_top1_overlap": 0.9836997019374069
+      }
+    },
+    "per_category_localization": {
+      "bottle": {
+        "delta_aupro": 0.0022527481311046538,
+        "delta_pixel_ap": 0.004064038867910513,
+        "delta_pixel_auroc": 0.0005010151301572119
+      },
+      "carpet": {
+        "delta_aupro": -2.3719735594562863e-06,
+        "delta_pixel_ap": 0.004612288685937771,
+        "delta_pixel_auroc": 0.00017050044452504576
+      }
+    }
+  },
+  "depth24_target_fidelity": {
+    "jsd_gt": {
+      "category_macro": 0.032525137125048786,
+      "per_category": {
+        "bottle": 0.056155791971832514,
+        "carpet": 0.008894482278265059
+      },
+      "pooled_diagnostic": 0.032525137125048786
+    },
+    "jsd_teacher": {
+      "category_macro": 0.01705284665513318,
+      "per_category": {
+        "bottle": 0.010282875824486837,
+        "carpet": 0.023822817485779524
+      },
+      "pooled_diagnostic": 0.01705284665513318
+    },
+    "kl_gt_dlcm": {
+      "category_macro": 0.109854787712021,
+      "per_category": {
+        "bottle": 0.1843887852246354,
+        "carpet": 0.0353207901994066
+      },
+      "pooled_diagnostic": 0.10985478771202101
+    },
+    "kl_gt_uniform": {
+      "category_macro": 0.15995787825026325,
+      "per_category": {
+        "bottle": 0.2778865776089267,
+        "carpet": 0.04202917889159981
+      },
+      "pooled_diagnostic": 0.15995787825026325
+    },
+    "kl_teacher_dlcm": {
+      "category_macro": 0.06916554513914097,
+      "per_category": {
+        "bottle": 0.04163805168263365,
+        "carpet": 0.0966930385956483
+      },
+      "pooled_diagnostic": 0.06916554513914097
+    },
+    "kl_teacher_uniform": {
+      "category_macro": 0.05269192536130182,
+      "per_category": {
+        "bottle": 0.010302946174791097,
+        "carpet": 0.09508090454781255
+      },
+      "pooled_diagnostic": 0.05269192536130183
+    }
+  },
+  "descriptor_content_limitations": [
+    "MVTec source-only 32-sample subset; categories bottle/carpet only in evaluation",
+    "Descriptor Run A/B share equal scientific plan hash",
+    "Evaluation set is 4 normals + 4 anomalies across bottle/carpet"
+  ],
+  "environment_contract_sha256": "31141df74c1dc8e3d3963dc4f7ccc91714fc903dae7097b0edbcaeb4804641a0",
+  "evaluation_manifest_scientific_sha256": "9a782a5589084f4e6059889c7a550dbe0db514463f0fcc994ca00686b74db1c8",
+  "evaluation_unlock_scientific_sha256": "19dca41e9f647d12afce9877a7340f5af58bf9a23997d7339dded26d89fe73dd",
+  "gates": {
+    "deployment_qualified": false,
+    "localization_passed": true,
+    "reasons": [
+      "macro_kl_gate",
+      "category_kl:bottle",
+      "category_kl:carpet"
+    ],
+    "state": "localized_but_target_fidelity_unqualified",
+    "target_learning_passed": false
+  },
+  "identity_repair": "best_checkpoint_v1",
+  "output_directory_logical_label": "authoritative-run-20260804-152248",
+  "production_metric_invocation_proof": {
+    "all_compute_paper_metrics": true,
+    "all_spearman_fidelity": true,
+    "all_top1_overlap": true,
+    "invocation_count": 6
+  },
+  "qualification_scientific_sha256": "da51e5fc1302cf507bc844f87e82cb66f7d2fa0a13e61f28a0dba14333201c49",
+  "qualification_state": "localized_but_target_fidelity_unqualified",
+  "schema_version": "b2_05b_dlcm_training_evidence_v1",
+  "scope_exclusions": [
+    "no residual-gain",
+    "no LSE",
+    "no early-exit",
+    "no VisA/target-domain",
+    "no teacher/backbone rerun",
+    "no GitHub push"
+  ],
+  "seed_collection_scientific_sha256": "94a6a9332a0694889c7a0255814ac13fe8316c601529197063165ce14ec1277f",
+  "seed_results": [
+    {
+      "best_epoch": 229,
+      "model": "2f4a451fa89ee21fc579b8f0f984e2fd4f2950231740bb40332a168a507e473b",
+      "primary": 0.05810313186763475,
+      "secondary": 0.4197793699180087,
+      "seed": 17
+    },
+    {
+      "best_epoch": 265,
+      "model": "e242f231439cfa068d1f45a57da6eef10df17e222684266c96a83cda0132e251",
+      "primary": 0.0638079974645128,
+      "secondary": 0.38491790244976676,
+      "seed": 29
+    },
+    {
+      "best_epoch": 276,
+      "model": "318ba58c61b2ae154a79e756a0e9f6911d6774d8ea316ccb72cd0561bbe389a2",
+      "primary": 0.06474217403835307,
+      "secondary": 0.37629919545724994,
+      "seed": 43
+    }
+  ],
+  "three_seed_primary": {
+    "mean": 0.06221776779016688,
+    "std": 0.0029343759187740763
+  },
+  "three_seed_secondary": {
+    "mean": 0.39366548927500844,
+    "std": 0.01879754592552551
+  },
+  "upstream_identities": {
+    "accepted_input_contribution_plan_scientific_sha256": "c3034f54b2e8cc99bffa31d5165ce595625263736d747b5f9db0b97072da7bb0",
+    "calibration_target_coverage_sha256": "9e2e7e6ed11428dddd9b83595a27b57f132cb548e63d21e2a1753d4f82e57f63",
+    "contribution_target_collection_scientific_sha256": "69c9a678391a0e73d919e7cfe8f3a99a5e0916d465c14f2e82ff75b6ae3c9d9a",
+    "contribution_target_sample_coverage_sha256": "df282f04205b6e182082c69be69ec585e62bb4d8ef7dbf742637f44a6b5843ed",
+    "descriptor_collection_scientific_sha256": "eb967822725e730ee2eb8afa3a5c8e28b4657141aa920d6a688ab370c70c6dd9",
+    "descriptor_normalization_scientific_sha256": "f77975a94acf87a14b0753aabc9aad6777943ee4e4958b0a2083701cf4528594",
+    "descriptor_normalization_training_coverage_sha256": "e940f46bf696d326f8b982f15b8639f81e4548ec31a9b09634729811337e4c90",
+    "descriptor_sample_coverage_sha256": "27d064db21b5c699503be32e414d579bd1aa7158f1d9b141de26555fc79bc6df",
+    "evaluation_target_coverage_sha256": "881e1887a2986c9a654fd6a690512807c88a8faa1828339eb7b680618817829d",
+    "gt_map_calibration_scientific_sha256": "c2b6fdcac1c05fc1b879c35df8aaccf98484c4683e727e77a0101aa3c1d19ffc",
+    "shapley_normalization_scientific_sha256": "21ed2d6f2fef0f62006d7817cc086180ac054640045ec6fcf5b58dac120cc522",
+    "training_target_coverage_sha256": "0bc032724b76d584f97719066fe5dce2ebb7b3023c76c92edebee2d14052c165"
+  }
+}
