@@ -80,5 +80,5 @@
   "expected_training_contract_commit": "b580715f3dbfce3e4a03fe4073a57f99e8027f25",
   "expected_plan_sha_required": true,
   "repository_identity_gate_enabled": true,
-  "expected_accepted_training_plan_sha256": null
+  "expected_accepted_training_plan_sha256": "59e20f4cb337ef42384f70bb8b3dad5211d906341b0a2d41f7e6847610635980"
 }
