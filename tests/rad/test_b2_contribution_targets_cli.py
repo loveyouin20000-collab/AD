@@ -486,6 +486,15 @@ def _qualification_results_payload() -> dict[str, Any]:
             name: {"status": "passed", "exit_code": 0, "summary": "passed"}
             for name in ("focused_pytest", "full_cpu_pytest", "ruff", "mypy")
         },
+        "descriptor_run_independence": {
+            "separate_run_directories": True,
+            "separate_verification_passes": True,
+            "descriptor_scientific_contents_equal": True,
+            "descriptor_file_bytes_equal": True,
+            "limitation": (
+                "dual-run reproduction does not vary descriptor scientific content"
+            ),
+        },
     }
 
 

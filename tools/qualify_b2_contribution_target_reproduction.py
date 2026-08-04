@@ -97,6 +97,29 @@ def _sanitize_summary(value: Any, field: str) -> str:
     return _ABSOLUTE_PATH.sub("<path>", value).strip()
 
 
+def _load_descriptor_run_independence(root: Mapping[str, Any]) -> dict[str, Any]:
+    block = _mapping(root.get("descriptor_run_independence"), "descriptor_run_independence")
+    required = {
+        "separate_run_directories": True,
+        "separate_verification_passes": True,
+        "descriptor_scientific_contents_equal": True,
+        "descriptor_file_bytes_equal": True,
+    }
+    for key, expected in required.items():
+        if block.get(key) is not expected:
+            _fail(f"descriptor_run_independence.{key} must be {expected}")
+    limitation = block.get("limitation")
+    expected_limitation = (
+        "dual-run reproduction does not vary descriptor scientific content"
+    )
+    if limitation != expected_limitation:
+        _fail("descriptor_run_independence.limitation must record the dual-run scope")
+    return {
+        **required,
+        "limitation": expected_limitation,
+    }
+
+
 def _load_qualification_results(path: Path) -> dict[str, Any]:
     try:
         raw = json.loads(path.read_text(encoding="utf-8"))
@@ -148,6 +171,7 @@ def _load_qualification_results(path: Path) -> dict[str, Any]:
             "case_ids": list(NEGATIVE_CONTROL_CASE_IDS),
         },
         "validation": normalized_validation,
+        "descriptor_run_independence": _load_descriptor_run_independence(root),
     }
 
 
@@ -227,6 +251,9 @@ def _build_evidence(
             "run_b": _run_evidence(run_b),
         },
         "comparison": comparison_payload,
+        "descriptor_run_independence": dict(
+            qualification_results["descriptor_run_independence"]
+        ),
         "qualification_results": dict(qualification_results),
         "scope_exclusions": [
             "teacher_or_backbone_forward",
@@ -247,6 +274,9 @@ def _render_markdown(evidence: Mapping[str, Any]) -> str:
     comparison = _mapping(evidence["comparison"], "comparison")
     runs = _mapping(evidence["runs"], "runs")
     run_a = _mapping(runs["run_a"], "runs.run_a")
+    independence = _mapping(
+        evidence["descriptor_run_independence"], "descriptor_run_independence"
+    )
     return (
         "# B2-04B Contribution-Target Reproduction\n\n"
         f"- status: `{evidence['status']}`\n"
@@ -256,6 +286,16 @@ def _render_markdown(evidence: Mapping[str, Any]) -> str:
         f"- verified records per run: `{len(run_a['ordered_record_hashes'])}`\n"
         f"- file-byte equality (diagnostic only): "
         f"`{str(comparison['file_byte_equal']).lower()}`\n\n"
+        "## Descriptor run independence\n\n"
+        f"- separate run directories: "
+        f"`{str(independence['separate_run_directories']).lower()}`\n"
+        f"- separate verification passes: "
+        f"`{str(independence['separate_verification_passes']).lower()}`\n"
+        f"- descriptor scientific contents equal: "
+        f"`{str(independence['descriptor_scientific_contents_equal']).lower()}`\n"
+        f"- descriptor file bytes equal: "
+        f"`{str(independence['descriptor_file_bytes_equal']).lower()}`\n"
+        f"- limitation: {independence['limitation']}\n\n"
         "Qualification used production disk verification and exact scientific comparison. "
         "Raw tensors, absolute paths, timestamps, and target-domain data are excluded.\n"
     )
