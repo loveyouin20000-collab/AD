@@ -117,6 +117,63 @@ def generate_golden_cases(
 
 
 def embed_normalization(stats: Mapping[str, Any]) -> dict[str, Any]:
+    """Embed accepted B2-03B normalization (axes format or flat fixture format)."""
+
+    if "axes" in stats:
+        required_axes = (
+            "normalization_contract_version",
+            "normalization_statistics_scientific_sha256",
+            "normalization_training_coverage_sha256",
+            "axes",
+        )
+        missing = [k for k in required_axes if k not in stats]
+        if missing:
+            _fail("B2_DLCM_NORM_INCOMPLETE", f"missing normalization fields {missing}")
+        # Flatten per-depth mean/std matrices [n_d, 18] for deployment apply.
+        feature_order: list[str] | None = None
+        by_depth: dict[str, dict[str, Any]] = {}
+        for depth_key, depth_block in dict(stats["axes"]).items():
+            layers = list(depth_block["layers"])
+            means: list[list[float]] = []
+            stds: list[list[float]] = []
+            counts: list[list[int]] = []
+            zero_var: list[list[bool]] = []
+            for layer in layers:
+                feats = list(layer["features"])
+                names = [str(f["descriptor_feature_name"]) for f in feats]
+                if feature_order is None:
+                    feature_order = names
+                elif names != feature_order:
+                    _fail("B2_DLCM_NORM_FEATURE_ORDER", "feature order drifted across axes")
+                means.append([float(f["mean"]) for f in feats])
+                stds.append([float(f["std"]) for f in feats])
+                counts.append([int(f["count"]) for f in feats])
+                zero_var.append([bool(float(f["std"]) == 0.0) for f in feats])
+            by_depth[str(int(depth_key))] = {
+                "mean": means,
+                "std": stds,
+                "count": counts,
+                "zero_variance": zero_var,
+                "player_layer_ids": [int(layer["candidate_layer_id"]) for layer in layers],
+            }
+        return {
+            "format": "b2_03b_axes_v1",
+            "normalization_contract_version": stats["normalization_contract_version"],
+            "descriptor_normalization_scientific_sha256": stats[
+                "normalization_statistics_scientific_sha256"
+            ],
+            "descriptor_normalization_training_coverage_sha256": stats[
+                "normalization_training_coverage_sha256"
+            ],
+            "feature_order": list(feature_order or []),
+            "axis_order": ["prediction_depth", "candidate_layer", "feature"],
+            "by_depth": by_depth,
+            "mean": by_depth["24"]["mean"],  # default depth-24 matrix for legacy checks
+            "std": by_depth["24"]["std"],
+            "count": by_depth["24"]["count"],
+            "zero_variance": by_depth["24"]["zero_variance"],
+        }
+
     required = (
         "mean",
         "std",
@@ -137,6 +194,8 @@ def embed_normalization(stats: Mapping[str, Any]) -> dict[str, Any]:
 def apply_embedded_normalization(
     raw: torch.Tensor,
     embedded: Mapping[str, Any],
+    *,
+    prediction_depth: int | None = None,
 ) -> torch.Tensor:
     """Raw CPU float32 → float64 standardize → float32."""
 
@@ -150,17 +209,51 @@ def apply_embedded_normalization(
         _fail("B2_DLCM_NORM_SHAPE", "expected [B,n,18]")
     if not bool(torch.isfinite(raw).all()):
         _fail("B2_DLCM_NORM_NONFINITE", "raw descriptors nonfinite")
-    mean = torch.tensor(embedded["mean"], dtype=torch.float64)
-    std = torch.tensor(embedded["std"], dtype=torch.float64)
-    zero_var = list(embedded["zero_variance"])
+
+    if embedded.get("format") == "b2_03b_axes_v1":
+        if prediction_depth is None:
+            _fail("B2_DLCM_NORM_DEPTH_REQUIRED", "axes normalization requires prediction_depth")
+        depth_block = embedded["by_depth"].get(str(int(prediction_depth)))
+        if depth_block is None:
+            _fail("B2_DLCM_NORM_DEPTH_MISSING", f"no stats for depth {prediction_depth}")
+        mean = torch.tensor(depth_block["mean"], dtype=torch.float64)
+        std = torch.tensor(depth_block["std"], dtype=torch.float64)
+        zero_var = [bool(flag) for row in depth_block["zero_variance"] for flag in row]
+        # Rebuild zero-var mask as [n,18]
+        zero_mask = torch.tensor(depth_block["zero_variance"], dtype=torch.bool)
+    else:
+        mean = torch.tensor(embedded["mean"], dtype=torch.float64)
+        std = torch.tensor(embedded["std"], dtype=torch.float64)
+        zero_mask = None
+        zero_var = list(embedded["zero_variance"])
+
     x64 = raw.to(torch.float64)
+    # Broadcast mean/std over batch.
+    while mean.ndim < x64.ndim:
+        mean = mean.unsqueeze(0)
+        std = std.unsqueeze(0)
     out = (x64 - mean) / std
-    for axis, is_zero in enumerate(zero_var):
-        if is_zero:
-            out[..., axis] = 0.0
+    if zero_mask is not None:
+        while zero_mask.ndim < out.ndim:
+            zero_mask = zero_mask.unsqueeze(0)
+        out = torch.where(zero_mask, torch.zeros_like(out), out)
+    else:
+        # Legacy flat zero_variance list applied on last dims if shapes match.
+        _ = zero_var
+    if zero_mask is None and zero_var:
+        # Legacy flat zero_variance: treat as last-dim flags when length matches F.
+        if len(zero_var) == int(out.shape[-1]):
+            for axis, is_zero in enumerate(zero_var):
+                if is_zero:
+                    out[..., axis] = 0.0
+        elif len(zero_var) == int(out.shape[-2] * out.shape[-1]):
+            mask = torch.tensor(zero_var, dtype=torch.bool).view(out.shape[-2], out.shape[-1])
+            while mask.ndim < out.ndim:
+                mask = mask.unsqueeze(0)
+            out = torch.where(mask, torch.zeros_like(out), out)
     if not bool(torch.isfinite(out).all()):
         _fail("B2_DLCM_NORM_NONFINITE", "normalized descriptors nonfinite")
-    return out.to(torch.float32).contiguous()
+    return out.to(dtype=torch.float32).contiguous()
 
 
 def deployment_scientific_payload(checkpoint: Mapping[str, Any]) -> dict[str, Any]:
@@ -403,7 +496,11 @@ class ImmutableDLCMInference:
             _fail("B2_DLCM_INPUT_BATCH", "batch size B must be >= 1")
         if not bool(torch.isfinite(raw_descriptors).all()):
             _fail("B2_DLCM_INPUT_NONFINITE", "formal inputs must be finite")
-        normalized = apply_embedded_normalization(raw_descriptors, self._embedded_normalization)
+        normalized = apply_embedded_normalization(
+            raw_descriptors,
+            self._embedded_normalization,
+            prediction_depth=prediction_depth,
+        )
         normalized = normalized.to(self._device)
         with torch.inference_mode():
             _logits, weights = self._model.forward(
@@ -426,7 +523,11 @@ class ImmutableDLCMInference:
         player_layer_ids: Sequence[int],
     ) -> tuple[torch.Tensor, torch.Tensor]:
         self._validate_alive()
-        normalized = apply_embedded_normalization(raw_descriptors, self._embedded_normalization)
+        normalized = apply_embedded_normalization(
+            raw_descriptors,
+            self._embedded_normalization,
+            prediction_depth=prediction_depth,
+        )
         normalized = normalized.to(self._device)
         with torch.inference_mode():
             return self._model.forward(
