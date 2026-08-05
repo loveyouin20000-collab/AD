@@ -86,11 +86,18 @@ def main() -> int:
     output_dir = _resolve(args.output_dir)
     accepted_refs = output_dir / "accepted_refs"
     accepted_checkpoint = accepted_refs / "lse_best.pt"
+    existing_manifest_path = output_dir / "accepted_lse_manifest.json"
 
     decision = closure.load_json(decision_path)
     receipt = closure.load_json(receipt_path)
     summary = closure.load_json(summary_path)
     checkpoint_sha = closure.sha256_file(source_checkpoint)
+    closure_git_sha = _git_sha()
+    if args.dry_run and existing_manifest_path.exists():
+        existing_manifest = closure.load_json(existing_manifest_path)
+        existing_closure_git_sha = existing_manifest.get("closure_git_sha")
+        if isinstance(existing_closure_git_sha, str) and existing_closure_git_sha:
+            closure_git_sha = existing_closure_git_sha
     manifest = closure.build_accepted_lse_manifest(
         decision=decision,
         training_receipt=receipt,
@@ -98,7 +105,7 @@ def main() -> int:
         lse_checkpoint_sha256=checkpoint_sha,
         accepted_checkpoint_path=str(accepted_checkpoint),
         source_checkpoint_path=str(source_checkpoint),
-        closure_git_sha=_git_sha(),
+        closure_git_sha=closure_git_sha,
     )
     dry_run_report = {
         "schema_version": "b2_06f_lse_accepted_closure_dry_run_v1",
@@ -114,7 +121,7 @@ def main() -> int:
         print(json.dumps(dry_run_report, indent=2, sort_keys=True))
         return 0
 
-    if (output_dir / "accepted_lse_manifest.json").exists():
+    if existing_manifest_path.exists():
         raise SystemExit("B2_LSE_ACCEPTED_CLOSURE_ALREADY_EXISTS")
     accepted_refs.mkdir(parents=True, exist_ok=True)
     shutil.copy2(source_checkpoint, accepted_checkpoint)
