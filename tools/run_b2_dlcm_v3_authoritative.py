@@ -331,17 +331,36 @@ def main() -> int:
             maximum_epochs=max_epochs,
             patience=int(config["patience"]),
             batch_size=int(config["batch_size"]),
+            smoothmax_tau=float(config["smoothmax_tau"]),
             device="cuda",
         )
     else:
-        repro = {
-            "model_state_scientific_sha256": json.loads(
-                (repro_root / f"seed_{canon_seed}" / "seed_manifest.json").read_text()
-            )["model_state_scientific_sha256"],
-            "trace_chain_tail": json.loads(
-                (repro_root / f"seed_{canon_seed}" / "seed_manifest.json").read_text()
-            )["trace_chain_tail"],
-        }
+        repro_seed_dir = repro_root / f"seed_{canon_seed}"
+        man_path = repro_seed_dir / "seed_manifest.json"
+        if man_path.is_file():
+            man = json.loads(man_path.read_text(encoding="utf-8"))
+            repro = {
+                "model_state_scientific_sha256": man["model_state_scientific_sha256"],
+                "trace_chain_tail": man["trace_chain_tail"],
+            }
+        else:
+            # Resume path after sealed reproduction checkpoints (no seed_manifest written).
+            import torch
+
+            from rad.phase_b import b2_dlcm_v3 as v3
+
+            ckpt = torch.load(
+                repro_seed_dir / "committed" / "best_training_checkpoint.pt",
+                map_location="cpu",
+                weights_only=False,
+            )
+            model_tmp = v3.B2DLCMV3(seed=None, initialize=False)
+            model_tmp.load_state_dict(ckpt["model"], strict=True)
+            trace = _load_trace(repro_seed_dir)
+            repro = {
+                "model_state_scientific_sha256": v3.model_state_scientific_sha256(model_tmp),
+                "trace_chain_tail": trace.get("tail"),
+            }
 
     orig_trace = _load_trace(output_root / f"seed_{canon_seed}")
     repro_trace = _load_trace(repro_root / f"seed_{canon_seed}")
