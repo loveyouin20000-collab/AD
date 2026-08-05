@@ -757,6 +757,8 @@ def run_v4_contract_training(
     status = "running"
     last_epoch = 0
     best_per_category = dict(metrics0["per_category_gt_kl"])
+    best_per_category_uniform = dict(metrics0["per_category_uniform_gt_kl"])
+    best_per_category_relative = dict(metrics0["per_category_relative_regret"])
     for epoch in range(1, maximum_epochs + 1):
         model.train()
         batches, sampler_state = build_category_balanced_epoch_batches(
@@ -844,6 +846,8 @@ def run_v4_contract_training(
         )
         if improved:
             best_per_category = dict(metrics["per_category_gt_kl"])
+            best_per_category_uniform = dict(metrics["per_category_uniform_gt_kl"])
+            best_per_category_relative = dict(metrics["per_category_relative_regret"])
         status = stopper.after_epoch(epoch=epoch, improved=improved)
         staging = tx.begin()
         torch.save({"model": model.state_dict(), "epoch": epoch}, staging / "last_training_checkpoint.pt")
@@ -922,6 +926,9 @@ def run_v4_contract_training(
         "gt_signed": selector.best_signed,
         "eligible": bool(selector.best_eligible),
         "per_category_gt_kl": dict(best_per_category),
+        "per_category_uniform_gt_kl": dict(best_per_category_uniform),
+        "per_category_relative_regret": dict(best_per_category_relative),
+        "uniform_macro_kl": float(sum(best_per_category_uniform.values()) / 2.0),
         "trace_chain_tail": chain.tail,
         "model_state_scientific_sha256": best_identity,
         "last_model_state_scientific_sha256": v3.model_state_scientific_sha256(

@@ -1,9 +1,9 @@
 {
   "schema_version": "b2_dlcm_uniform_relative_official_v4",
   "contract_stage": "b2_05c3b",
-  "real_training_enabled": false,
-  "official_training_enabled": false,
-  "development_enabled": false,
+  "real_training_enabled": true,
+  "official_training_enabled": true,
+  "development_enabled": true,
   "final_materialization_enabled": false,
   "final_evaluation_enabled": false,
   "smoothmax_tau": 0.05,
@@ -22,8 +22,8 @@
   "authoritative_base_commit": "43d856f5ff771957f9f39d0909b1bc87d6b7081b",
   "adopted_final_roster_scientific_sha256": "267b7b527f13f84f76f69576d01b1532005d0bb7eda792d558ce5dcce1278213",
   "expected_contract_tag": "b2-dlcm-uniform-relative-contract-v4",
-  "expected_contract_commit": "PENDING_C3A_TAG",
-  "expected_implementation_commit": "PENDING_C3A_IMPLEMENTATION",
+  "expected_contract_commit": "3b2237affbe58a3cdc30d49bbdee4d8145a6a192",
+  "expected_implementation_commit": "aee4eec9fe17d1972195de2f70a91ceaadd5a28f",
   "expected_plan_sha_required": true,
   "repository_identity_gate_enabled": true,
   "resume_enabled": true,
@@ -95,9 +95,12 @@
   "canonical_training_device": "cuda",
   "visible_gpu_count": 1,
   "resume_boundary": "complete_epoch",
-  "expected_accepted_v3_training_plan_sha256": "496e35fe8e2d5dcf208235cc58d8386cf7bdf54244d4dad32b86599e2e7104b4",
   "authoritative_v3_contract_tag": "b2-dlcm-category-robust-contract-v3",
   "authoritative_v3_unqualified_tag": "b2-dlcm-category-robust-unqualified-evidence-v1",
   "authoritative_v3_unqualified_commit": "99c26de94ba7fa5358a7670473876c4a4cf1829d",
-  "gt_deployment_aggregation": "uniform_relative_smooth_max"
+  "gt_deployment_aggregation": "uniform_relative_smooth_max",
+  "relative_regret_mode": "batch_matched_model_minus_uniform",
+  "subtract_gate_slack": false,
+  "clamp_negative_regret": false,
+  "absolute_regret": false
 }
