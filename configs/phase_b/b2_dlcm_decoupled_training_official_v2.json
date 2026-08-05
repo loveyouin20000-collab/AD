@@ -81,5 +81,6 @@
   "amp_enabled": false,
   "canonical_training_device": "cuda",
   "visible_gpu_count": 1,
-  "resume_boundary": "complete_epoch"
+  "resume_boundary": "complete_epoch",
+  "expected_accepted_v2_training_plan_sha256": "802bdae4f01c5f31e8d9ae271ccb02f103ebc443d4563a9dd7a6814a4e163b63"
 }
