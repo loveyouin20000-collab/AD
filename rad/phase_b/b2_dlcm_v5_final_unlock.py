@@ -19,8 +19,9 @@ PLAN_EXPECTED_FIELDS = (
     "final_roster_identity",
     "source_master_manifest_identity",
     "normalization_identity",
-    "tooling_commit",
-    "tooling_tag",
+    "tooling_contract_schema",
+    "tooling_baseline_commit",
+    "tooling_baseline_tag",
 )
 
 UNLOCK_EXPECTED_FIELDS = (
@@ -48,15 +49,28 @@ def _require_mapping(value: Any, *, code: str, detail: str) -> Mapping[str, Any]
 def _require_expected(expected: Mapping[str, Any]) -> None:
     missing = [field for field in PLAN_EXPECTED_FIELDS if not expected.get(field)]
     if missing:
+        if any(field.startswith("tooling_") for field in missing):
+            _fail("B2_DLCM_FINAL_TOOLING_BASELINE_INVALID", f"missing tooling baseline fields: {missing}")
         _fail("B2_DLCM_FINAL_UNLOCK_INVALID", f"missing expected fields: {missing}")
     if expected.get("beta_star_decimal") != "0.54":
         _fail("B2_DLCM_FINAL_UNLOCK_INVALID", "beta* must remain 0.54")
+    if expected.get("tooling_contract_schema") != "b2_dlcm_v5_final_execution_contract_v1":
+        _fail("B2_DLCM_FINAL_TOOLING_BASELINE_INVALID", "tooling contract schema mismatch")
+    baseline = str(expected.get("tooling_baseline_commit", ""))
+    if len(baseline) != 40 or not all(ch in "0123456789abcdef" for ch in baseline.lower()):
+        _fail("B2_DLCM_FINAL_TOOLING_BASELINE_INVALID", "tooling baseline commit must be a full SHA")
+    tag = str(expected.get("tooling_baseline_tag", ""))
+    if tag != "b2-dlcm-uniform-anchored-final-tooling-v2":
+        _fail("B2_DLCM_FINAL_TOOLING_BASELINE_INVALID", "tooling baseline tag must be v2")
     if expected.get("worktree_clean") is False:
         _fail("B2_DLCM_FINAL_UNLOCK_INVALID", "worktree must be clean")
-    head = expected.get("head_commit")
-    tooling = expected.get("tooling_commit")
-    if head is not None and tooling is not None and str(head) != str(tooling):
-        _fail("B2_DLCM_FINAL_UNLOCK_INVALID", "HEAD must equal tooling commit")
+
+
+def validate_repository_gate(*, repo_identity: Mapping[str, Any]) -> None:
+    if repo_identity.get("head_is_descendant_of_tooling_tag") is not True:
+        _fail("B2_DLCM_FINAL_TOOLING_BASELINE_INVALID", "HEAD must descend from tooling baseline tag")
+    if repo_identity.get("production_tooling_diff_since_tag_empty") is not True:
+        _fail("B2_DLCM_FINAL_TOOLING_BASELINE_DIRTY", "production tooling changed after tooling baseline tag")
 
 
 def build_final_execution_plan(
@@ -80,9 +94,9 @@ def build_final_execution_plan(
         "final_roster_identity": str(config["final_roster_identity"]),
         "source_master_manifest_identity": str(config["source_master_manifest_identity"]),
         "normalization_identity": str(config["normalization_identity"]),
-        "tooling_commit": str(config["tooling_commit"]),
-        "tooling_tag": str(config["tooling_tag"]),
-        "repo_head": str(repo_identity.get("head", config["tooling_commit"])),
+        "tooling_contract_schema": str(config["tooling_contract_schema"]),
+        "tooling_baseline_commit": str(config["tooling_baseline_commit"]),
+        "tooling_baseline_tag": str(config["tooling_baseline_tag"]),
         "materialization_protocol": dict(config.get("materialization_protocol", {})),
         "evaluation_protocol": dict(config.get("evaluation_protocol", {})),
         "final_gates": dict(config.get("final_gates", {})),
@@ -128,12 +142,13 @@ def build_materialization_unlock(*, expected: Mapping[str, Any]) -> dict[str, An
         "final_roster_identity": str(expected["final_roster_identity"]),
         "source_master_manifest_identity": str(expected["source_master_manifest_identity"]),
         "normalization_identity": str(expected["normalization_identity"]),
-        "tooling_commit": str(expected["tooling_commit"]),
-        "tooling_tag": str(expected["tooling_tag"]),
+        "tooling_contract_schema": str(expected["tooling_contract_schema"]),
+        "tooling_baseline_commit": str(expected["tooling_baseline_commit"]),
+        "tooling_baseline_tag": str(expected["tooling_baseline_tag"]),
         "accepted_v5_final_execution_plan_scientific_sha256": str(
             expected["accepted_v5_final_execution_plan_scientific_sha256"]
         ),
-        "head_commit": str(expected.get("head_commit", expected["tooling_commit"])),
+        "head_commit": str(expected.get("head_commit", expected["tooling_baseline_commit"])),
         "worktree_clean": bool(expected.get("worktree_clean", True)),
         "config_identity": str(expected.get("config_identity", "")),
     }
@@ -152,7 +167,7 @@ def _validate_common_unlock(unlock: Mapping[str, Any], *, expected: Mapping[str,
     for key in UNLOCK_EXPECTED_FIELDS:
         if str(unlock.get(key, "")) != str(expected[key]):
             _fail("B2_DLCM_FINAL_UNLOCK_INVALID", f"{key} mismatch")
-    if unlock.get("head_commit") != expected.get("head_commit", expected["tooling_commit"]):
+    if unlock.get("head_commit") != expected.get("head_commit", expected["tooling_baseline_commit"]):
         _fail("B2_DLCM_FINAL_UNLOCK_INVALID", "head_commit mismatch")
     if unlock.get("worktree_clean") is not True:
         _fail("B2_DLCM_FINAL_UNLOCK_INVALID", "worktree must be clean")

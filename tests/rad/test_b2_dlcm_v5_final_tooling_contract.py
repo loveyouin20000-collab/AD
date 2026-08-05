@@ -20,8 +20,8 @@ V5_DEPLOY = "c56248c9ff6021fc16cf4792d87afeebf1bb8f6d45859f7c26017830dcf0e0bd"
 CAL_AB = "cae406c91ec392ffd7cc6d48ec2f0c94ab78d78f905cbfe904287842a7a7278a"
 ROSTER = "267b7b527f13f84f76f69576d01b1532005d0bb7eda792d558ce5dcce1278213"
 PLAN = "a" * 64
-TOOLING_COMMIT = "d4cef9c1234567890abcdef1234567890abcdef"
-TOOLING_TAG = "b2-dlcm-uniform-anchored-final-tooling-v1"
+TOOLING_COMMIT = "8db5d85000000000000000000000000000000000"
+TOOLING_TAG = "b2-dlcm-uniform-anchored-final-tooling-v2"
 SOURCE = "335337d43dccea9e368393d2616972ad2217e490b91468d11a7e7f04fd688ee4"
 DEV = "bedf478a173fd0e1f307cf1446edc638bad10a52c6c34f1ad0e72496da0159cd"
 NORM = "f77975a94acf87a14b0753aabc9aad6777943ee4e4958b0a2083701cf4528594"
@@ -36,8 +36,9 @@ def _expected() -> dict[str, object]:
         "final_roster_identity": ROSTER,
         "source_master_manifest_identity": SOURCE,
         "normalization_identity": NORM,
-        "tooling_commit": TOOLING_COMMIT,
-        "tooling_tag": TOOLING_TAG,
+        "tooling_contract_schema": "b2_dlcm_v5_final_execution_contract_v1",
+        "tooling_baseline_commit": TOOLING_COMMIT,
+        "tooling_baseline_tag": TOOLING_TAG,
         "accepted_v5_final_execution_plan_scientific_sha256": PLAN,
         "head_commit": TOOLING_COMMIT,
         "worktree_clean": True,
