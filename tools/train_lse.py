@@ -36,6 +36,7 @@ from rad.models.selector_signals import (  # noqa: E402
 )
 from rad.phase_b import b2_lse_accepted_gate as accepted_gate  # noqa: E402
 from rad.phase_b import b2_lse_prerequisites as prereq  # noqa: E402
+from rad.phase_b import b2_lse_training_unlock as training_unlock  # noqa: E402
 from rad.trainers.lse_trainer import LSETrainer  # noqa: E402
 
 
@@ -49,6 +50,7 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     p.add_argument("--limit-train", type=int, default=None)
     p.add_argument("--limit-cal", type=int, default=None)
     p.add_argument("--device", type=str, default=None)
+    p.add_argument("--training-unlock", type=Path, default=None)
     p.add_argument("--dry-run", action="store_true")
     p.add_argument("--preflight-only", action="store_true")
     return p.parse_args(argv)
@@ -250,7 +252,7 @@ def main(argv: list[str] | None = None) -> int:
         raise SystemExit(2) from exc
     print("b2_lse_accepted_gate_preflight:")
     print(json.dumps(preflight, indent=2, sort_keys=True))
-    if args.dry_run or args.preflight_only:
+    if args.preflight_only:
         return 0 if preflight["ready"] else 2
 
     seed = args.seed if args.seed is not None else cfg.seed
@@ -334,6 +336,30 @@ def main(argv: list[str] | None = None) -> int:
     print(f"selector_mask_mode: {mask_mode}")
     print(f"selector_signals: {json.dumps(enabled_signals)}")
     print(f"selector_signal_layout_hash: {selector_prov['selector_signal_layout_hash']}")
+
+    unlock_path = args.training_unlock
+    if unlock_path is None and lse_cfg.get("training_unlock_manifest"):
+        unlock_path = Path(str(lse_cfg["training_unlock_manifest"]))
+    if unlock_path is None:
+        print("ERROR B2_LSE_TRAINING_UNLOCK_REQUIRED: training unlock required", file=sys.stderr)
+        raise SystemExit(2)
+    if not unlock_path.is_absolute():
+        unlock_path = REPO_ROOT / unlock_path
+    try:
+        unlock_report = training_unlock.validate_training_unlock(
+            unlock_path,
+            preflight=preflight,
+            config_sha256=config_hash,
+            train_output_dir=output_dir,
+            seed=seed,
+            epochs=epochs,
+            patience=patience,
+        )
+    except training_unlock.B2LSETrainingUnlockError as exc:
+        print(f"ERROR {exc.code}: {exc}", file=sys.stderr)
+        raise SystemExit(2) from exc
+    print("b2_lse_training_unlock_dry_run:")
+    print(json.dumps(unlock_report, indent=2, sort_keys=True))
 
     if args.dry_run:
         return 0
@@ -502,6 +528,14 @@ def main(argv: list[str] | None = None) -> int:
         **selector_prov,
     }
     (output_dir / "summary.json").write_text(json.dumps(summary, indent=2) + "\n")
+    receipt = training_unlock.write_training_receipt(
+        output_dir / "b2_06d_lse_training_receipt.json",
+        unlock_report=unlock_report,
+        summary=summary,
+        best_checkpoint_sha256=sha256_file(best_path),
+    )
+    print("b2_06d_lse_training_receipt:")
+    print(json.dumps(receipt, indent=2, sort_keys=True))
     print(json.dumps(summary, indent=2))
     return 0
 

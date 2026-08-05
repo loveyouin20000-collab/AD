@@ -38,6 +38,7 @@ lse:
   descriptor_stats: artifacts/stats/mvtec_seed111.json
   train_gain_targets: artifacts/targets/gain/mvtec_train.pt
   calibration_gain_targets: artifacts/targets/gain/mvtec_calibration.pt
+  training_unlock_manifest: docs/phase_b/b2_06d_lse_training_unlock.json
   train_depths: [12, 18, 24]
   early_depths: [12, 18]
   full_depth: 24
@@ -50,7 +51,7 @@ lse:
   epochs: 30
   patience: 10
   output_dir: artifacts/targets/gain
-  train_output_dir: artifacts/checkpoints/lse
+  train_output_dir: artifacts/checkpoints/lse/b2_06d_first_controlled_run
 selector:
   mask_mode: train_and_infer
   signals:
