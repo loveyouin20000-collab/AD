@@ -664,7 +664,9 @@ def run_v3_contract_training(
         assert torch.all(model.gt_deployment_head.weight == 0)
         assert torch.all(model.teacher_allocation_head.weight == 0)
     if device != "cpu":
-        model = v2.move_model_to_device_and_verify(model, torch.device(device))
+        moved = v2.move_model_to_device_and_verify(model, torch.device(device))
+        assert isinstance(moved, v3.B2DLCMV3)
+        model = moved
     optimizer, _groups = v1_train.build_adamw(model, lr=3e-6)
     schedule = v1_train.ExplicitLRSchedule()
     schedule.install_into_optimizer(optimizer)
