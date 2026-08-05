@@ -319,7 +319,11 @@ def official_v2_dry_run(
         verify_repository_identity_gate(config=config, repo_root=root)
 
     roster_payload = load_frozen_roster(root)
-    protocol.forbid_final_content_access(unlocked=False, context="official_v2_dry_run")
+    if roster_payload.get("final_content_resolved") is not False or roster_payload.get(
+        "paths_present"
+    ):
+        _fail("B2_DLCM_FINAL_CONTENT_ACCESS_FORBIDDEN", "roster must remain sealed in dry-run")
+    # Prove final path resolution is not attempted: roster identity only, no resolution.
 
     verified = v1_training.load_verified_b2_dlcm_training_inputs(
         descriptor_manifest=descriptor_manifest,
