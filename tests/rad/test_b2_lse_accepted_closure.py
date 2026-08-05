@@ -53,6 +53,7 @@ def test_build_accepted_lse_manifest_binds_qualified_decision() -> None:
     assert manifest["evaluation_started"] is False
     assert manifest["accepted_artifact_generated"] is True
     assert manifest["selector_signal_layout_hash"] == "selector-hash"
+    assert manifest["accepted_lse_checkpoint_sha256"] == "lse-sha"
 
 
 def test_build_accepted_lse_manifest_rejects_unqualified_decision() -> None:

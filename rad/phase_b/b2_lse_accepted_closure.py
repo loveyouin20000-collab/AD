@@ -115,6 +115,7 @@ def build_accepted_lse_manifest(
         "accepted_lse_checkpoint": str(accepted_checkpoint_path),
         "source_lse_checkpoint": str(source_checkpoint_path),
         "lse_checkpoint_sha256": str(lse_checkpoint_sha256),
+        "accepted_lse_checkpoint_sha256": str(lse_checkpoint_sha256),
         "H_lse_qualification": decision["H_lse_qualification"],
         "calibration_nll": decision["calibration_nll"],
         "max_calibration_nll": decision["max_calibration_nll"],

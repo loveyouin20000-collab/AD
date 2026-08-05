@@ -121,10 +121,6 @@ def main() -> int:
     copied_sha = closure.sha256_file(accepted_checkpoint)
     if copied_sha != checkpoint_sha:
         raise SystemExit("B2_LSE_ACCEPTED_CLOSURE_COPY_SHA_MISMATCH")
-    manifest["accepted_lse_checkpoint_sha256"] = copied_sha
-    manifest["accepted_lse_identity"] = closure.canonical_json_sha256(
-        {k: v for k, v in manifest.items() if k != "accepted_lse_identity"}
-    )
     receipt_payload = {
         "schema_version": "b2_06f_lse_accepted_artifact_closure_receipt_v1",
         "accepted_lse_identity": manifest["accepted_lse_identity"],
