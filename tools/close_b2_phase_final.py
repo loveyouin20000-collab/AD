@@ -106,6 +106,12 @@ def main() -> int:
     output_dir = _resolve(args.output_dir)
     manifest_path = output_dir / "b2_07_phase_final_closure_manifest.json"
     report_path = output_dir / "b2_07_phase_final_closure_report.md"
+    git_sha = _git_sha()
+    if args.dry_run and manifest_path.exists():
+        existing_manifest = closure.load_json(manifest_path)
+        existing_git_sha = existing_manifest.get("git_sha")
+        if isinstance(existing_git_sha, str) and existing_git_sha:
+            git_sha = existing_git_sha
 
     manifest = closure.build_phase_final_closure_manifest(
         accepted_gate_evidence=closure.load_json(
@@ -132,7 +138,7 @@ def main() -> int:
         accepted_lse_evidence=closure.load_json(
             REPO_ROOT / "docs/phase_b/b2_06f_accepted_lse_closure_evidence.json"
         ),
-        git_sha=_git_sha(),
+        git_sha=git_sha,
         tracked_pt_count=_tracked_pt_count(),
         pushed=False,
         pr_opened=False,
