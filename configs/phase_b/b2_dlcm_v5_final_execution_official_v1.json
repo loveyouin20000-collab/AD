@@ -13,11 +13,11 @@
   "source_master_manifest_identity": "335337d43dccea9e368393d2616972ad2217e490b91468d11a7e7f04fd688ee4",
   "normalization_identity": "f77975a94acf87a14b0753aabc9aad6777943ee4e4958b0a2083701cf4528594",
   "tooling_contract_schema": "b2_dlcm_v5_final_execution_contract_v1",
-  "tooling_baseline_commit": "TO_BE_REPLACED_BY_V2_TAG_TARGET",
+  "tooling_baseline_commit": "bb246ed156a8141344f793cfaeed35d8b4bc16c3",
   "tooling_baseline_tag": "b2-dlcm-uniform-anchored-final-tooling-v2",
   "tooling_commit_required": true,
   "single_use_unlock_required": true,
-  "expected_accepted_v5_final_execution_plan_sha256": null,
+  "expected_accepted_v5_final_execution_plan_sha256": "e209b8bd00cf9bacca699471966b9bc3d00e1bca6133f5ab36457e7cdb0d8f4d",
   "materialization_protocol": {
     "processes": ["A", "B"],
     "independent_process_required": true,
