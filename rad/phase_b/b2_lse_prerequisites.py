@@ -5,12 +5,17 @@ from __future__ import annotations
 import hashlib
 import json
 from collections import Counter
+from collections.abc import Mapping, Sequence
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, NoReturn
 
 import torch
 
 from rad.data.cache_schema import SCHEMA_VERSION, write_cache_meta, write_parquet_index, write_shard
+from rad.models.dlcm import DLCM
+from rad.phase_b import b2_dlcm_v4
+from rad.phase_b import b2_dlcm_v5 as v5
 
 
 class B2LSEPrerequisiteError(RuntimeError):
@@ -36,6 +41,101 @@ def canonical_json_sha256(payload: dict[str, Any]) -> str:
     return hashlib.sha256(blob).hexdigest()
 
 
+@dataclass(frozen=True)
+class LSEDLCMAdapter:
+    model: Any
+    schema_version: str
+    beta: float
+    is_v5: bool
+
+    @torch.no_grad()
+    def weights(
+        self,
+        descriptors: torch.Tensor,
+        *,
+        prediction_depth: int,
+        player_layer_ids: Sequence[int] | None = None,
+        context: torch.Tensor | None = None,
+        layer_ids: torch.Tensor | None = None,
+        valid_mask: torch.Tensor | None = None,
+    ) -> torch.Tensor:
+        if self.is_v5:
+            forward = getattr(self.model, "forward_deployment", self.model.forward)
+            players = None
+            if player_layer_ids is not None:
+                players = tuple(int(x) for x in player_layer_ids)
+            _logits, weights = forward(
+                descriptors,
+                prediction_depth=int(prediction_depth),
+                player_layer_ids=players,
+            )
+            return weights
+        if context is None or layer_ids is None or valid_mask is None:
+            _fail("B2_LSE_PREREQ_DLCM_INPUT_INVALID", "legacy DLCM requires context/layer_ids/valid_mask")
+        weights = self.model(descriptors, context, layer_ids, valid_mask)
+        if float(self.beta) != 1.0:
+            weights = v5.mix_uniform_anchored_weights(weights, float(self.beta))
+        return weights
+
+
+def _freeze_module(model: torch.nn.Module, device: torch.device) -> torch.nn.Module:
+    model.eval()
+    model.to(device)
+    for param in model.parameters():
+        param.requires_grad_(False)
+    return model
+
+
+def load_lse_dlcm_adapter_from_checkpoint(
+    checkpoint: Mapping[str, Any],
+    *,
+    device: torch.device,
+    candidate_layers: Sequence[int] | None = None,
+) -> LSEDLCMAdapter:
+    schema_version = str(checkpoint.get("schema_version", "legacy_dlcm_checkpoint"))
+    if schema_version == "b2_dlcm_v5_deployment_checkpoint_v1":
+        state = checkpoint.get("state_dict")
+        if not isinstance(state, Mapping):
+            _fail("B2_LSE_PREREQ_DLCM_CHECKPOINT_INVALID", "V5 checkpoint missing state_dict")
+        layers = tuple(int(x) for x in checkpoint.get("candidate_layers", candidate_layers or ()))
+        depths = tuple(int(x) for x in checkpoint.get("prediction_depths", (12, 18, 24)))
+        if not layers or not depths:
+            _fail("B2_LSE_PREREQ_DLCM_CHECKPOINT_INVALID", "V5 checkpoint missing layer/depth vocabularies")
+        trunk = b2_dlcm_v4.B2DLCMV4DeploymentTrunk(
+            seed=None,
+            initialize=False,
+            candidate_layers=layers,
+            prediction_depths=depths,
+        )
+        trunk.load_state_dict(state, strict=True)
+        _freeze_module(trunk, device)
+        return LSEDLCMAdapter(
+            model=trunk,
+            schema_version=schema_version,
+            beta=float(checkpoint.get("beta", 1.0)),
+            is_v5=True,
+        )
+
+    legacy_layers_raw = candidate_layers
+    if legacy_layers_raw is None:
+        legacy_layers_raw = checkpoint.get("candidate_layers")
+    if legacy_layers_raw is None:
+        legacy_layers_raw = (6, 12, 18, 24)
+    layers = tuple(int(x) for x in legacy_layers_raw)
+    state = checkpoint.get("dlcm")
+    if state is None:
+        _fail("B2_LSE_PREREQ_DLCM_CHECKPOINT_INVALID", "legacy checkpoint missing dlcm state_dict")
+    model = DLCM(max_layer_id=max(layers), alpha=0.0)
+    model.load_state_dict(state)
+    _freeze_module(model, device)
+    return LSEDLCMAdapter(
+        model=model,
+        schema_version=schema_version,
+        beta=float(checkpoint.get("beta", 1.0)),
+        is_v5=False,
+    )
+
+
 def _load_json(path: Path, *, code: str) -> dict[str, Any]:
     if not path.is_file():
         _fail(code, f"missing {path}")
@@ -50,6 +150,46 @@ def _load_record(path: Path) -> dict[str, Any]:
     if not isinstance(payload, dict):
         _fail("B2_LSE_PREREQ_SAMPLE_INVALID", f"{path} must contain a dict")
     record = payload.get("record", payload)
+    if "scientific_record" in payload:
+        scientific = payload["scientific_record"]
+        if not isinstance(scientific, dict):
+            _fail("B2_LSE_PREREQ_SAMPLE_INVALID", f"{path} scientific_record must be a dict")
+        tensors = scientific.get("tensors")
+        if not isinstance(tensors, dict):
+            _fail("B2_LSE_PREREQ_SAMPLE_INVALID", f"{path} missing tensors")
+        maps: dict[int, dict[int, torch.Tensor]] = {}
+        for key, value in tensors.items():
+            if not isinstance(key, str) or not key.startswith("causal_map:"):
+                continue
+            _, depth_text, layer_text = key.split(":")
+            if not isinstance(value, dict) or "tensor" not in value:
+                _fail("B2_LSE_PREREQ_SAMPLE_INVALID", f"{path} invalid tensor entry {key}")
+            depth = int(depth_text)
+            layer = int(layer_text)
+            tensor = value["tensor"]
+            if not isinstance(tensor, torch.Tensor):
+                _fail("B2_LSE_PREREQ_SAMPLE_INVALID", f"{path} tensor entry {key} is not Tensor")
+            tensor = tensor.detach().cpu()
+            while tensor.ndim > 2 and tensor.shape[0] == 1:
+                tensor = tensor.squeeze(0)
+            if tensor.ndim != 2:
+                _fail("B2_LSE_PREREQ_SAMPLE_INVALID", f"{path} tensor entry {key} must reduce to [H,W]")
+            maps.setdefault(depth, {})[layer] = tensor
+        record = {
+            "sample_id": scientific.get("stable_sample_id"),
+            "label": int(scientific.get("image_label", 0)),
+            "mask_path": str(scientific.get("mask_identity") or ""),
+            "category": str(scientific.get("category", "")),
+            "split": str(scientific.get("membership", "")),
+            "maps": maps,
+            "ingredients": {},
+            "teacher_logits": torch.zeros(1, dtype=torch.float32),
+            "candidate_layers": [int(x) for x in scientific.get("candidate_layers", [])],
+            "preprocessing_hash": str(scientific.get("extractor_configuration_sha256", "")),
+            "split_hash": str(scientific.get("split_scientific_sha256", "")),
+            "checkpoint_hash": str(scientific.get("checkpoint_sha256", "")),
+            "schema_version": 1,
+        }
     if not isinstance(record, dict):
         _fail("B2_LSE_PREREQ_SAMPLE_INVALID", f"{path} record must be a dict")
     for key in ("sample_id", "split", "candidate_layers", "checkpoint_hash", "split_hash"):

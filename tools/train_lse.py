@@ -25,7 +25,7 @@ from rad.models.descriptors import (  # noqa: E402
     DescriptorNormalizer,
     LayerDescriptorExtractor,
 )
-from rad.models.dlcm import DLCM, sum_preserving_fusion  # noqa: E402
+from rad.models.dlcm import sum_preserving_fusion  # noqa: E402
 from rad.models.lse import LSE  # noqa: E402
 from rad.models.selector_signals import (  # noqa: E402
     SelectorSignalLayout,
@@ -35,6 +35,7 @@ from rad.models.selector_signals import (  # noqa: E402
     selector_signal_provenance,
 )
 from rad.phase_b import b2_lse_accepted_gate as accepted_gate  # noqa: E402
+from rad.phase_b import b2_lse_prerequisites as prereq  # noqa: E402
 from rad.trainers.lse_trainer import LSETrainer  # noqa: E402
 
 
@@ -86,7 +87,7 @@ def load_gain_index(path: Path) -> dict[str, dict[str, Any]]:
 def build_states_for_sample(
     *,
     sample: dict[str, Any],
-    dlcm: DLCM,
+    dlcm: prereq.LSEDLCMAdapter,
     layer_extractor: LayerDescriptorExtractor,
     context_extractor: CheckpointContextExtractor,
     normalizer: DescriptorNormalizer | None,
@@ -120,7 +121,14 @@ def build_states_for_sample(
             layer_ids=layer_ids,
             prev_fused=prev_fused,
         )
-        weights = dlcm(layer_desc, ctx, layer_ids, valid)
+        weights = dlcm.weights(
+            layer_desc,
+            prediction_depth=int(depth),
+            player_layer_ids=tuple(avail),
+            context=ctx,
+            layer_ids=layer_ids,
+            valid_mask=valid,
+        )
         fused = sum_preserving_fusion(maps, weights, valid)
         # Primary scientific ablation: mask during training materialization (A).
         lse_desc = apply_selector_signal_mask(
@@ -159,7 +167,7 @@ def materialize_rows(
     *,
     cache: TeacherCacheDataset,
     gains: dict[str, dict[str, Any]],
-    dlcm: DLCM,
+    dlcm: prereq.LSEDLCMAdapter,
     layer_extractor: LayerDescriptorExtractor,
     context_extractor: CheckpointContextExtractor,
     normalizer: DescriptorNormalizer | None,
@@ -354,12 +362,11 @@ def main(argv: list[str] | None = None) -> int:
 
     normalizer = DescriptorNormalizer.load(stats_path) if stats_path.is_file() else None
     dlcm_ckpt = torch.load(ckpt_path, map_location="cpu")
-    dlcm = DLCM(max_layer_id=max(candidate_layers), alpha=0.0)
-    dlcm.load_state_dict(dlcm_ckpt["dlcm"])
-    dlcm.eval()
-    dlcm.to(device)
-    for p in dlcm.parameters():
-        p.requires_grad_(False)
+    dlcm = prereq.load_lse_dlcm_adapter_from_checkpoint(
+        dlcm_ckpt,
+        device=device,
+        candidate_layers=candidate_layers,
+    )
 
     layer_extractor = LayerDescriptorExtractor()
     context_extractor = CheckpointContextExtractor(backbone_depth=cfg.backbone.depth)

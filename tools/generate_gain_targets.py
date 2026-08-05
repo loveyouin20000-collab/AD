@@ -26,7 +26,8 @@ from rad.models.descriptors import (  # noqa: E402
     DescriptorNormalizer,
     LayerDescriptorExtractor,
 )
-from rad.models.dlcm import DLCM, sum_preserving_fusion  # noqa: E402
+from rad.models.dlcm import sum_preserving_fusion  # noqa: E402
+from rad.phase_b import b2_lse_prerequisites as prereq  # noqa: E402
 from rad.targets.residual_gain import build_gain_target_record  # noqa: E402
 
 
@@ -87,7 +88,7 @@ def load_mask(data_root: Path, mask_path: str, image_size: int) -> torch.Tensor:
 def fuse_errors_for_sample(
     *,
     sample: dict[str, Any],
-    dlcm: DLCM,
+    dlcm: prereq.LSEDLCMAdapter,
     layer_extractor: LayerDescriptorExtractor,
     context_extractor: CheckpointContextExtractor,
     normalizer: DescriptorNormalizer | None,
@@ -124,7 +125,14 @@ def fuse_errors_for_sample(
             layer_ids=layer_ids,
             prev_fused=prev_fused,
         )
-        weights = dlcm(layer_desc, ctx, layer_ids, valid)
+        weights = dlcm.weights(
+            layer_desc,
+            prediction_depth=int(depth),
+            player_layer_ids=tuple(avail),
+            context=ctx,
+            layer_ids=layer_ids,
+            valid_mask=valid,
+        )
         fused = sum_preserving_fusion(maps, weights, valid)
         err = sample_localization_error(fused, mask, label)
         errors[int(depth)] = err.detach().cpu()
@@ -212,12 +220,12 @@ def main() -> int:
 
     normalizer = DescriptorNormalizer.load(stats_path) if stats_path.is_file() else None
     ckpt = torch.load(ckpt_path, map_location="cpu")
-    dlcm = DLCM(max_layer_id=max(candidate_layers), alpha=0.0)
-    dlcm.load_state_dict(ckpt["dlcm"])
-    dlcm.eval()
-    dlcm.to(device)
-    for p in dlcm.parameters():
-        p.requires_grad_(False)
+    dlcm = prereq.load_lse_dlcm_adapter_from_checkpoint(
+        ckpt,
+        device=device,
+        candidate_layers=candidate_layers,
+    )
+    dlcm_beta = dlcm.beta
 
     layer_extractor = LayerDescriptorExtractor()
     context_extractor = CheckpointContextExtractor(backbone_depth=cfg.backbone.depth)
@@ -279,6 +287,7 @@ def main() -> int:
         "epsilon_gain": epsilon_gain,
         "epsilon_absolute": epsilon_absolute,
         "dlcm_checkpoint": str(ckpt_path),
+        "dlcm_beta": dlcm_beta,
         "cache_meta": {
             "split_hash": split_hash,
             "checkpoint_hash": dataset.meta.get("checkpoint_hash"),
