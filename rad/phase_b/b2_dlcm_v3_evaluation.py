@@ -96,6 +96,47 @@ def c1_comparison_diagnostic(
     }
 
 
+def build_auxiliary_diagnostics_manifest(
+    *,
+    diagnostics: Mapping[str, Any],
+    source_checkpoint_kind: str,
+) -> dict[str, Any]:
+    if source_checkpoint_kind != "canonical_best_training_checkpoint":
+        _fail(
+            "B2_DLCM_AUXILIARY_DIAGNOSTICS_INVALID",
+            "diagnostics must come from canonical_best_training_checkpoint",
+        )
+    if not diagnostics:
+        _fail("B2_DLCM_AUXILIARY_DIAGNOSTICS_INVALID", "diagnostics payload empty")
+
+    def _finite(value: Any) -> bool:
+        if isinstance(value, bool):
+            return True
+        if isinstance(value, int | float):
+            return value == value and value not in (float("inf"), float("-inf"))
+        if isinstance(value, Mapping):
+            return all(_finite(v) for v in value.values())
+        if isinstance(value, list | tuple):
+            return all(_finite(v) for v in value)
+        return True
+
+    if not _finite(diagnostics):
+        _fail("B2_DLCM_AUXILIARY_DIAGNOSTICS_INVALID", "non-finite diagnostic value")
+
+    payload = {
+        "schema_version": "b2_dlcm_v3_auxiliary_diagnostics_v1",
+        "diagnostic_source": "canonical_best_training_checkpoint",
+        "not_available_from_deployment_artifact": True,
+        "qualification_blocking": False,
+        "diagnostics": dict(diagnostics),
+    }
+    payload["auxiliary_diagnostics_manifest_sha256"] = protocol.canonical_json_sha256(
+        {k: v for k, v in payload.items() if k != "auxiliary_diagnostics_manifest_sha256"}
+    )
+    return payload
+
+
+
 def build_h_decision(
     *,
     final_gates: Mapping[str, Any],

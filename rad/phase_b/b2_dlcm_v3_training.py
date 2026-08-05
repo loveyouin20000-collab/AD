@@ -557,3 +557,376 @@ def dry_run_v3_summary(
         "output_dir": str(Path(output_dir)),
         "category_not_in_model": True,
     }
+
+
+
+def _teacher_alloc_kl_macro(
+    model: v3.B2DLCMV3,
+    calibration: Sequence[Any],
+    *,
+    device: torch.device,
+) -> float:
+    model.eval()
+    values: list[float] = []
+    with torch.no_grad():
+        for record in calibration:
+            for depth in model.prediction_depths:
+                if hasattr(record, "descriptors"):
+                    desc = record.descriptors[int(depth)].unsqueeze(0).to(device=device)
+                    p_t = record.p_t[int(depth)].unsqueeze(0).to(device=device)
+                else:
+                    desc = record["descriptors"][int(depth)].unsqueeze(0).to(device=device)
+                    p_t = record["p_t"][int(depth)].unsqueeze(0).to(device=device)
+                out = model.forward_training(desc, prediction_depth=int(depth))
+                values.append(float(v1.allocation_kl(p_t, out.teacher_allocation_logits)))
+    return sum(values) / float(len(values))
+
+
+def _cpu_identity_model_v3(model: v3.B2DLCMV3) -> v3.B2DLCMV3:
+    clone = v3.B2DLCMV3(
+        seed=None,
+        candidate_layers=model.candidate_layers,
+        prediction_depths=model.prediction_depths,
+        descriptor_dimension=model.descriptor_dimension,
+        layer_embedding_dimension=model.layer_embedding_dimension,
+        depth_embedding_dimension=model.depth_embedding_dimension,
+        hidden_dimension=model.hidden_dimension,
+        dropout_probability=model.dropout_probability,
+        initialize=False,
+    )
+    clone.load_state_dict(
+        {k: v.detach().cpu() for k, v in model.state_dict().items()},
+        strict=True,
+    )
+    return clone
+
+
+def run_v3_contract_training(
+    *,
+    output_root: Path,
+    seed: int,
+    records: Sequence[Any],
+    maximum_epochs: int = 1,
+    patience: int = 50,
+    device: str = "cpu",
+    batch_size: int = 4,
+    smoothmax_tau: float = v3.SMOOTHMAX_TAU,
+    environment_contract: Mapping[str, Any] | None = None,
+    allow_existing_output: bool = False,
+    mark_real_training_started: bool = False,
+) -> dict[str, Any]:
+    """Official/hermetic V3 seed training with constrained worst-category selection."""
+
+    import json
+
+    from rad.phase_b import b2_dlcm_v2 as v2
+
+    output_root = Path(output_root)
+    if output_root.exists() and any(output_root.iterdir()) and not allow_existing_output:
+        _fail("B2_DLCM_V3_CONTRACT_MISMATCH", "output root must be empty/fresh")
+    output_root.mkdir(parents=True, exist_ok=True)
+
+    if environment_contract is None:
+        env = v1_train.collect_environment_contract(allow_cpu_for_hermetic=(device == "cpu"))
+        v1_train.persist_environment_contract(output_root / "environment_contract.json", env)
+    else:
+        env = dict(environment_contract)
+        env_path = output_root / "environment_contract.json"
+        if env_path.is_file():
+            existing = json.loads(env_path.read_text(encoding="utf-8"))
+            if v1_train.environment_contract_sha256(existing) != v1_train.environment_contract_sha256(
+                env
+            ):
+                _fail("B2_DLCM_V3_CONTRACT_MISMATCH", "environment contract drifted")
+        else:
+            v1_train.persist_environment_contract(env_path, env)
+
+    seed_dir = output_root / f"seed_{seed}"
+    if seed_dir.exists():
+        _fail("B2_DLCM_V3_CONTRACT_MISMATCH", f"seed directory already exists: seed_{seed}")
+
+    by_split: dict[str, list[Any]] = {"training": [], "calibration": [], "evaluation": []}
+    for record in records:
+        by_split[record.split].append(record)
+    if len(by_split["training"]) != 16 or len(by_split["calibration"]) != 8:
+        _fail("B2_DLCM_V3_CONTRACT_MISMATCH", "expected 16/8 training/calibration")
+    if len(by_split["evaluation"]) != 8:
+        _fail("B2_DLCM_V3_CONTRACT_MISMATCH", "expected 8 evaluation placeholders")
+
+    train_bottle = [r for r in by_split["training"] if _record_category(r) == "bottle"]
+    train_carpet = [r for r in by_split["training"] if _record_category(r) == "carpet"]
+    if len(train_bottle) != 8 or len(train_carpet) != 8:
+        _fail("B2_DLCM_CATEGORY_COVERAGE_INVALID", "training must be 8 bottle + 8 carpet")
+
+    tx = v1_train.EpochTransaction(seed_dir)
+    model = v3.B2DLCMV3(seed=seed)
+    with torch.no_grad():
+        assert torch.all(model.gt_deployment_head.weight == 0)
+        assert torch.all(model.teacher_allocation_head.weight == 0)
+    if device != "cpu":
+        model = v2.move_model_to_device_and_verify(model, torch.device(device))
+    optimizer, _groups = v1_train.build_adamw(model, lr=3e-6)
+    schedule = v1_train.ExplicitLRSchedule()
+    schedule.install_into_optimizer(optimizer)
+    selector = EligibleWorstCategorySelector()
+    stopper = v1_train.EarlyStopController(patience=patience, maximum_epochs=maximum_epochs)
+    chain = v1_train.TraceHashChain()
+
+    train_records = by_split["training"]
+    id_to_record = {_record_id(r): r for r in train_records}
+    calibration = sorted(by_split["calibration"], key=lambda r: _record_id(r))
+    component_seeds = model.component_seeds
+    bottle_seed = int(component_seeds["sampler"])
+    carpet_seed = int(component_seeds["sampler"]) ^ 0xC0FFEE
+    batch_order_seed = int(component_seeds["sampler"]) ^ 0xA5A5A5
+    device_t = next(model.parameters()).device
+
+    metrics0 = calibration_metrics_category_robust(model, calibration, device=device_t)
+    teacher0 = _teacher_alloc_kl_macro(model, calibration, device=device_t)
+    selector.consider(
+        epoch=0,
+        worst_category_kl=metrics0["worst_category_kl"],
+        macro_kl=metrics0["macro_kl"],
+        gt_signed=metrics0["gt_signed"],
+        eligible=False,
+    )
+    v1_train.run_epoch0_baseline_marker(schedule)
+    staging = tx.begin()
+    torch.save({"model": model.state_dict(), "epoch": 0}, staging / "best_training_checkpoint.pt")
+    torch.save({"model": model.state_dict(), "epoch": 0}, staging / "last_training_checkpoint.pt")
+    (staging / "category_sampler_state.json").write_text(
+        json.dumps(
+            {
+                "epoch_index": 0,
+                "bottle_seed": bottle_seed,
+                "carpet_seed": carpet_seed,
+                "batch_order_seed": batch_order_seed,
+                "sampler_contract_version": SAMPLER_CONTRACT_VERSION,
+            },
+            sort_keys=True,
+        ),
+        encoding="utf-8",
+    )
+    train_ids = sorted(_record_id(r) for r in train_records)
+    record0 = v1_train.scientific_epoch_record(
+        epoch=0,
+        primary=metrics0["worst_category_kl"],
+        secondary=metrics0["macro_kl"],
+        total_loss=0.0,
+        global_optimizer_step=0,
+        sample_ids=train_ids,
+    )
+    record0["worst_category_kl"] = float(metrics0["worst_category_kl"])
+    record0["macro_kl"] = float(metrics0["macro_kl"])
+    record0["gt_signed"] = float(metrics0["gt_signed"])
+    record0["eligible"] = False
+    record0["per_category_gt_kl"] = dict(metrics0["per_category_gt_kl"])
+    record0["teacher_alloc_kl_macro"] = float(teacher0)
+    h0 = chain.append(record0)
+    (staging / "training_trace.json").write_text(
+        json.dumps({"nodes": chain.nodes, "tail": chain.tail}, sort_keys=True),
+        encoding="utf-8",
+    )
+    tx.commit(
+        {
+            "epoch": 0,
+            "best_epoch": 0,
+            "patience": 0,
+            "global_optimizer_step": 0,
+            "trace_chain_tail": h0,
+            "best_file_sha256": "pending",
+            "status": "running",
+            "best_eligible": False,
+        },
+        update_best=True,
+    )
+    manifest = v1_train.load_committed_manifest(seed_dir)
+    manifest["best_file_sha256"] = v1_train.sha256_file(
+        seed_dir / "committed" / "best_training_checkpoint.pt"
+    )
+    manifest["last_file_sha256"] = v1_train.sha256_file(
+        seed_dir / "committed" / "last_training_checkpoint.pt"
+    )
+    v1_train._atomic_write_json(seed_dir / "committed" / "epoch_state_manifest.json", manifest)
+
+    status = "running"
+    last_epoch = 0
+    best_per_category = dict(metrics0["per_category_gt_kl"])
+    for epoch in range(1, maximum_epochs + 1):
+        model.train()
+        batches, sampler_state = build_category_balanced_epoch_batches(
+            train_records,
+            epoch=epoch,
+            bottle_seed=bottle_seed,
+            carpet_seed=carpet_seed,
+            batch_order_seed=batch_order_seed,
+        )
+        if len(batches) != 4 or batch_size != 4:
+            _fail("B2_DLCM_V3_CONTRACT_MISMATCH", "expected 4 batches of size 4")
+        epoch_losses: list[float] = []
+        flat_order: list[str] = []
+        for batch_ids in batches:
+            flat_order.extend(batch_ids)
+            optimizer.zero_grad(set_to_none=True)
+            categories = [_record_category(id_to_record[i]) for i in batch_ids]
+            depth_payload: dict[int, dict[str, torch.Tensor]] = {}
+            for depth in model.prediction_depths:
+                descs = torch.stack(
+                    [id_to_record[i].descriptors[depth] for i in batch_ids], dim=0
+                ).to(device=device_t, dtype=torch.float32)
+                p_gt = torch.stack(
+                    [id_to_record[i].p_gt[depth] for i in batch_ids], dim=0
+                ).to(device=device_t, dtype=torch.float32)
+                p_t = torch.stack(
+                    [id_to_record[i].p_t[depth] for i in batch_ids], dim=0
+                ).to(device=device_t, dtype=torch.float32)
+                phi_gt = torch.stack(
+                    [id_to_record[i].phi_gt[depth] for i in batch_ids], dim=0
+                ).to(device=device_t, dtype=torch.float32)
+                phi_t = torch.stack(
+                    [id_to_record[i].phi_t[depth] for i in batch_ids], dim=0
+                ).to(device=device_t, dtype=torch.float32)
+                out = model.forward_training(descs, prediction_depth=depth)
+                depth_payload[depth] = {
+                    "gt_deployment_logits": out.gt_deployment_logits,
+                    "teacher_allocation_logits": out.teacher_allocation_logits,
+                    "gt_signed": out.gt_signed,
+                    "teacher_signed": out.teacher_signed,
+                    "p_gt": p_gt,
+                    "p_t": p_t,
+                    "phi_gt": phi_gt,
+                    "phi_t": phi_t,
+                }
+            loss, _ = v3.total_dlcm_v3_loss(
+                depth_payload, categories=categories, tau=float(smoothmax_tau)
+            )
+            if not bool(torch.isfinite(loss)):
+                v1_train.write_failure_attestation(
+                    seed_dir,
+                    seed=seed,
+                    stage="optimizer_step",
+                    error_code="B2_DLCM_NONFINITE_LOSS",
+                    last_valid_committed_epoch=last_epoch,
+                    global_optimizer_step=schedule.global_optimizer_step,
+                    trace_chain_tail=chain.tail,
+                    identities={
+                        "model_state_scientific_sha256": v3.model_state_scientific_sha256(model)
+                    },
+                    environment_identity=v1_train.environment_contract_sha256(env),
+                    uncommitted_staging=[],
+                )
+                return {
+                    "status": "failed",
+                    "real_training_started": bool(mark_real_training_started),
+                    "evaluation_unlocked": False,
+                }
+            loss.backward()
+            torch.nn.utils.clip_grad_norm_(model.parameters(), 1.0)
+            optimizer.step()
+            t = schedule.global_optimizer_step + 1
+            schedule.note_successful_update(t)
+            schedule.install_into_optimizer(optimizer)
+            epoch_losses.append(float(loss.detach()))
+
+        metrics = calibration_metrics_category_robust(model, calibration, device=device_t)
+        teacher_diag = _teacher_alloc_kl_macro(model, calibration, device=device_t)
+        improved = selector.consider(
+            epoch=epoch,
+            worst_category_kl=metrics["worst_category_kl"],
+            macro_kl=metrics["macro_kl"],
+            gt_signed=metrics["gt_signed"],
+            eligible=bool(metrics["eligible"]),
+        )
+        if improved:
+            best_per_category = dict(metrics["per_category_gt_kl"])
+        status = stopper.after_epoch(epoch=epoch, improved=improved)
+        staging = tx.begin()
+        torch.save({"model": model.state_dict(), "epoch": epoch}, staging / "last_training_checkpoint.pt")
+        if improved:
+            torch.save(
+                {"model": model.state_dict(), "epoch": epoch},
+                staging / "best_training_checkpoint.pt",
+            )
+        (staging / "category_sampler_state.json").write_text(
+            json.dumps(sampler_state.to_jsonable(), sort_keys=True),
+            encoding="utf-8",
+        )
+        (staging / "epoch_batch_plan.json").write_text(
+            json.dumps({"epoch": epoch, "batches": batches}, sort_keys=True),
+            encoding="utf-8",
+        )
+        record = v1_train.scientific_epoch_record(
+            epoch=epoch,
+            primary=metrics["worst_category_kl"],
+            secondary=metrics["macro_kl"],
+            total_loss=sum(epoch_losses) / len(epoch_losses),
+            global_optimizer_step=schedule.global_optimizer_step,
+            sample_ids=flat_order,
+        )
+        record["worst_category_kl"] = float(metrics["worst_category_kl"])
+        record["macro_kl"] = float(metrics["macro_kl"])
+        record["gt_signed"] = float(metrics["gt_signed"])
+        record["eligible"] = bool(metrics["eligible"])
+        record["per_category_gt_kl"] = dict(metrics["per_category_gt_kl"])
+        record["teacher_alloc_kl_macro"] = float(teacher_diag)
+        tail = chain.append(record)
+        (staging / "training_trace.json").write_text(
+            json.dumps({"nodes": chain.nodes, "tail": chain.tail}, sort_keys=True),
+            encoding="utf-8",
+        )
+        tx.commit(
+            {
+                "epoch": epoch,
+                "best_epoch": selector.best_epoch,
+                "patience": stopper.patience_counter,
+                "global_optimizer_step": schedule.global_optimizer_step,
+                "trace_chain_tail": tail,
+                "status": status,
+                "best_eligible": bool(selector.best_eligible),
+            },
+            update_best=improved,
+        )
+        last_epoch = epoch
+        if status == "early_stopped":
+            break
+
+    best_path = seed_dir / "committed" / "best_training_checkpoint.pt"
+    best_payload = torch.load(best_path, map_location="cpu", weights_only=False)
+    best_model = v3.B2DLCMV3(
+        seed=None,
+        candidate_layers=model.candidate_layers,
+        prediction_depths=model.prediction_depths,
+        descriptor_dimension=model.descriptor_dimension,
+        layer_embedding_dimension=model.layer_embedding_dimension,
+        depth_embedding_dimension=model.depth_embedding_dimension,
+        hidden_dimension=model.hidden_dimension,
+        dropout_probability=model.dropout_probability,
+        initialize=False,
+    )
+    best_model.load_state_dict(best_payload["model"], strict=True)
+    best_identity = v3.model_state_scientific_sha256(best_model)
+
+    return {
+        "status": status if status != "running" else "completed_epoch",
+        "real_training_started": bool(mark_real_training_started),
+        "evaluation_unlocked": False,
+        "best_epoch": selector.best_epoch,
+        "seed": seed,
+        "worst_category_kl": selector.best_worst,
+        "macro_kl": selector.best_macro,
+        "gt_signed": selector.best_signed,
+        "eligible": bool(selector.best_eligible),
+        "per_category_gt_kl": dict(best_per_category),
+        "trace_chain_tail": chain.tail,
+        "model_state_scientific_sha256": best_identity,
+        "last_model_state_scientific_sha256": v3.model_state_scientific_sha256(
+            _cpu_identity_model_v3(model)
+        ),
+        "last_epoch": last_epoch,
+        "global_optimizer_step": schedule.global_optimizer_step,
+        "epoch0_worst_category_kl": float(metrics0["worst_category_kl"]),
+        "epoch0_macro_kl": float(metrics0["macro_kl"]),
+        "epoch0_gt_signed": float(metrics0["gt_signed"]),
+        "epoch0_teacher_alloc_kl_macro": float(teacher0),
+        "epoch0_per_category_gt_kl": dict(metrics0["per_category_gt_kl"]),
+    }
