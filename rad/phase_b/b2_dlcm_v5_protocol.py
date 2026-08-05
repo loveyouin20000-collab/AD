@@ -136,3 +136,17 @@ def write_json_with_receipt(path: Path | str, payload: Mapping[str, Any]) -> str
         f"{digest}  {target.name}\n", encoding="utf-8"
     )
     return digest
+
+
+def persist_json_atomic(path: Path | str, payload: Mapping[str, Any]) -> str:
+    """Atomic JSON + receipt write used by authoritative runners."""
+
+    path = Path(path)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    tmp = path.with_suffix(path.suffix + ".tmp")
+    text = json.dumps(payload, indent=2, sort_keys=True, ensure_ascii=False) + "\n"
+    tmp.write_text(text, encoding="utf-8")
+    tmp.replace(path)
+    digest = hashlib.sha256(path.read_bytes()).hexdigest()
+    path.with_suffix(path.suffix + ".sha256").write_text(digest + "\n", encoding="utf-8")
+    return digest
