@@ -69,7 +69,7 @@ def _finite(value: Any, *, key: str) -> float:
 
 
 def _depth_metrics(metrics: Mapping[str, Any], depth: int) -> Mapping[str, Any]:
-    item = metrics.get(str(depth), metrics.get(depth))
+    item = metrics.get(str(depth))
     if not isinstance(item, Mapping):
         _fail("B2_LSE_QUALIFICATION_METRIC_INVALID", f"missing depth {depth} metrics")
     return item
