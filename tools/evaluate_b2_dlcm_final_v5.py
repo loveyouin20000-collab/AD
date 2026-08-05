@@ -1,8 +1,9 @@
 #!/usr/bin/env python3
-"""Fail-closed Final evaluation stub for V5 C4A."""
+"""V5 Final evaluation CLI guard."""
 
 from __future__ import annotations
 
+import argparse
 import sys
 from pathlib import Path
 
@@ -13,8 +14,18 @@ if str(_REPO_ROOT) not in sys.path:
 from rad.phase_b import b2_dlcm_v5_protocol as protocol  # noqa: E402
 
 
-def main() -> int:
-    protocol.forbid_final_content_access(unlocked=False, context="evaluate_v5_c4a")
+def _parser() -> argparse.ArgumentParser:
+    parser = argparse.ArgumentParser(description="B2 DLCM V5 Final evaluation tooling.")
+    parser.add_argument("--dry-run", action="store_true")
+    return parser
+
+
+def main(argv: list[str] | None = None) -> int:
+    args = _parser().parse_args(argv)
+    if args.dry_run:
+        print("evaluation_started = false")
+        return 0
+    protocol.forbid_final_content_access(unlocked=False, context="evaluate_v5_requires_unlock")
     return 0
 
 

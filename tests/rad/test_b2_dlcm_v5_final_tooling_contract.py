@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 from pathlib import Path
+from typing import Any, cast
 
 import pytest
 
@@ -81,7 +82,8 @@ def _roster() -> dict[str, object]:
 
 def _source_manifest(roster: dict[str, object]) -> dict[str, object]:
     rows = []
-    for row in roster["records"]:  # type: ignore[index]
+    roster_records = cast(list[dict[str, Any]], roster["records"])
+    for row in roster_records:
         record = dict(row)
         record.update(
             {
@@ -143,7 +145,7 @@ def test_resolution_requires_authorization_and_exact_lookup() -> None:
     assert resolved["resolution_scientific_identity_included"] is False
     assert len(resolved["records"]) == 4
     missing = dict(source)
-    missing["records"] = list(source["records"])[:-1]  # type: ignore[index]
+    missing["records"] = cast(list[dict[str, Any]], source["records"])[:-1]
     with pytest.raises(final_res.B2DLCMV5FinalResolutionError) as exc2:
         final_res.resolve_stable_ids(missing, roster, authorized=True)
     assert exc2.value.code == "B2_DLCM_FINAL_STABLE_ID_NOT_FOUND"
