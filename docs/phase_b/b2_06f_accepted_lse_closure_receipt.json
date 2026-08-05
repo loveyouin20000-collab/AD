@@ -1,0 +1,11 @@
+{
+  "accepted_artifact_generated": true,
+  "accepted_lse_checkpoint": "/root/autodl-tmp/AD-phase-b2-06f-accepted-lse-artifact-closure/artifacts/phase_b/b2_06f_accepted_lse_artifact_v2/accepted_refs/lse_best.pt",
+  "accepted_lse_checkpoint_sha256": "e6e5a4dbd7471ef9e52430eab9533f8edda57ca76ead2ffbed034044805b1c98",
+  "accepted_lse_identity": "3dafdde6309599d7e82ca6da07db4efbdb09f16105262351c890c514277f01fa",
+  "accepted_manifest": "/root/autodl-tmp/AD-phase-b2-06f-accepted-lse-artifact-closure/artifacts/phase_b/b2_06f_accepted_lse_artifact_v2/accepted_lse_manifest.json",
+  "evaluation_started": false,
+  "receipt_identity": "dbcffddd9ae112f1d3627d28b9d2afdafcd1423e76390dfcc8b7274c8e962cd8",
+  "schema_version": "b2_06f_lse_accepted_artifact_closure_receipt_v1",
+  "training_started": false
+}
