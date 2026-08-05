@@ -1,0 +1,16 @@
+early_exit:
+  accepted_lse_manifest: docs/phase_b/b2_06f_accepted_lse_manifest.json
+  b2_phase_final_closure_manifest: docs/phase_b/b2_07_phase_final_closure_manifest.json
+  expected_accepted_dlcm_identity: 0c1a411317f212e5deb29040d184d57aead8a6f862fe3146937db99d1f365116
+  expected_v5_deployment_identity: c56248c9ff6021fc16cf4792d87afeebf1bb8f6d45859f7c26017830dcf0e0bd
+  expected_accepted_lse_identity: 3dafdde6309599d7e82ca6da07db4efbdb09f16105262351c890c514277f01fa
+  expected_b2_phase_final_closure_identity: 2b1e74c13bba260a9f62c4167b322ae067ecce34fc86a92ae66e1a71b0f3073d
+  accepted_lse_reference_root: /root/autodl-tmp/AD-phase-b2-06f-accepted-lse-artifact-closure/artifacts/phase_b/b2_06f_accepted_lse_artifact_v2/accepted_refs
+  lse_checkpoint: /root/autodl-tmp/AD-phase-b2-06f-accepted-lse-artifact-closure/artifacts/phase_b/b2_06f_accepted_lse_artifact_v2/accepted_refs/lse_best.pt
+  early_depths: [12, 18]
+  full_depth: 24
+  exit_target_manifest: artifacts/targets/early_exit/b3_01_exit_targets_manifest.json
+  latency_profile: artifacts/profiles/early_exit/b3_01_latency_profile.json
+  calibration_trace: artifacts/traces/early_exit/b3_01_calibration_trace.jsonl
+  output_dir: artifacts/checkpoints/early_exit/b3_01
+  dry_run_only: true
