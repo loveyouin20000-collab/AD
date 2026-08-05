@@ -9,7 +9,6 @@ import pytest
 
 from rad.phase_b import b2_dlcm_v4_official as official
 
-
 REPO = Path(__file__).resolve().parents[2]
 
 
