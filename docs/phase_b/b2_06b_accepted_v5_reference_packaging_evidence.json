@@ -1,0 +1,47 @@
+{
+  "schema_version": "b2_06b_accepted_v5_reference_packaging_evidence_v1",
+  "phase": "B2-06B Accepted V5 Reference Packaging Closure",
+  "worktree": "/root/autodl-tmp/AD-phase-b2-06b-accepted-v5-reference-packaging",
+  "branch": "phase-b2-06b-accepted-v5-reference-packaging",
+  "base_commit": "115c98aff88f4fa95e1a0ec62a8d6d8111106748",
+  "implementation_commit": "a3d2822",
+  "accepted_artifact_dir": "/root/autodl-tmp/AD-phase-b2-dlcm-v5-final-execution/artifacts/phase_b/b2_dlcm_v5_final_evaluation/final-evaluation-20260805-155023",
+  "accepted_manifest": "/root/autodl-tmp/AD-phase-b2-dlcm-v5-final-execution/artifacts/phase_b/b2_dlcm_v5_final_evaluation/final-evaluation-20260805-155023/accepted_deployment_manifest.json",
+  "source_checkpoint": "/root/autodl-tmp/AD-phase-b2-dlcm-uniform-anchored-calibration/artifacts/phase_b/b2_dlcm_uniform_anchored_calibration/authoritative-run-20260805-081937/canonical_deployment_candidate_v5.pt",
+  "source_calibration_manifest": "/root/autodl-tmp/AD-phase-b2-dlcm-uniform-anchored-calibration/artifacts/phase_b/b2_dlcm_uniform_anchored_calibration/authoritative-run-20260805-081937/calibration_a_manifest.json",
+  "packaged_checkpoint": "/root/autodl-tmp/AD-phase-b2-dlcm-v5-final-execution/artifacts/phase_b/b2_dlcm_v5_final_evaluation/final-evaluation-20260805-155023/accepted_refs/canonical_deployment_candidate_v5.pt",
+  "packaging_receipt": "/root/autodl-tmp/AD-phase-b2-dlcm-v5-final-execution/artifacts/phase_b/b2_dlcm_v5_final_evaluation/final-evaluation-20260805-155023/accepted_refs/b2_06b_accepted_reference_packaging_receipt.json",
+  "checkpoint_sha256": "12b9192643d457eb07745391b68cfa5afe48ec6165b28091bdabde29ec3ece4f",
+  "packaging_receipt_sha256": "a2c9810bda77769f1282401f42e2454e88a65730b096c388284b62ea093729ea",
+  "receipt_identity": "1d34e1b98207dc227dfda096f8a8f81a85b383b94e67189086b9365317813ea3",
+  "frozen_identities": {
+    "accepted_identity": "0c1a411317f212e5deb29040d184d57aead8a6f862fe3146937db99d1f365116",
+    "v5_deployment_identity": "c56248c9ff6021fc16cf4792d87afeebf1bb8f6d45859f7c26017830dcf0e0bd",
+    "calibration_ab_identity": "cae406c91ec392ffd7cc6d48ec2f0c94ab78d78f905cbfe904287842a7a7278a",
+    "beta_star_decimal": "0.54"
+  },
+  "boundary": {
+    "accepted_identity_changed": false,
+    "accepted_manifest_modified": false,
+    "final_re_evaluated": false,
+    "lse_training_started": false,
+    "lse_checkpoint_generated": false,
+    "push_performed": false
+  },
+  "preflight_after_packaging": {
+    "accepted_gate_passed": true,
+    "ready": false,
+    "training_started": false,
+    "exit_code": 2,
+    "missing_prerequisites": [
+      "train_gain_targets",
+      "calibration_gain_targets",
+      "train_cache",
+      "calibration_cache",
+      "descriptor_stats"
+    ]
+  },
+  "tests": {
+    "packaging_unit_tests": "3 passed"
+  }
+}
