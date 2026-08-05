@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from collections.abc import Mapping
+from collections.abc import Mapping, Sequence
 from typing import Any, NoReturn
 
 import torch
@@ -110,3 +110,113 @@ def wrap_c3_deployment_with_beta(
             }
         ),
     }
+
+
+class BetaAnchoredDeploymentModel(torch.nn.Module):
+    """Evaluation adapter: C3 trunk logits + beta-mixed deployment weights."""
+
+    def __init__(self, trunk: Any, *, beta: float) -> None:
+        super().__init__()
+        beta_f = float(beta)
+        if not (0.0 <= beta_f <= 1.0) or beta_f != beta_f:
+            _fail("B2_DLCM_V5_BETA_GRID_INVALID", f"beta out of [0,1]: {beta}")
+        self.trunk = trunk
+        self.beta = beta_f
+        self.candidate_layers = trunk.candidate_layers
+        self.prediction_depths = trunk.prediction_depths
+
+    def players_for_depth(self, depth: int) -> tuple[int, ...]:
+        return self.trunk.players_for_depth(depth)
+
+    def forward(
+        self,
+        descriptors: torch.Tensor,
+        *,
+        prediction_depth: int,
+        player_layer_ids: Sequence[int] | None = None,
+    ) -> tuple[torch.Tensor, torch.Tensor]:
+        logits, weights = self.trunk.forward(
+            descriptors,
+            prediction_depth=prediction_depth,
+            player_layer_ids=player_layer_ids,
+        )
+        mixed = v5.mix_uniform_anchored_weights(weights, self.beta)
+        return logits, mixed
+
+    def forward_deployment(
+        self,
+        descriptors: torch.Tensor,
+        *,
+        prediction_depth: int,
+        player_layer_ids: Sequence[int] | None = None,
+    ) -> tuple[torch.Tensor, torch.Tensor]:
+        return self.forward(
+            descriptors,
+            prediction_depth=prediction_depth,
+            player_layer_ids=player_layer_ids,
+        )
+
+
+def export_v5_deployment_candidate(
+    *,
+    c3_checkpoint: Mapping[str, Any],
+    beta_index: int,
+    calibration_plan_sha256: str,
+    calibration_ab_identity: Mapping[str, Any],
+) -> dict[str, Any]:
+    """Export V5 candidate: frozen C3 state_dict bytes + beta metadata (no mutation)."""
+
+    from rad.phase_b import b2_dlcm as v1
+
+    state = c3_checkpoint["state_dict"]
+    digests_before = {name: v1.tensor_sha256(tensor) for name, tensor in sorted(state.items())}
+    beta = v5.beta_from_index(beta_index)
+    h_deploy = v5.build_h_deploy_v5(
+        h_deploy_v4=str(c3_checkpoint["H_deploy"]),
+        beta_star_index=beta_index,
+        calibration_contract_identity={
+            **v5.v5_contract_identity(),
+            "accepted_v5_calibration_plan_scientific_sha256": calibration_plan_sha256,
+        },
+        calibration_ab_identity=dict(calibration_ab_identity),
+    )
+    digests_after = {name: v1.tensor_sha256(tensor) for name, tensor in sorted(state.items())}
+    if digests_before != digests_after:
+        _fail("B2_DLCM_V5_CONTRACT_MISMATCH", "C3 state_dict mutated during V5 export")
+    candidate = {
+        "schema_version": "b2_dlcm_v5_deployment_checkpoint_v1",
+        "architecture_contract_version": v5.ARCHITECTURE_CONTRACT_VERSION,
+        "model_class_id": v5.MODEL_CLASS_ID,
+        "source_schema_version": c3_checkpoint.get("schema_version"),
+        "source_H_deploy": c3_checkpoint.get("H_deploy"),
+        "candidate_layers": list(c3_checkpoint.get("candidate_layers", [])),
+        "prediction_depths": list(c3_checkpoint.get("prediction_depths", [])),
+        "state_dict": state,
+        "deployment_state_scientific_sha256": c3_checkpoint.get(
+            "deployment_state_scientific_sha256"
+        ),
+        "descriptor_normalization": c3_checkpoint.get("descriptor_normalization"),
+        "descriptor_normalization_scientific_sha256": c3_checkpoint.get(
+            "descriptor_normalization_scientific_sha256"
+        ),
+        "contribution_target_collection_scientific_sha256": c3_checkpoint.get(
+            "contribution_target_collection_scientific_sha256"
+        ),
+        "golden_cases": c3_checkpoint.get("golden_cases"),
+        "golden_cases_sha256": c3_checkpoint.get("golden_cases_sha256"),
+        "beta_index": int(beta_index),
+        "beta": float(beta),
+        "beta_decimal": v5.beta_decimal_string(beta_index),
+        "accepted_v5_calibration_plan_scientific_sha256": calibration_plan_sha256,
+        "calibration_ab_identity": dict(calibration_ab_identity),
+        "category_in_checkpoint": False,
+        "accepted": False,
+        "upstream": {
+            **dict(c3_checkpoint.get("upstream") or {}),
+            "source_H_deploy": c3_checkpoint.get("H_deploy"),
+            "beta_index": int(beta_index),
+            "accepted": False,
+        },
+        "H_deploy": h_deploy,
+    }
+    return candidate
