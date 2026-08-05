@@ -1,0 +1,17 @@
+{
+  "schema_version": "b2_dlcm_uniform_anchored_official_v5",
+  "contract_stage": "b2_05c4b",
+  "real_training_enabled": false,
+  "calibration_enabled": false,
+  "development_enabled": false,
+  "final_materialization_enabled": false,
+  "final_evaluation_enabled": false,
+  "beta_grid_size": 101,
+  "loo_depth": 24,
+  "canonical_seed": 17,
+  "adopted_final_roster_scientific_sha256": "267b7b527f13f84f76f69576d01b1532005d0bb7eda792d558ce5dcce1278213",
+  "expected_contract_tag": "b2-dlcm-uniform-anchored-contract-v5",
+  "authoritative_v4_unqualified_tag": "b2-dlcm-uniform-relative-unqualified-evidence-v1",
+  "authoritative_v4_unqualified_commit": "a1447bdabdd7f54eb7883b717dfadc3da906da5b",
+  "note": "C4A leaves calibration/development disabled; C4B enables Calibration A/B + Development go/no-go only."
+}
