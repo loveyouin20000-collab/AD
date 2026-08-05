@@ -54,6 +54,7 @@ def build_accepted_lse_manifest(
     *,
     decision: Mapping[str, Any],
     training_receipt: Mapping[str, Any],
+    training_summary: Mapping[str, Any],
     lse_checkpoint_sha256: str,
     accepted_checkpoint_path: str,
     source_checkpoint_path: str,
@@ -99,6 +100,12 @@ def build_accepted_lse_manifest(
         key="receipt.best_checkpoint_sha256",
         code="B2_LSE_ACCEPTED_CLOSURE_CHECKPOINT_MISMATCH",
     )
+    selector_hash = training_summary.get("selector_signal_layout_hash")
+    if not isinstance(selector_hash, str) or not selector_hash:
+        _fail(
+            "B2_LSE_ACCEPTED_CLOSURE_SELECTOR_IDENTITY_MISSING",
+            "training summary missing selector_signal_layout_hash",
+        )
     manifest = {
         "schema_version": "b2_06f_lse_accepted_artifact_manifest_v1",
         "lse_qualified": True,
@@ -118,7 +125,7 @@ def build_accepted_lse_manifest(
         "training_receipt_identity": decision["training_receipt_identity"],
         "training_git_sha": training_receipt.get("git_sha"),
         "closure_git_sha": str(closure_git_sha),
-        "selector_signal_layout_hash": training_receipt.get("selector_signal_layout_hash"),
+        "selector_signal_layout_hash": selector_hash,
         "seed": training_receipt.get("seed"),
         "config_hash": training_receipt.get("config_hash"),
         "upstream": {

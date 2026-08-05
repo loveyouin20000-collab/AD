@@ -31,6 +31,11 @@ def parse_args() -> argparse.Namespace:
         ),
     )
     p.add_argument(
+        "--training-summary",
+        type=Path,
+        default=Path("artifacts/checkpoints/lse/b2_06d_first_controlled_run/summary.json"),
+    )
+    p.add_argument(
         "--lse-checkpoint",
         type=Path,
         default=Path("artifacts/checkpoints/lse/b2_06d_first_controlled_run/lse_best.pt"),
@@ -76,6 +81,7 @@ def main() -> int:
     args = parse_args()
     decision_path = _resolve(args.decision)
     receipt_path = _resolve(args.training_receipt)
+    summary_path = _resolve(args.training_summary)
     source_checkpoint = _resolve(args.lse_checkpoint)
     output_dir = _resolve(args.output_dir)
     accepted_refs = output_dir / "accepted_refs"
@@ -83,10 +89,12 @@ def main() -> int:
 
     decision = closure.load_json(decision_path)
     receipt = closure.load_json(receipt_path)
+    summary = closure.load_json(summary_path)
     checkpoint_sha = closure.sha256_file(source_checkpoint)
     manifest = closure.build_accepted_lse_manifest(
         decision=decision,
         training_receipt=receipt,
+        training_summary=summary,
         lse_checkpoint_sha256=checkpoint_sha,
         accepted_checkpoint_path=str(accepted_checkpoint),
         source_checkpoint_path=str(source_checkpoint),

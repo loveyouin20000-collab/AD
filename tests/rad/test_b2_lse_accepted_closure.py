@@ -39,6 +39,7 @@ def test_build_accepted_lse_manifest_binds_qualified_decision() -> None:
     manifest = closure.build_accepted_lse_manifest(
         decision=_decision(),
         training_receipt=_receipt(),
+        training_summary={"selector_signal_layout_hash": "selector-hash"},
         lse_checkpoint_sha256="lse-sha",
         accepted_checkpoint_path="accepted_refs/lse_best.pt",
         source_checkpoint_path="artifacts/checkpoints/lse/lse_best.pt",
@@ -51,6 +52,7 @@ def test_build_accepted_lse_manifest_binds_qualified_decision() -> None:
     assert manifest["training_started"] is False
     assert manifest["evaluation_started"] is False
     assert manifest["accepted_artifact_generated"] is True
+    assert manifest["selector_signal_layout_hash"] == "selector-hash"
 
 
 def test_build_accepted_lse_manifest_rejects_unqualified_decision() -> None:
@@ -61,6 +63,7 @@ def test_build_accepted_lse_manifest_rejects_unqualified_decision() -> None:
         closure.build_accepted_lse_manifest(
             decision=decision,
             training_receipt=_receipt(),
+            training_summary={"selector_signal_layout_hash": "selector-hash"},
             lse_checkpoint_sha256="lse-sha",
             accepted_checkpoint_path="accepted_refs/lse_best.pt",
             source_checkpoint_path="artifacts/checkpoints/lse/lse_best.pt",
@@ -75,6 +78,7 @@ def test_build_accepted_lse_manifest_rejects_checkpoint_sha_mismatch() -> None:
         closure.build_accepted_lse_manifest(
             decision=_decision(),
             training_receipt=_receipt(),
+            training_summary={"selector_signal_layout_hash": "selector-hash"},
             lse_checkpoint_sha256="wrong",
             accepted_checkpoint_path="accepted_refs/lse_best.pt",
             source_checkpoint_path="artifacts/checkpoints/lse/lse_best.pt",
@@ -82,3 +86,18 @@ def test_build_accepted_lse_manifest_rejects_checkpoint_sha_mismatch() -> None:
         )
 
     assert exc.value.code == "B2_LSE_ACCEPTED_CLOSURE_CHECKPOINT_MISMATCH"
+
+
+def test_build_accepted_lse_manifest_rejects_missing_selector_identity() -> None:
+    with pytest.raises(closure.B2LSEAcceptedClosureError) as exc:
+        closure.build_accepted_lse_manifest(
+            decision=_decision(),
+            training_receipt=_receipt(),
+            training_summary={},
+            lse_checkpoint_sha256="lse-sha",
+            accepted_checkpoint_path="accepted_refs/lse_best.pt",
+            source_checkpoint_path="artifacts/checkpoints/lse/lse_best.pt",
+            closure_git_sha="closure-git",
+        )
+
+    assert exc.value.code == "B2_LSE_ACCEPTED_CLOSURE_SELECTOR_IDENTITY_MISSING"
