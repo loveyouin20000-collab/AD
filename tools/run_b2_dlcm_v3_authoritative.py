@@ -202,6 +202,8 @@ def main() -> int:
                     "gt_signed": float(result["gt_signed"]),
                     "eligible": bool(result["eligible"]),
                     "per_category_gt_kl": dict(result["per_category_gt_kl"]),
+                    "calibration_primary": float(result["worst_category_kl"]),
+                    "calibration_secondary": float(result["macro_kl"]),
                     "best_model_state_identity": result["model_state_scientific_sha256"],
                     "seed_scientific_sha256": seed_scientific,
                     "file_sha256": training.sha256_file(best_pt),
@@ -236,6 +238,8 @@ def main() -> int:
                     "gt_signed": float(man["gt_signed"]),
                     "eligible": bool(man["eligible"]),
                     "per_category_gt_kl": dict(man["per_category_gt_kl"]),
+                    "calibration_primary": float(man["worst_category_kl"]),
+                    "calibration_secondary": float(man["macro_kl"]),
                     "best_model_state_identity": man["model_state_scientific_sha256"],
                     "seed_scientific_sha256": man["seed_scientific_sha256"],
                     "file_sha256": training.sha256_file(
