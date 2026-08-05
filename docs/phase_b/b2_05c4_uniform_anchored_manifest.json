@@ -1,0 +1,64 @@
+{
+  "artifact_identities": {
+    "authoritative_run_summary_file_sha256": "136c83da259a89d31fd3400ea80fabff7daa688616fbae087a6be07b9cb6dd0b",
+    "auxiliary_diagnostics_file_sha256": "ddbbdaf8c927d9aa1c91018814d16c08a1f552e988538c7738c4c1eff78362a5",
+    "calibration_a_file_sha256": "36f32fae06e6a66bac11f080f45a7a53f9e5933053fc1f913e80e89bbb53c8ea",
+    "calibration_b_file_sha256": "5cbd786f895033cb42f5d4f4a19427364ca15085e161918a6249c7a071b15917",
+    "calibration_selection_file_sha256": "3e786db33b74bb81d77edbd6604325b9be5c6a0e50257a5e0a0d56d412d2d407",
+    "development_evaluation_file_sha256": "3990c9cc8974773e320479733305f5d2e78db4a84dcace6b3c798b5821a2b165",
+    "environment_contract_file_sha256": "31141df74c1dc8e3d3963dc4f7ccc91714fc903dae7097b0edbcaeb4804641a0",
+    "final_roster_adoption_file_sha256": "b02dba8a935795cb5c1a4aea12d5ad80b80d6deb03b099ae20e82b28fbdecb00",
+    "final_roster_file_sha256": "68ca5f98a51d7d1518f5fafd3cbf56e0562e5eeb7855c4fa2e407b2b064a898b"
+  },
+  "final_materialization_attempt": {
+    "context": "materialize_v5_c4a",
+    "error_code": "B2_DLCM_FINAL_CONTENT_ACCESS_FORBIDDEN",
+    "exit_code": 2,
+    "success_receipt_written": false,
+    "tool": "tools/materialize_b2_dlcm_final_v5.py",
+    "unlock_consumed": false
+  },
+  "forbidden_actions_observed": {
+    "accepted_manifest_created": false,
+    "early_exit_started": false,
+    "git_push": false,
+    "github_pr": false,
+    "lse_started": false,
+    "remote_tag": false,
+    "residual_gain_started": false,
+    "retune_or_retrain": false
+  },
+  "git_audit_before_evidence_commit": {
+    "accepted_manifest_paths": [],
+    "final_decision_manifest_paths": [],
+    "raw_run_tracked": false,
+    "tracked_pt_count": 0,
+    "tracked_pt_paths": []
+  },
+  "preconditions_verified": {
+    "accepted_v5_calibration_plan_sha256": "ee0a9cdddadd68084a0e9383b353dcdcdddc366cb9efd0db0c3623df2fb79a97",
+    "adopted_final_roster_identity": "267b7b527f13f84f76f69576d01b1532005d0bb7eda792d558ce5dcce1278213",
+    "adopted_roster_identity_unchanged": true,
+    "auxiliary_diagnostics_valid": true,
+    "beta_star_decimal": "0.54",
+    "calibration_ab_equal": true,
+    "development_gates_passed": true,
+    "development_verdict": "development_qualified",
+    "eligible_beta_count": 100,
+    "final_content_unresolved": true,
+    "head_commit_before_evidence": "e8e9daf2a954b187ebe5acc412c99220e17bd5c2",
+    "no_accepted_manifest_before_evidence": true,
+    "v5_contract_commit": "017a76c7586107dd83db46959ab74a7057b585c4",
+    "v5_contract_tag": "b2-dlcm-uniform-anchored-contract-v5",
+    "v5_deployment_identity": "c56248c9ff6021fc16cf4792d87afeebf1bb8f6d45859f7c26017830dcf0e0bd",
+    "worktree_clean_before_evidence": false
+  },
+  "reason": "Final materialization/evaluation runner is still fail-closed and refuses Final content access before a valid materialization unlock; no Final artifacts or accepted manifest were produced.",
+  "schema_version": "b2_05c4_uniform_anchored_final_evidence_v1",
+  "status": "B2-05C4 stopped fail-closed",
+  "terminal_state": [
+    "B2-05C4 stopped fail-closed",
+    "not pushed",
+    "LSE not started"
+  ]
+}
