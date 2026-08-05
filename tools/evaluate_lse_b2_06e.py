@@ -218,7 +218,7 @@ def main() -> int:
     }
     _write_json(output_dir / "lse_evaluation_report.json", report)
     _write_json(output_dir / "lse_qualification_decision_manifest.json", decision)
-    print(json.dumps(report, indent=2, sort_keys=True))
+    print(json.dumps(qual.json_ready(report), indent=2, sort_keys=True))
     return 0
 
 
