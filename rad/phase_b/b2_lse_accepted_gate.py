@@ -8,7 +8,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, NoReturn
 
-import yaml  # type: ignore[import-untyped]
+import yaml
 
 
 class B2LSEAcceptedGateError(RuntimeError):

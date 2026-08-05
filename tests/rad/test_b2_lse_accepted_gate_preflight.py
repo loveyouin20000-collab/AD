@@ -6,7 +6,7 @@ import json
 from pathlib import Path
 
 import pytest
-import yaml  # type: ignore[import-untyped]
+import yaml
 
 from rad.phase_b import b2_lse_accepted_gate as gate
 
