@@ -1,0 +1,100 @@
+{
+  "schema_version": "b2_06d_lse_first_controlled_run_evidence_v1",
+  "status": "b2_06d_first_controlled_lse_training_completed",
+  "worktree": "/root/autodl-tmp/AD-phase-b2-06d-lse-training-unlock",
+  "branch": "phase-b2-06d-lse-training-unlock",
+  "training_git_sha": "df60fd81d33d5186b963e3155d55c9dce3b8fbde",
+  "unlock": {
+    "path": "docs/phase_b/b2_06d_lse_training_unlock.json",
+    "unlock_identity": "54295df82e953070a0d4f02d7526da645e6c418d638b5a2ab248b11133b19c99",
+    "config_sha256": "81d6ea9887226c06c69539de97c89ea27f93af58d0cd55c655e843b5c6ad03e3"
+  },
+  "accepted_gate": {
+    "accepted_gate_passed": true,
+    "ready": true,
+    "missing_prerequisites": [],
+    "training_started_before_unlock": false,
+    "accepted_identity": "0c1a411317f212e5deb29040d184d57aead8a6f862fe3146937db99d1f365116",
+    "v5_deployment_identity": "c56248c9ff6021fc16cf4792d87afeebf1bb8f6d45859f7c26017830dcf0e0bd",
+    "H_decision": "6fb60a82d01f987930070aeee75639524512ad481064369b2f06ac99f96ae0a8",
+    "H_evidence": "bbc3708a8ddcd3b2965ec9e758af1a7bf30a360cdbbc5ff86be911cfbe872e02"
+  },
+  "run": {
+    "output_dir": "artifacts/checkpoints/lse/b2_06d_first_controlled_run",
+    "seed": 111,
+    "epochs_configured": 30,
+    "patience": 10,
+    "epochs_ran": 30,
+    "train_rows": 32,
+    "calibration_rows": 16,
+    "best_cal_nll": 0.4768362585455179,
+    "best_epoch": 22,
+    "selector_mask_mode": "train_and_infer",
+    "selector_signal_layout_hash": "4de9843b92f4373448916bdc46e761c9e460dcb919948741d9e8cbb9e82dd0c6"
+  },
+  "artifacts": {
+    "best_checkpoint": {
+      "path": "artifacts/checkpoints/lse/b2_06d_first_controlled_run/lse_best.pt",
+      "sha256": "e6e5a4dbd7471ef9e52430eab9533f8edda57ca76ead2ffbed034044805b1c98",
+      "tracked": false
+    },
+    "summary": {
+      "path": "artifacts/checkpoints/lse/b2_06d_first_controlled_run/summary.json",
+      "sha256": "8177bf1e6f94c7490bfc98c38c6f0bf8394c35f0886e915b37de15c65a064313"
+    },
+    "history": {
+      "path": "artifacts/checkpoints/lse/b2_06d_first_controlled_run/history.json",
+      "sha256": "f0206189e2308c87e56ee6ccb98fcdc0224a9779e7b981d2d46a464186ecb680"
+    },
+    "cal_metrics": {
+      "path": "artifacts/checkpoints/lse/b2_06d_first_controlled_run/cal_metrics.json",
+      "sha256": "f78a7312ae82d87341d83766db491dd8a2e528928757965499648077c8d13db2"
+    },
+    "cal_predictions": {
+      "path": "artifacts/checkpoints/lse/b2_06d_first_controlled_run/cal_predictions.jsonl",
+      "sha256": "8fab0205f9c22f70c72ce86755fb5f9cb29c3edb86c619fd093c52b1b1061a8f"
+    },
+    "training_receipt": {
+      "path": "artifacts/checkpoints/lse/b2_06d_first_controlled_run/b2_06d_lse_training_receipt.json",
+      "sha256": "07aa2f2ddffc31dab2c242cbba1b233e0acd430f8f0b4cacf81d716ebfbc9634",
+      "receipt_identity": "d4f569ddd79f72f84c36903abc77b91c1b48a5bafc9dd10b206a830af17b2346"
+    }
+  },
+  "calibration_metrics_at_best": {
+    "12": {
+      "mae": 0.4048725925385952,
+      "rmse": 0.5041921386533236,
+      "auroc": "NaN",
+      "brier": 0.03221412755399544,
+      "ece": 0.17947600036859512,
+      "nll": 0.7660192847251892,
+      "n": 8
+    },
+    "18": {
+      "mae": 0.20543629676103592,
+      "rmse": 0.2283385445394299,
+      "auroc": "NaN",
+      "brier": 0.024174126336846347,
+      "ece": 0.15546763315796852,
+      "nll": 0.18765321373939514,
+      "n": 8
+    },
+    "nll": 0.4768362585455179
+  },
+  "boundaries": {
+    "accepted_v5_artifact_changed": false,
+    "final_decision_changed": false,
+    "final_content_accessed": false,
+    "lse_training_started": true,
+    "lse_checkpoint_generated": true,
+    "lse_checkpoint_tracked": false,
+    "push": false,
+    "pr": false
+  },
+  "post_run_single_use_check": {
+    "command": "tools/train_lse.py --config configs/rad/lse_b2_accepted_v5.yaml --dry-run --device cuda:0",
+    "exit_code": 1,
+    "fail_closed_code": "B2_LSE_TRAINING_UNLOCK_ALREADY_CONSUMED",
+    "reason": "training receipt already exists"
+  }
+}
