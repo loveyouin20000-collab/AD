@@ -450,6 +450,43 @@ def total_dlcm_v2_loss(
     return total, {"depths": depth_parts, "depth_weights": dict(depth_weights)}
 
 
+def model_state_scientific_sha256(model: nn.Module) -> str:
+    return v1.model_state_scientific_sha256(model)
+
+
+def move_model_to_device_and_verify(model: B2DLCMV2, device: torch.device) -> B2DLCMV2:
+    """Move synchronously to CUDA and require bit-exact CPU round-trip identity."""
+
+    if device.type != "cuda":
+        _fail("B2_DLCM_V2_CONTRACT_MISMATCH", "canonical move verification requires CUDA")
+    before = model_state_scientific_sha256(model)
+    model.to(device)
+    torch.cuda.synchronize(device)
+    cpu_clone = B2DLCMV2(
+        seed=None,
+        candidate_layers=model.candidate_layers,
+        prediction_depths=model.prediction_depths,
+        descriptor_dimension=model.descriptor_dimension,
+        layer_embedding_dimension=model.layer_embedding_dimension,
+        depth_embedding_dimension=model.depth_embedding_dimension,
+        hidden_dimension=model.hidden_dimension,
+        dropout_probability=model.dropout_probability,
+        initialize=False,
+    )
+    cpu_clone.load_state_dict(
+        {k: v.detach().cpu() for k, v in model.state_dict().items()},
+        strict=True,
+    )
+    cpu_clone.component_seeds = dict(model.component_seeds)
+    cpu_clone.dropout_site_seeds = dict(model.dropout_site_seeds)
+    cpu_clone._reset_dropout_generators(device="cpu")
+    after = model_state_scientific_sha256(cpu_clone)
+    if after != before:
+        _fail("B2_DLCM_V2_CONTRACT_MISMATCH", "CPU→GPU parameter identity mismatch")
+    model._reset_dropout_generators(device=device)
+    return model
+
+
 def probe_gradient_isolation(
     model: B2DLCMV2,
     *,
