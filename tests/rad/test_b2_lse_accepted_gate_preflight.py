@@ -6,7 +6,7 @@ import json
 from pathlib import Path
 
 import pytest
-import yaml
+import yaml  # type: ignore[import-untyped]
 
 from rad.phase_b import b2_lse_accepted_gate as gate
 
@@ -76,9 +76,8 @@ def _write_json(path: Path, payload: dict[str, object]) -> None:
 
 
 def _config(tmp_path: Path, **overrides: object) -> Path:
-    payload: dict[str, object] = {
-        "lse": {
-            "accepted_manifest": str(tmp_path / "accepted_deployment_manifest.json"),
+    lse: dict[str, object] = {
+        "accepted_manifest": str(tmp_path / "accepted_deployment_manifest.json"),
             "final_decision_manifest": str(tmp_path / "final_decision_manifest.json"),
             "final_evidence_manifest": str(tmp_path / "final_evidence_manifest.json"),
             "expected_accepted_identity": ACCEPTED,
@@ -91,9 +90,9 @@ def _config(tmp_path: Path, **overrides: object) -> Path:
             "train_cache": str(tmp_path / "cache" / "train"),
             "calibration_cache": str(tmp_path / "cache" / "calibration"),
             "descriptor_stats": str(tmp_path / "stats" / "mvtec_seed111.json"),
-        },
     }
-    payload["lse"].update(overrides)  # type: ignore[index, union-attr]
+    lse.update(overrides)
+    payload: dict[str, object] = {"lse": lse}
     path = tmp_path / "lse_b2.yaml"
     path.write_text(yaml.safe_dump(payload), encoding="utf-8")
     return path

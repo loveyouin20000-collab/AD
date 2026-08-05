@@ -1,0 +1,65 @@
+seed: 111
+device: cuda:0
+image_size: 518
+backbone:
+  depth: 24
+  candidate_layers: [6, 12, 18, 24]
+data:
+  dataset: mvtec
+  data_path: data/mvtec
+  split_manifest: artifacts/splits/mvtec_seed111.jsonl
+teacher:
+  checkpoint_path: weight/train_on_mvtec/CLIP.pth
+  backbone: "ViT-L/14@336px"
+cache:
+  schema_version: 1
+  shard_size: 16
+fusion:
+  train_cache: artifacts/cache/mvtec_teacher/train
+  calibration_cache: artifacts/cache/mvtec_teacher/calibration
+  shapley_targets: artifacts/targets/shapley/mvtec_train.pt
+  descriptor_stats: artifacts/stats/mvtec_seed111.json
+  train_depths: [12, 18, 24]
+  output_dir: artifacts/checkpoints/fusion
+lse:
+  accepted_manifest: /root/autodl-tmp/AD-phase-b2-dlcm-v5-final-execution/artifacts/phase_b/b2_dlcm_v5_final_evaluation/final-evaluation-20260805-155023/accepted_deployment_manifest.json
+  final_decision_manifest: /root/autodl-tmp/AD-phase-b2-dlcm-v5-final-execution/artifacts/phase_b/b2_dlcm_v5_final_evaluation/final-evaluation-20260805-155023/final_decision_manifest.json
+  final_evidence_manifest: /root/autodl-tmp/AD-phase-b2-dlcm-v5-final-execution/artifacts/phase_b/b2_dlcm_v5_final_evaluation/final-evaluation-20260805-155023/final_evidence_manifest.json
+  expected_accepted_identity: 0c1a411317f212e5deb29040d184d57aead8a6f862fe3146937db99d1f365116
+  expected_v5_deployment_identity: c56248c9ff6021fc16cf4792d87afeebf1bb8f6d45859f7c26017830dcf0e0bd
+  expected_H_decision: 6fb60a82d01f987930070aeee75639524512ad481064369b2f06ac99f96ae0a8
+  expected_H_evidence: bbc3708a8ddcd3b2965ec9e758af1a7bf30a360cdbbc5ff86be911cfbe872e02
+  expected_beta_star_decimal: "0.54"
+  expected_calibration_ab_identity: cae406c91ec392ffd7cc6d48ec2f0c94ab78d78f905cbfe904287842a7a7278a
+  accepted_reference_root: /root/autodl-tmp/AD-phase-b2-dlcm-v5-final-execution/artifacts/phase_b/b2_dlcm_v5_final_evaluation/final-evaluation-20260805-155023/accepted_refs
+  dlcm_checkpoint: /root/autodl-tmp/AD-phase-b2-dlcm-v5-final-execution/artifacts/phase_b/b2_dlcm_v5_final_evaluation/final-evaluation-20260805-155023/accepted_refs/canonical_deployment_candidate_v5.pt
+  train_cache: artifacts/cache/mvtec_teacher/train
+  calibration_cache: artifacts/cache/mvtec_teacher/calibration
+  descriptor_stats: artifacts/stats/mvtec_seed111.json
+  train_gain_targets: artifacts/targets/gain/mvtec_train.pt
+  calibration_gain_targets: artifacts/targets/gain/mvtec_calibration.pt
+  train_depths: [12, 18, 24]
+  early_depths: [12, 18]
+  full_depth: 24
+  epsilon_gain: 0.05
+  epsilon_absolute: 0.5
+  state_dim: 26
+  sufficiency_weight: 0.5
+  lr: 0.001
+  batch_size: 32
+  epochs: 30
+  patience: 10
+  output_dir: artifacts/targets/gain
+  train_output_dir: artifacts/checkpoints/lse
+selector:
+  mask_mode: train_and_infer
+  signals:
+    response: true
+    uncertainty: true
+    stability: true
+    complementarity: true
+    token_separation: true
+zero_shot:
+  source_dataset: mvtec
+  target_datasets: [visa]
+  target_tuning: false
