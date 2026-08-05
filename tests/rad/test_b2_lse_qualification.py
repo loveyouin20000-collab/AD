@@ -89,3 +89,11 @@ def test_qualify_lse_rejects_nll_above_threshold() -> None:
         )
 
     assert exc.value.code == "B2_LSE_QUALIFICATION_THRESHOLD_FAILED"
+
+
+def test_json_ready_converts_mixed_depth_keys_to_strings() -> None:
+    payload = {"metrics": {12: {"n": 8}, "nll": 0.4}}
+
+    converted = qual.json_ready(payload)
+
+    assert converted == {"metrics": {"12": {"n": 8}, "nll": 0.4}}

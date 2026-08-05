@@ -46,6 +46,16 @@ def load_json(path: Path | str) -> dict[str, Any]:
     return payload
 
 
+def json_ready(value: Any) -> Any:
+    if isinstance(value, Mapping):
+        return {str(key): json_ready(item) for key, item in value.items()}
+    if isinstance(value, list):
+        return [json_ready(item) for item in value]
+    if isinstance(value, tuple):
+        return [json_ready(item) for item in value]
+    return value
+
+
 def _require_equal(actual: Any, expected: Any, *, key: str) -> None:
     if actual != expected:
         _fail("B2_LSE_QUALIFICATION_IDENTITY_MISMATCH", f"{key} mismatch")
