@@ -67,5 +67,6 @@
     "descriptor_sample_coverage_sha256": "27d064db21b5c699503be32e414d579bd1aa7158f1d9b141de26555fc79bc6df",
     "descriptor_normalization_scientific_sha256": "f77975a94acf87a14b0753aabc9aad6777943ee4e4958b0a2083701cf4528594",
     "descriptor_normalization_training_coverage_sha256": "e940f46bf696d326f8b982f15b8639f81e4548ec31a9b09634729811337e4c90"
-  }
+  },
+  "expected_accepted_v5_calibration_plan_sha256": "ee0a9cdddadd68084a0e9383b353dcdcdddc366cb9efd0db0c3623df2fb79a97"
 }
