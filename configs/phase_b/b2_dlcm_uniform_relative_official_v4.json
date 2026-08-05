@@ -102,5 +102,6 @@
   "relative_regret_mode": "batch_matched_model_minus_uniform",
   "subtract_gate_slack": false,
   "clamp_negative_regret": false,
-  "absolute_regret": false
+  "absolute_regret": false,
+  "expected_accepted_v4_training_plan_sha256": "4979c73a28e0aaffd21f2c6408bb37e90fdc64201bcc326f990543fbbee5650f"
 }

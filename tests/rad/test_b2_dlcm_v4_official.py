@@ -68,3 +68,27 @@ def test_load_frozen_roster_and_adoption() -> None:
     assert adoption["selection_reused_without_change"] is True
     assert adoption["final_content_resolved"] is False
     assert adoption["implementation_commit"] == official.V4_IMPLEMENTATION_COMMIT
+
+
+def test_pinned_plan_sha_in_config() -> None:
+    cfg = json.loads(
+        (REPO / "configs/phase_b/b2_dlcm_uniform_relative_official_v4.json").read_text(
+            encoding="utf-8"
+        )
+    )
+    pinned = cfg.get("expected_accepted_v4_training_plan_sha256")
+    assert isinstance(pinned, str) and len(pinned) == 64
+    assert pinned == "4979c73a28e0aaffd21f2c6408bb37e90fdc64201bcc326f990543fbbee5650f"
+
+
+def test_require_plan_sha_rejects_wrong_pin() -> None:
+    with pytest.raises(official.B2DLCMV4OfficialError, match="B2_DLCM_V4_CONTRACT_MISMATCH"):
+        official.require_plan_sha_agreement(
+            config={
+                "expected_accepted_v4_training_plan_sha256": (
+                    "4979c73a28e0aaffd21f2c6408bb37e90fdc64201bcc326f990543fbbee5650f"
+                )
+            },
+            recomputed="0" * 64,
+            cli_expected="4979c73a28e0aaffd21f2c6408bb37e90fdc64201bcc326f990543fbbee5650f",
+        )
