@@ -87,7 +87,7 @@ def _accepted_identities(accepted_reference_evidence: Mapping[str, Any]) -> dict
 
 
 def _as_float_list(value: Any, key: str) -> list[float]:
-    if not isinstance(value, Sequence) or isinstance(value, (str, bytes)):
+    if not isinstance(value, Sequence) or isinstance(value, str | bytes):
         _fail("B4_DLCM_WEIGHT_EVIDENCE_ROW_INVALID", f"{key} must be a sequence")
     out = [float(v) for v in value]
     if not out:
