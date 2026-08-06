@@ -1,0 +1,12 @@
+{
+  "checkpoint_generated": false,
+  "evaluation_started": false,
+  "positive_exit_targets": 0,
+  "reason": "no_positive_exit_targets",
+  "schema_version": "b3_03_exit_policy_training_contract_evidence_v1",
+  "status": "conservative_full_depth_fallback",
+  "tracked_pt_count": 0,
+  "training_contract_identity": "073afd7f5afeddf1f039034b01bd1ddea84deb14b272b7573d603f978fd2f7b9",
+  "training_started": false,
+  "training_unlocked": false
+}

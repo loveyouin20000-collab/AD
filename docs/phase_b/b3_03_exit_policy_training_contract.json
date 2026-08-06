@@ -1,0 +1,28 @@
+{
+  "accepted_dlcm_identity": "0c1a411317f212e5deb29040d184d57aead8a6f862fe3146937db99d1f365116",
+  "accepted_lse_identity": "3dafdde6309599d7e82ca6da07db4efbdb09f16105262351c890c514277f01fa",
+  "b2_phase_final_closure_identity": "2b1e74c13bba260a9f62c4167b322ae067ecce34fc86a92ae66e1a71b0f3073d",
+  "b3_02_materialization_identity": "d77c2cd604c7d3eca4cc9f0649bc8e6ef1b84985a31ec470dd6dd7ef1f43e5b8",
+  "checkpoint_generated": false,
+  "decision": "conservative_full_depth_fallback",
+  "early_depths": [
+    12,
+    18
+  ],
+  "evaluation_started": false,
+  "fallback_depth": 24,
+  "final_content_accessed": false,
+  "git_sha": "68b6ca49f8dc6ee280539bb21a6d295accd4c41e",
+  "positive_exit_targets": 0,
+  "reason": "no_positive_exit_targets",
+  "records": 16,
+  "schema_version": "b3_03_exit_policy_training_contract_v1",
+  "target_exits_by_depth": {
+    "12": 0,
+    "18": 0
+  },
+  "tracked_pt_count": 0,
+  "training_contract_identity": "073afd7f5afeddf1f039034b01bd1ddea84deb14b272b7573d603f978fd2f7b9",
+  "training_started": false,
+  "training_unlocked": false
+}
