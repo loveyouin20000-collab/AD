@@ -1,0 +1,15 @@
+{
+  "candidate_positive_counts_by_depth": {
+    "12": 0,
+    "18": 0
+  },
+  "checkpoint_generated": false,
+  "decision": "no_positive_signal_under_conservative_contract",
+  "evaluation_started": false,
+  "positive_signal_contract_identity": "ef98d0ba9114fd4deb4bccfd98bfacf45a3caddbe0e193e09a31aa8dffd8ab4b",
+  "positive_signal_count": 0,
+  "schema_version": "b3_04_exit_target_positive_signal_contract_evidence_v1",
+  "tracked_pt_count": 0,
+  "training_started": false,
+  "training_unlocked": false
+}

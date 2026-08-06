@@ -1,0 +1,156 @@
+{
+  "accepted_lse_identity": "3dafdde6309599d7e82ca6da07db4efbdb09f16105262351c890c514277f01fa",
+  "b3_02_materialization_identity": "d77c2cd604c7d3eca4cc9f0649bc8e6ef1b84985a31ec470dd6dd7ef1f43e5b8",
+  "candidate_positive_counts_by_depth": {
+    "12": 0,
+    "18": 0
+  },
+  "checkpoint_generated": false,
+  "decision": "no_positive_signal_under_conservative_contract",
+  "early_depths": [
+    12,
+    18
+  ],
+  "evaluation_started": false,
+  "final_content_accessed": false,
+  "full_depth": 24,
+  "max_predicted_remaining_gain": 0.1,
+  "min_predicted_sufficiency_probability": 0.5,
+  "positive_signal_contract_identity": "ef98d0ba9114fd4deb4bccfd98bfacf45a3caddbe0e193e09a31aa8dffd8ab4b",
+  "positive_signal_count": 0,
+  "records": 16,
+  "rows": [
+    {
+      "depth": 12,
+      "latency_savings_proxy": 0.5,
+      "positive_signal": false,
+      "pred_mean": 0.29940763115882874,
+      "pred_suf_prob": 0.1819467544555664,
+      "sample_id": "27132d1f08fb1ac31a64d08865646bb30bc979a0dcd45149b85c1c050d4a7ad4"
+    },
+    {
+      "depth": 18,
+      "latency_savings_proxy": 0.25,
+      "positive_signal": false,
+      "pred_mean": 0.26744866371154785,
+      "pred_suf_prob": 0.1570054292678833,
+      "sample_id": "27132d1f08fb1ac31a64d08865646bb30bc979a0dcd45149b85c1c050d4a7ad4"
+    },
+    {
+      "depth": 12,
+      "latency_savings_proxy": 0.5,
+      "positive_signal": false,
+      "pred_mean": 0.295091837644577,
+      "pred_suf_prob": 0.17879240214824677,
+      "sample_id": "39e5843992fb7946bc422b00a9dd5221a9edb0e89be3d96dd70b46ba0c84e9db"
+    },
+    {
+      "depth": 18,
+      "latency_savings_proxy": 0.25,
+      "positive_signal": false,
+      "pred_mean": 0.2653420865535736,
+      "pred_suf_prob": 0.15599042177200317,
+      "sample_id": "39e5843992fb7946bc422b00a9dd5221a9edb0e89be3d96dd70b46ba0c84e9db"
+    },
+    {
+      "depth": 12,
+      "latency_savings_proxy": 0.5,
+      "positive_signal": false,
+      "pred_mean": 0.2943582534790039,
+      "pred_suf_prob": 0.17834477126598358,
+      "sample_id": "470b6ac9a792158887fa97063a475003b459996806bbbc9a29dac172a63fb75a"
+    },
+    {
+      "depth": 18,
+      "latency_savings_proxy": 0.25,
+      "positive_signal": false,
+      "pred_mean": 0.26369768381118774,
+      "pred_suf_prob": 0.15467379987239838,
+      "sample_id": "470b6ac9a792158887fa97063a475003b459996806bbbc9a29dac172a63fb75a"
+    },
+    {
+      "depth": 12,
+      "latency_savings_proxy": 0.5,
+      "positive_signal": false,
+      "pred_mean": 0.29565662145614624,
+      "pred_suf_prob": 0.1786070466041565,
+      "sample_id": "8f68b6aad99aa55fce3a1cebe2a63ead6f84fec6073c6ab86cc684409c6335a8"
+    },
+    {
+      "depth": 18,
+      "latency_savings_proxy": 0.25,
+      "positive_signal": false,
+      "pred_mean": 0.26474907994270325,
+      "pred_suf_prob": 0.15389642119407654,
+      "sample_id": "8f68b6aad99aa55fce3a1cebe2a63ead6f84fec6073c6ab86cc684409c6335a8"
+    },
+    {
+      "depth": 12,
+      "latency_savings_proxy": 0.5,
+      "positive_signal": false,
+      "pred_mean": 0.29280129075050354,
+      "pred_suf_prob": 0.17792673408985138,
+      "sample_id": "b65ec198775f295af3078c1ba0d082e0c24f4cdde8cd4d8524e48bb3b1a75459"
+    },
+    {
+      "depth": 18,
+      "latency_savings_proxy": 0.25,
+      "positive_signal": false,
+      "pred_mean": 0.2590876519680023,
+      "pred_suf_prob": 0.15469826757907867,
+      "sample_id": "b65ec198775f295af3078c1ba0d082e0c24f4cdde8cd4d8524e48bb3b1a75459"
+    },
+    {
+      "depth": 12,
+      "latency_savings_proxy": 0.5,
+      "positive_signal": false,
+      "pred_mean": 0.2982138395309448,
+      "pred_suf_prob": 0.18143534660339355,
+      "sample_id": "db65fd91e8de32de3d303f678c9a523e94f1109a6a92521c149e93ec629eecff"
+    },
+    {
+      "depth": 18,
+      "latency_savings_proxy": 0.25,
+      "positive_signal": false,
+      "pred_mean": 0.2685256898403168,
+      "pred_suf_prob": 0.15903101861476898,
+      "sample_id": "db65fd91e8de32de3d303f678c9a523e94f1109a6a92521c149e93ec629eecff"
+    },
+    {
+      "depth": 12,
+      "latency_savings_proxy": 0.5,
+      "positive_signal": false,
+      "pred_mean": 0.29799729585647583,
+      "pred_suf_prob": 0.18097080290317535,
+      "sample_id": "e037290913264076779a86b0f8f75b92f190f30563ceefe7b2193590d9d9c933"
+    },
+    {
+      "depth": 18,
+      "latency_savings_proxy": 0.25,
+      "positive_signal": false,
+      "pred_mean": 0.266811341047287,
+      "pred_suf_prob": 0.1563914269208908,
+      "sample_id": "e037290913264076779a86b0f8f75b92f190f30563ceefe7b2193590d9d9c933"
+    },
+    {
+      "depth": 12,
+      "latency_savings_proxy": 0.5,
+      "positive_signal": false,
+      "pred_mean": 0.2945166230201721,
+      "pred_suf_prob": 0.17778414487838745,
+      "sample_id": "e2a2ef9c18627ab5773229786424db9f7159181d6c5098de65cf4aa9e701124a"
+    },
+    {
+      "depth": 18,
+      "latency_savings_proxy": 0.25,
+      "positive_signal": false,
+      "pred_mean": 0.26253753900527954,
+      "pred_suf_prob": 0.15205428004264832,
+      "sample_id": "e2a2ef9c18627ab5773229786424db9f7159181d6c5098de65cf4aa9e701124a"
+    }
+  ],
+  "schema_version": "b3_04_exit_target_positive_signal_contract_v1",
+  "tracked_pt_count": 0,
+  "training_started": false,
+  "training_unlocked": false
+}
