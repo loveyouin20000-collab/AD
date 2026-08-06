@@ -9,8 +9,8 @@ early_exit:
   lse_checkpoint: /root/autodl-tmp/AD-phase-b2-06f-accepted-lse-artifact-closure/artifacts/phase_b/b2_06f_accepted_lse_artifact_v2/accepted_refs/lse_best.pt
   early_depths: [12, 18]
   full_depth: 24
-  exit_target_manifest: artifacts/targets/early_exit/b3_01_exit_targets_manifest.json
-  latency_profile: artifacts/profiles/early_exit/b3_01_latency_profile.json
-  calibration_trace: artifacts/traces/early_exit/b3_01_calibration_trace.jsonl
-  output_dir: artifacts/checkpoints/early_exit/b3_01
+  exit_target_manifest: artifacts/targets/early_exit/b3_02_exit_targets_manifest.json
+  latency_profile: artifacts/profiles/early_exit/b3_02_latency_profile.json
+  calibration_trace: artifacts/traces/early_exit/b3_02_calibration_trace.jsonl
+  output_dir: artifacts/checkpoints/early_exit/b3_02
   dry_run_only: true
