@@ -1,0 +1,2 @@
+mechanism,candidate_depths,fallback_depth,records,positive_exit_targets,positive_signal_count,accepted_as_final_mechanism,paper_interpretation
+early_exit_policy,"[12, 18]",24,16,0,0,false,negative_result_under_conservative_gate
