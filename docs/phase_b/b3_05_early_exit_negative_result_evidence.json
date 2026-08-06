@@ -1,0 +1,22 @@
+{
+  "candidate_positive_counts_by_depth": {
+    "12": 0,
+    "18": 0
+  },
+  "checkpoint_generated": false,
+  "decision": "conservative_full_depth_fallback",
+  "evaluation_started": false,
+  "line_closure_identity": "f281a3bda75d723a45f8942934c7c4d131e3424d63ba65125d7b6d2cb4ad7cb1",
+  "positive_exit_targets": 0,
+  "positive_signal_count": 0,
+  "reason": "no_legal_positive_exit_signal",
+  "schema_version": "b3_05_early_exit_negative_result_evidence_v1",
+  "status": "early_exit_line_closed_negative_result",
+  "target_exits_by_depth": {
+    "12": 0,
+    "18": 0
+  },
+  "tracked_pt_count": 0,
+  "training_started": false,
+  "training_unlocked": false
+}
