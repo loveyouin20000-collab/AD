@@ -131,7 +131,7 @@ def test_official_dry_run_no_writes(tmp_path: Path) -> None:
     assert len(result["accepted_dlcm_training_plan_scientific_sha256"]) == 64
 
 
-@pytest.mark.skipif(not DESC_B.is_dir() or not CONTRIB_B.is_dir(), reason="run B missing")
+@pytest.mark.skipif(not _is_accessible_dir(DESC_B) or not _is_accessible_dir(CONTRIB_B), reason="run B missing")
 def test_dry_run_a_b_plan_sha_equal() -> None:
     from rad.phase_b import b2_dlcm_training as training
 
