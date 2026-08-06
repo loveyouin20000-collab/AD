@@ -1,0 +1,80 @@
+{
+  "accepted_dlcm_identity": "0c1a411317f212e5deb29040d184d57aead8a6f862fe3146937db99d1f365116",
+  "accepted_v5_checkpoint_sha256": "12b9192643d457eb07745391b68cfa5afe48ec6165b28091bdabde29ec3ece4f",
+  "beta_star_decimal": "0.54",
+  "boundary": {
+    "evaluation_started": false,
+    "final_content_accessed": false,
+    "model_artifact_generated": false,
+    "pr_opened": false,
+    "pushed": false,
+    "tracked_pt_files": 0,
+    "training_started": false
+  },
+  "calibration_records": 8,
+  "candidate_layers": [
+    6,
+    12,
+    18,
+    24
+  ],
+  "category_counts": {
+    "bottle": 4,
+    "carpet": 4
+  },
+  "deployment_weight_summary": {
+    "layer_means": [
+      0.2541907746344805,
+      0.30299320816993713,
+      0.24509595148265362,
+      0.1977201197296381
+    ],
+    "layer_stds": [
+      0.04115799713475293,
+      0.049581725873028955,
+      0.03284324573504816,
+      0.03041907663531247
+    ],
+    "max_layer_std": 0.049581725873028955,
+    "max_sample_linf_delta_from_uniform": 0.15734508633613586,
+    "mean_entropy": 1.3632581175433807,
+    "mean_layer_std": 0.03850051134453563,
+    "mean_sample_l1_delta_from_uniform": 0.16854358278214931,
+    "mean_sample_linf_delta_from_uniform": 0.06814451888203621,
+    "rows_non_uniform_at_tolerance": 8,
+    "uniform_entropy": 1.3862943611198906
+  },
+  "dynamic_weight_summary": {
+    "layer_means": [
+      0.2577606812119484,
+      0.348135557025671,
+      0.24091841839253902,
+      0.15318538807332516
+    ],
+    "layer_stds": [
+      0.07621850645265565,
+      0.09181800363318886,
+      0.06082082869810331,
+      0.05633162059739318
+    ],
+    "max_layer_std": 0.09181800363318886,
+    "max_sample_linf_delta_from_uniform": 0.29137974977493286,
+    "mean_entropy": 1.3056913236551162,
+    "mean_layer_std": 0.07129723984533526,
+    "mean_sample_l1_delta_from_uniform": 0.3121177479624748,
+    "mean_sample_linf_delta_from_uniform": 0.12619354482740164,
+    "rows_non_uniform_at_tolerance": 8,
+    "uniform_entropy": 1.3862943611198906
+  },
+  "paper_claim": "accepted V5 deployment weights show calibration-split variation across samples",
+  "phase": "B4-01 DLCM Adaptive Weight Evidence Closure",
+  "prediction_depth": 24,
+  "sample_adaptive_variation_observed": true,
+  "schema_version": "b4_01_dlcm_adaptive_weight_evidence_manifest_v1",
+  "split": "calibration",
+  "status": "dlcm_adaptive_weight_evidence_frozen",
+  "uniform_equivalent_at_tolerance": false,
+  "uniform_tolerance": 0.0001,
+  "v5_deployment_identity": "c56248c9ff6021fc16cf4792d87afeebf1bb8f6d45859f7c26017830dcf0e0bd",
+  "weight_evidence_identity": "68bcea45e1fe98ffbee9f9ea51a2b645916b4a623198f787ce8830b1b0f8fe79"
+}
