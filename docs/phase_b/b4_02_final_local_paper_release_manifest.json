@@ -1,0 +1,94 @@
+{
+  "adaptive_weight_summary": {
+    "calibration_records": 8,
+    "deployment_max_sample_linf_delta_from_uniform": 0.15734508633613586,
+    "sample_adaptive_variation_observed": true,
+    "uniform_equivalent_at_tolerance": false
+  },
+  "artifact_hashes": {
+    "accepted_lse_checkpoint_sha256": "e6e5a4dbd7471ef9e52430eab9533f8edda57ca76ead2ffbed034044805b1c98",
+    "accepted_v5_checkpoint_sha256": "12b9192643d457eb07745391b68cfa5afe48ec6165b28091bdabde29ec3ece4f",
+    "selector_signal_layout_hash": "4de9843b92f4373448916bdc46e761c9e460dcb919948741d9e8cbb9e82dd0c6"
+  },
+  "bound_identities": {
+    "accepted_dlcm_identity": "0c1a411317f212e5deb29040d184d57aead8a6f862fe3146937db99d1f365116",
+    "accepted_lse_identity": "3dafdde6309599d7e82ca6da07db4efbdb09f16105262351c890c514277f01fa",
+    "b2_phase_final_closure_identity": "2b1e74c13bba260a9f62c4167b322ae067ecce34fc86a92ae66e1a71b0f3073d",
+    "b3_06_phase_closure_identity": "a984814c1821dbc6c0b2ee49fbf018be0c8b4f2fe226855f6b3e015eb89e05be",
+    "b4_01_weight_evidence_identity": "68bcea45e1fe98ffbee9f9ea51a2b645916b4a623198f787ce8830b1b0f8fe79",
+    "v5_deployment_identity": "c56248c9ff6021fc16cf4792d87afeebf1bb8f6d45859f7c26017830dcf0e0bd"
+  },
+  "boundary": {
+    "evaluation_started_in_release": false,
+    "final_content_accessed_in_release": false,
+    "model_artifact_generated_in_release": false,
+    "pr_opened": false,
+    "pushed": false,
+    "tracked_pt_files": 0,
+    "training_started_in_release": false
+  },
+  "evidence_documents": [
+    "docs/phase_b/b2_05a_dlcm_training_architecture.md",
+    "docs/phase_b/b2_05c4_uniform_anchored_dlcm_v5_architecture.md",
+    "docs/phase_b/b2_06a_lse_accepted_gate_preflight_evidence.json",
+    "docs/phase_b/b2_06b_accepted_v5_reference_packaging_evidence.json",
+    "docs/phase_b/b2_06c_lse_prerequisite_materialization_evidence.json",
+    "docs/phase_b/b2_06d_lse_first_controlled_run_evidence.json",
+    "docs/phase_b/b2_06e_lse_qualification_decision_manifest.json",
+    "docs/phase_b/b2_06f_accepted_lse_closure_evidence.json",
+    "docs/phase_b/b2_06f_accepted_lse_manifest.json",
+    "docs/phase_b/b2_07_phase_final_closure_manifest.json",
+    "docs/phase_b/b2_08_evidence_index.md",
+    "docs/phase_b/b2_08_paper_results_summary.md",
+    "docs/phase_b/b3_01_early_exit_contract_architecture.md",
+    "docs/phase_b/b3_01_early_exit_preflight_evidence.json",
+    "docs/phase_b/b3_02_exit_prerequisite_materialization_evidence.json",
+    "docs/phase_b/b3_02_exit_prerequisite_materialization_manifest.json",
+    "docs/phase_b/b3_03_exit_policy_training_contract.json",
+    "docs/phase_b/b3_03_exit_policy_training_contract_evidence.json",
+    "docs/phase_b/b3_04_exit_target_positive_signal_contract.json",
+    "docs/phase_b/b3_04_exit_target_positive_signal_contract_evidence.json",
+    "docs/phase_b/b3_05_early_exit_line_closure_manifest.json",
+    "docs/phase_b/b3_05_early_exit_negative_result_evidence.json",
+    "docs/phase_b/b3_06_early_exit_evidence_index.md",
+    "docs/phase_b/b3_06_early_exit_paper_results_summary.md",
+    "docs/phase_b/b3_06_early_exit_phase_closure_manifest.json",
+    "docs/phase_b/b4_01_dlcm_adaptive_weight_evidence.md",
+    "docs/phase_b/b4_01_dlcm_adaptive_weight_evidence_manifest.json",
+    "docs/phase_b/b4_01_dlcm_adaptive_weight_trace.csv",
+    "docs/phase_b/b4_02_final_local_paper_release_manifest.json",
+    "docs/phase_b/b4_02_final_paper_results_summary.md",
+    "docs/phase_b/b4_02_global_paper_evidence_index.md",
+    "docs/phase_b/b4_02_release_checklist.md"
+  ],
+  "final_release_identity": "296191577c12aa42e2e4dbad3d34deaef67b04bbd34d3d0f52be20b9e1c99b93",
+  "paper_result_rows": [
+    {
+      "claim": "DLCM dynamic layer fusion",
+      "evidence": "B2-08 + B4-01",
+      "status": "accepted"
+    },
+    {
+      "claim": "LSE layer-sufficiency validation",
+      "evidence": "B2-06E/B2-08",
+      "status": "qualified"
+    },
+    {
+      "claim": "Early-exit",
+      "evidence": "B3-06",
+      "status": "negative_result_future_work"
+    }
+  ],
+  "phase": "B4-02 Final Local Paper Release Closure",
+  "primary_claims": {
+    "dlcm_final_accepted": true,
+    "dlcm_sample_adaptive_fusion_supported": true,
+    "early_exit_accepted_mechanism": false,
+    "early_exit_negative_result": true,
+    "full_depth_fallback_retained": true,
+    "lse_qualified": true
+  },
+  "release_decision": "ready_for_push_pr_decision",
+  "schema_version": "b4_02_final_local_paper_release_manifest_v1",
+  "status": "final_local_paper_release_frozen"
+}
