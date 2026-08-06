@@ -17,7 +17,14 @@ _DESC_RUN = Path(
 )
 
 
-@pytest.mark.skipif(not _DESC_RUN.is_dir(), reason="accepted descriptor Run A absent")
+def _is_accessible_dir(path: Path) -> bool:
+    try:
+        return path.is_dir()
+    except OSError:
+        return False
+
+
+@pytest.mark.skipif(not _is_accessible_dir(_DESC_RUN), reason="accepted descriptor Run A absent")
 def test_embed_normalization_accepts_production_axes_stats() -> None:
     cfg = desc.load_descriptor_artifacts_config(
         "configs/phase_b/b2_descriptor_artifacts_gate_c.json"
@@ -46,7 +53,7 @@ def test_embed_normalization_accepts_production_axes_stats() -> None:
     assert bool(torch.isfinite(out).all())
 
 
-@pytest.mark.skipif(not _DESC_RUN.is_dir(), reason="accepted descriptor Run A absent")
+@pytest.mark.skipif(not _is_accessible_dir(_DESC_RUN), reason="accepted descriptor Run A absent")
 def test_export_deployment_checkpoint_with_production_axes_stats() -> None:
     cfg = desc.load_descriptor_artifacts_config(
         "configs/phase_b/b2_descriptor_artifacts_gate_c.json"

@@ -20,8 +20,15 @@ CONTRIB_RUN = Path(
 )
 
 
+def _is_accessible_dir(path: Path) -> bool:
+    try:
+        return path.is_dir()
+    except OSError:
+        return False
+
+
 pytestmark = pytest.mark.skipif(
-    not DESC_RUN.is_dir() or not CONTRIB_RUN.is_dir(),
+    not _is_accessible_dir(DESC_RUN) or not _is_accessible_dir(CONTRIB_RUN),
     reason="accepted upstream artifact runs not present on this host",
 )
 

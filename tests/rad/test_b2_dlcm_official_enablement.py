@@ -29,8 +29,15 @@ REPO = Path(__file__).resolve().parents[2]
 OFFICIAL_CFG = REPO / "configs/phase_b/b2_dlcm_training_official_v1.json"
 
 
+def _is_accessible_dir(path: Path) -> bool:
+    try:
+        return path.is_dir()
+    except OSError:
+        return False
+
+
 pytestmark = pytest.mark.skipif(
-    not DESC_A.is_dir() or not CONTRIB_A.is_dir(),
+    not _is_accessible_dir(DESC_A) or not _is_accessible_dir(CONTRIB_A),
     reason="accepted upstream runs missing",
 )
 
