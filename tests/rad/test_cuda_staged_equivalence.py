@@ -52,6 +52,8 @@ def cuda_device() -> torch.device:
 
 @pytest.fixture(scope="module")
 def accepted_checkpoint() -> Path:
+    if not B1_ACCEPTED_CHECKPOINT.is_file():
+        pytest.skip(f"B1 accepted checkpoint unavailable: {B1_ACCEPTED_CHECKPOINT}")
     return validate_checkpoint(B1_ACCEPTED_CHECKPOINT, B1_ACCEPTED_CHECKPOINT_SHA256)
 
 

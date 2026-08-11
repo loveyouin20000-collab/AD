@@ -39,6 +39,12 @@ EXPECTED_PROFILE_SHA256 = (
 )
 MVTEC_ROOT = Path("/root/autodl-tmp/data/mvtec")
 CUDA_REQUIRED = not torch.cuda.is_available()
+PRODUCTION_PARITY_READY = (
+    not CUDA_REQUIRED
+    and OFFICIAL_SPLIT.is_file()
+    and OFFICIAL_CHECKPOINT.is_file()
+    and MVTEC_ROOT.is_dir()
+)
 
 
 def _tensor_record() -> dict[str, Any]:
@@ -482,7 +488,10 @@ raise SystemExit(module['main'](sys.argv[3:]))
     assert "B2_CACHE_SPLIT_HASH_MISMATCH" in proc.stdout + proc.stderr
 
 
-@pytest.mark.skipif(CUDA_REQUIRED, reason="CUDA required for live production parity")
+@pytest.mark.skipif(
+    not PRODUCTION_PARITY_READY,
+    reason="CUDA, MVTec, accepted checkpoint, and accepted split manifest required",
+)
 def test_live_vs_persisted_descriptor_parity_one_normal_one_anomalous(
     tmp_path: Path,
 ) -> None:
