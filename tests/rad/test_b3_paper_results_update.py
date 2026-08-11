@@ -82,6 +82,7 @@ def _b4_weight() -> dict[str, object]:
         "accepted_dlcm_identity": ACCEPTED_DLCM,
         "v5_deployment_identity": V5_DEPLOYMENT,
         "weight_evidence_identity": B4_WEIGHT,
+        "beta_star_decimal": "0.54",
         "calibration_records": 8,
         "sample_adaptive_variation_observed": True,
         "uniform_equivalent_at_tolerance": False,
