@@ -1,0 +1,163 @@
+{
+  "counts": {
+    "bottle_anomalous": 4,
+    "bottle_normal": 4,
+    "carpet_anomalous": 4,
+    "carpet_normal": 4,
+    "overlap": 0,
+    "total": 16
+  },
+  "development_evaluation_status": "used_for_B2_05B_qualification_and_postmortem",
+  "exclusion_count": 32,
+  "exclusion_stable_sample_ids_sha256": "0eade1ff18bfd2a03caa14d395d5edd60a19edc6ac1b0998007933070568e100",
+  "final_content_resolved": false,
+  "implementation_commit": "e5434c1aafb9d1a3dd75408ff09163e2c581f081",
+  "paths_present": false,
+  "records": [
+    {
+      "category": "bottle",
+      "normal_or_anomalous": "normal",
+      "selection_rank": 1,
+      "source_manifest_scientific_sha256": "335337d43dccea9e368393d2616972ad2217e490b91468d11a7e7f04fd688ee4",
+      "source_record_scientific_sha256": "3fe1499f37e3dc2ce0857f441585fa670830413ffd980f2088409fbdc4e4434f",
+      "stable_sample_id": "23245468dff0e10ec8d6aa5bea9a6177319b63e53a622e3741ae625792fc1f32"
+    },
+    {
+      "category": "bottle",
+      "normal_or_anomalous": "normal",
+      "selection_rank": 2,
+      "source_manifest_scientific_sha256": "335337d43dccea9e368393d2616972ad2217e490b91468d11a7e7f04fd688ee4",
+      "source_record_scientific_sha256": "a5107063c4647424650e5b4d49f71263d508e0e8c403ec02bc8a26358016b9e0",
+      "stable_sample_id": "2cc13d4f8f7b875ae87baebb6438b233da404481474fadb5265e041b46b46d2e"
+    },
+    {
+      "category": "bottle",
+      "normal_or_anomalous": "normal",
+      "selection_rank": 3,
+      "source_manifest_scientific_sha256": "335337d43dccea9e368393d2616972ad2217e490b91468d11a7e7f04fd688ee4",
+      "source_record_scientific_sha256": "657974dcf955ec606c32fa499a0e5e44d444411067a06fcd4e5b446ffdd51664",
+      "stable_sample_id": "426e2b81fee3aeec72490112c8b703ee3074fe84f3b1207091a128c2ef0fb149"
+    },
+    {
+      "category": "bottle",
+      "normal_or_anomalous": "normal",
+      "selection_rank": 4,
+      "source_manifest_scientific_sha256": "335337d43dccea9e368393d2616972ad2217e490b91468d11a7e7f04fd688ee4",
+      "source_record_scientific_sha256": "e5c462ddba859fa87be392af18bf53eed0fe50cdae82eda61d628b05c7f301ca",
+      "stable_sample_id": "527682a5358badc13adbe476edcd9947eee07505ad63000ddfbe5abf83ab2b71"
+    },
+    {
+      "category": "bottle",
+      "normal_or_anomalous": "anomalous",
+      "selection_rank": 1,
+      "source_manifest_scientific_sha256": "335337d43dccea9e368393d2616972ad2217e490b91468d11a7e7f04fd688ee4",
+      "source_record_scientific_sha256": "a953a6be3a81f18f2f7c5c597790ee5c66e359e25b8a7fe0eeb0c97a1c29726a",
+      "stable_sample_id": "031e195b9091e496eaa2255398adfa7d200cbf057afd97120eecf3b9adfac823"
+    },
+    {
+      "category": "bottle",
+      "normal_or_anomalous": "anomalous",
+      "selection_rank": 2,
+      "source_manifest_scientific_sha256": "335337d43dccea9e368393d2616972ad2217e490b91468d11a7e7f04fd688ee4",
+      "source_record_scientific_sha256": "831729a67c031053af67eb183985b0cc977152634323674eedc1d10fee1c564d",
+      "stable_sample_id": "0d00733cd9070c1dceb5c98bc6c6da206041d40821e29135307aafd841e60946"
+    },
+    {
+      "category": "bottle",
+      "normal_or_anomalous": "anomalous",
+      "selection_rank": 3,
+      "source_manifest_scientific_sha256": "335337d43dccea9e368393d2616972ad2217e490b91468d11a7e7f04fd688ee4",
+      "source_record_scientific_sha256": "9934158bc0a89f2e9504c577be0f2032b4460352c3b774417dcba93dab234060",
+      "stable_sample_id": "13a6cdd98517d32c51447862199bdd0e1342b7eded879b447b2f0e995be070b8"
+    },
+    {
+      "category": "bottle",
+      "normal_or_anomalous": "anomalous",
+      "selection_rank": 4,
+      "source_manifest_scientific_sha256": "335337d43dccea9e368393d2616972ad2217e490b91468d11a7e7f04fd688ee4",
+      "source_record_scientific_sha256": "70d8ac648788cc51bc0da262be3d44f064fcd45039f76259e3c8dfd00e0b059b",
+      "stable_sample_id": "14cbc46bdacddae2b0c196d61072155abb8d70b4269b96b625bdc9c7c3608af9"
+    },
+    {
+      "category": "carpet",
+      "normal_or_anomalous": "normal",
+      "selection_rank": 1,
+      "source_manifest_scientific_sha256": "335337d43dccea9e368393d2616972ad2217e490b91468d11a7e7f04fd688ee4",
+      "source_record_scientific_sha256": "075eb86f80da139615b80f376ab778881bcd4b5fa321c6a8ba920a23273bb7a8",
+      "stable_sample_id": "02c18a9b64ffc71283b5aacd434dd45b76a6e7885298231b4b4139349e2e393b"
+    },
+    {
+      "category": "carpet",
+      "normal_or_anomalous": "normal",
+      "selection_rank": 2,
+      "source_manifest_scientific_sha256": "335337d43dccea9e368393d2616972ad2217e490b91468d11a7e7f04fd688ee4",
+      "source_record_scientific_sha256": "9e217e8607f7c584397a4f52a6a0e7233d880f6124d309e26b7a1d42dc3f9c51",
+      "stable_sample_id": "0e077d1af73a713054de7bb759c0e43f9648d4399896e90ab97a9e6a658e7a7f"
+    },
+    {
+      "category": "carpet",
+      "normal_or_anomalous": "normal",
+      "selection_rank": 3,
+      "source_manifest_scientific_sha256": "335337d43dccea9e368393d2616972ad2217e490b91468d11a7e7f04fd688ee4",
+      "source_record_scientific_sha256": "13f9682d56843a9b9f704999bba5161e9ef603ab84d6f24144bed6a4f617ede8",
+      "stable_sample_id": "28328f847379d65c969168f5e73af3af42f02314243613adbc744df9dfedc5b6"
+    },
+    {
+      "category": "carpet",
+      "normal_or_anomalous": "normal",
+      "selection_rank": 4,
+      "source_manifest_scientific_sha256": "335337d43dccea9e368393d2616972ad2217e490b91468d11a7e7f04fd688ee4",
+      "source_record_scientific_sha256": "9194561c94e81539f30de9851d35ba2108574e076eb031bbf4eba284e3974e39",
+      "stable_sample_id": "2e43addc3fe0251bf3afb2efb34850f02d85df27957da9ac186cbb03efbe0879"
+    },
+    {
+      "category": "carpet",
+      "normal_or_anomalous": "anomalous",
+      "selection_rank": 1,
+      "source_manifest_scientific_sha256": "335337d43dccea9e368393d2616972ad2217e490b91468d11a7e7f04fd688ee4",
+      "source_record_scientific_sha256": "cd20357db62ec7c818b719b0b9135c4185937ff750028545c34f7708e759c5fb",
+      "stable_sample_id": "0db4932d67c335f7d3abf0f5f19397d12b6f39b38fddded8e67f1bfeb2e498ad"
+    },
+    {
+      "category": "carpet",
+      "normal_or_anomalous": "anomalous",
+      "selection_rank": 2,
+      "source_manifest_scientific_sha256": "335337d43dccea9e368393d2616972ad2217e490b91468d11a7e7f04fd688ee4",
+      "source_record_scientific_sha256": "c7302e9b823e3e88dda26e94e9fe76c01fd558bd8b74e6802ed96fc5bfd1b42b",
+      "stable_sample_id": "14854e2b58a5f020b958e40a20109b895eedc7c77474e052d0de77773c1d630b"
+    },
+    {
+      "category": "carpet",
+      "normal_or_anomalous": "anomalous",
+      "selection_rank": 3,
+      "source_manifest_scientific_sha256": "335337d43dccea9e368393d2616972ad2217e490b91468d11a7e7f04fd688ee4",
+      "source_record_scientific_sha256": "64b1e586a45730f89e89e35d6ffbab1dab57034e5fcd6da1b758a1ba48113d66",
+      "stable_sample_id": "16492c9560ecf3bef0353ef21d3a14957735f1bac9aaabea5894630c482acf70"
+    },
+    {
+      "category": "carpet",
+      "normal_or_anomalous": "anomalous",
+      "selection_rank": 4,
+      "source_manifest_scientific_sha256": "335337d43dccea9e368393d2616972ad2217e490b91468d11a7e7f04fd688ee4",
+      "source_record_scientific_sha256": "e152797fbdd997ddefce4d7fa268f57fc58366d337dff8e3ab8e9915c58ee8cc",
+      "stable_sample_id": "1657706cb4f70969476148612cbef17d1d60840672da1086ad516d6eed42a04a"
+    }
+  ],
+  "roster_scientific_sha256": "267b7b527f13f84f76f69576d01b1532005d0bb7eda792d558ce5dcce1278213",
+  "schema_version": "b2_dlcm_v2_final_evaluation_roster_v1",
+  "selection_rule": {
+    "categories": [
+      "bottle",
+      "carpet"
+    ],
+    "grouping": [
+      "category",
+      "normal_or_anomalous"
+    ],
+    "order": "ascending stable_sample_id",
+    "per_group_count": 4,
+    "take": "first_n_per_group"
+  },
+  "source_dataset_root_identity_sha256": "44cc6679ff61a38e2819f6621be97027b3722d2da41fc2d10073680c0848781e",
+  "source_manifest_scientific_sha256": "335337d43dccea9e368393d2616972ad2217e490b91468d11a7e7f04fd688ee4"
+}

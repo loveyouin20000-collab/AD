@@ -1,0 +1,87 @@
+{
+  "counts": {
+    "bottle_anomalous": 4,
+    "bottle_normal": 4,
+    "carpet_anomalous": 4,
+    "carpet_normal": 4,
+    "overlap": 0,
+    "total": 16
+  },
+  "final_content_resolved": false,
+  "implementation_commit": "62b2de3c5c144f217f65353e45fd061fa1e60e05",
+  "ordered_stable_sample_ids": [
+    "23245468dff0e10ec8d6aa5bea9a6177319b63e53a622e3741ae625792fc1f32",
+    "2cc13d4f8f7b875ae87baebb6438b233da404481474fadb5265e041b46b46d2e",
+    "426e2b81fee3aeec72490112c8b703ee3074fe84f3b1207091a128c2ef0fb149",
+    "527682a5358badc13adbe476edcd9947eee07505ad63000ddfbe5abf83ab2b71",
+    "031e195b9091e496eaa2255398adfa7d200cbf057afd97120eecf3b9adfac823",
+    "0d00733cd9070c1dceb5c98bc6c6da206041d40821e29135307aafd841e60946",
+    "13a6cdd98517d32c51447862199bdd0e1342b7eded879b447b2f0e995be070b8",
+    "14cbc46bdacddae2b0c196d61072155abb8d70b4269b96b625bdc9c7c3608af9",
+    "02c18a9b64ffc71283b5aacd434dd45b76a6e7885298231b4b4139349e2e393b",
+    "0e077d1af73a713054de7bb759c0e43f9648d4399896e90ab97a9e6a658e7a7f",
+    "28328f847379d65c969168f5e73af3af42f02314243613adbc744df9dfedc5b6",
+    "2e43addc3fe0251bf3afb2efb34850f02d85df27957da9ac186cbb03efbe0879",
+    "0db4932d67c335f7d3abf0f5f19397d12b6f39b38fddded8e67f1bfeb2e498ad",
+    "14854e2b58a5f020b958e40a20109b895eedc7c77474e052d0de77773c1d630b",
+    "16492c9560ecf3bef0353ef21d3a14957735f1bac9aaabea5894630c482acf70",
+    "1657706cb4f70969476148612cbef17d1d60840672da1086ad516d6eed42a04a"
+  ],
+  "paths_present": false,
+  "proofs": {
+    "accepted_manifest_present": false,
+    "final_content_access_forbidden": true,
+    "final_evaluation_unlock_present": false,
+    "final_materialization_receipt_present": false,
+    "final_materialization_unlock_present": false,
+    "roster_records_not_rewritten": true
+  },
+  "schema_version": "b2_dlcm_v5_final_roster_adoption_manifest_v1",
+  "selection_reused_without_change": true,
+  "source_roster_file_sha256": "68ca5f98a51d7d1518f5fafd3cbf56e0562e5eeb7855c4fa2e407b2b064a898b",
+  "source_roster_receipt_sha256": "3af8a670020e9df9da5d26d6690a1f99dc7af1cacb4e2d4dbe8288b90da50190",
+  "source_roster_relative_path": "docs/phase_b/b2_05c1_final_evaluation_roster.json",
+  "source_roster_scientific_sha256": "267b7b527f13f84f76f69576d01b1532005d0bb7eda792d558ce5dcce1278213",
+  "v1_immutable": {
+    "accepted_training_plan": "59e20f4cb337ef42384f70bb8b3dad5211d906341b0a2d41f7e6847610635980",
+    "canonical_seed": 17,
+    "commit": "43d856f5ff771957f9f39d0909b1bc87d6b7081b",
+    "deployment_scientific_sha256": "4cbc6fb88f39ed86deacfbbe48580f7682453b94becb046ec6ef1b1302df378a",
+    "evaluation_unlock": "19dca41e9f647d12afce9877a7340f5af58bf9a23997d7339dded26d89fe73dd",
+    "qualification_scientific_sha256": "da51e5fc1302cf507bc844f87e82cb66f7d2fa0a13e61f28a0dba14333201c49",
+    "seed_collection": "94a6a9332a0694889c7a0255814ac13fe8316c601529197063165ce14ec1277f",
+    "tag": "b2-dlcm-unqualified-evidence-v1",
+    "verdict": "localized_but_target_fidelity_unqualified"
+  },
+  "v2_immutable": {
+    "adopted_final_roster_scientific_sha256": "267b7b527f13f84f76f69576d01b1532005d0bb7eda792d558ce5dcce1278213",
+    "commit": "e54f2b44eeb962b05cfb7cf74764e55905f1a8f6",
+    "tag": "b2-dlcm-decoupled-contract-v2"
+  },
+  "v3_immutable": {
+    "adopted_final_roster_scientific_sha256": "267b7b527f13f84f76f69576d01b1532005d0bb7eda792d558ce5dcce1278213",
+    "development_verdict": "development_unqualified",
+    "failed_reason": "gt_category_kl:carpet",
+    "tag": "b2-dlcm-category-robust-contract-v3",
+    "unqualified_evidence_commit": "99c26de94ba7fa5358a7670473876c4a4cf1829d",
+    "unqualified_evidence_tag": "b2-dlcm-category-robust-unqualified-evidence-v1"
+  },
+  "v4_immutable": {
+    "accepted_plan_sha256": "4979c73a28e0aaffd21f2c6408bb37e90fdc64201bcc326f990543fbbee5650f",
+    "adopted_final_roster_scientific_sha256": "267b7b527f13f84f76f69576d01b1532005d0bb7eda792d558ce5dcce1278213",
+    "canonical_seed": 17,
+    "contract_commit": "3b2237affbe58a3cdc30d49bbdee4d8145a6a192",
+    "development_verdict": "development_unqualified",
+    "environment_identity": "67677c4e9bb83475f7adc03294437bdd104a693e0465e107d3860096a9f03056",
+    "failed_reason": "gt_category_kl:carpet",
+    "tag": "b2-dlcm-uniform-relative-contract-v4",
+    "unqualified_evidence_commit": "a1447bdabdd7f54eb7883b717dfadc3da906da5b",
+    "unqualified_evidence_tag": "b2-dlcm-uniform-relative-unqualified-evidence-v1"
+  },
+  "v5_contract_identity": {
+    "architecture_contract_version": "b2_dlcm_architecture_v5",
+    "calibration_contract_version": "b2_dlcm_uniform_anchored_calibration_v5",
+    "model_class_id": "rad.phase_b.b2_dlcm_v5.B2DLCMV5",
+    "schema_version": "b2_dlcm_uniform_anchored_contract_v5"
+  }
+}

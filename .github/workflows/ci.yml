@@ -47,6 +47,10 @@ jobs:
         run: pytest tests/rad -q --tb=short
         env:
           CUDA_VISIBLE_DEVICES: ""
+          OMP_NUM_THREADS: "4"
+          MKL_NUM_THREADS: "4"
+          CUBLAS_WORKSPACE_CONFIG: ":4096:8"
+          PYTHONHASHSEED: "0"
 
       - name: Config / CLI dry-runs
         run: |

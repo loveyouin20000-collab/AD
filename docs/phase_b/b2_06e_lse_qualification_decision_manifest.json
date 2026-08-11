@@ -1,0 +1,36 @@
+{
+  "H_lse_qualification": "0f08407ade40fb8e447649c80606fbf7d7c39f3030b99307a445f3df27688b14",
+  "accepted_artifact_generated": false,
+  "accepted_identity": "0c1a411317f212e5deb29040d184d57aead8a6f862fe3146937db99d1f365116",
+  "best_checkpoint_sha256": "e6e5a4dbd7471ef9e52430eab9533f8edda57ca76ead2ffbed034044805b1c98",
+  "calibration_nll": 0.4768362585455179,
+  "depth_metrics": {
+    "12": {
+      "brier": 0.03221412755399544,
+      "ece": 0.17947600036859512,
+      "mae": 0.4048725925385952,
+      "n": 8,
+      "nll": 0.7660192847251892,
+      "rmse": 0.5041921386533236
+    },
+    "18": {
+      "brier": 0.024174126336846347,
+      "ece": 0.15546763315796852,
+      "mae": 0.20543629676103592,
+      "n": 8,
+      "nll": 0.18765321373939514,
+      "rmse": 0.2283385445394299
+    }
+  },
+  "evaluated_rows": 16,
+  "max_calibration_nll": 0.5,
+  "required_depths": [
+    12,
+    18
+  ],
+  "schema_version": "b2_06e_lse_qualification_decision_v1",
+  "training_receipt_identity": "d4f569ddd79f72f84c36903abc77b91c1b48a5bafc9dd10b206a830af17b2346",
+  "unlock_identity": "54295df82e953070a0d4f02d7526da645e6c418d638b5a2ab248b11133b19c99",
+  "v5_deployment_identity": "c56248c9ff6021fc16cf4792d87afeebf1bb8f6d45859f7c26017830dcf0e0bd",
+  "verdict": "qualified"
+}

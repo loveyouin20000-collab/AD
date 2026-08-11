@@ -1,0 +1,68 @@
+{
+  "schema_version": "b2_06e_lse_evaluation_qualification_evidence_v1",
+  "status": "b2_06e_lse_evaluation_qualification_closed",
+  "worktree": "/root/autodl-tmp/AD-phase-b2-06e-lse-evaluation-qualification",
+  "branch": "phase-b2-06e-lse-evaluation-qualification",
+  "evaluation_git_sha": "6a2b92f",
+  "decision": {
+    "verdict": "qualified",
+    "H_lse_qualification": "0f08407ade40fb8e447649c80606fbf7d7c39f3030b99307a445f3df27688b14",
+    "accepted_artifact_generated": false,
+    "calibration_nll": 0.4768362585455179,
+    "max_calibration_nll": 0.5,
+    "evaluated_rows": 16
+  },
+  "bound_identities": {
+    "accepted_identity": "0c1a411317f212e5deb29040d184d57aead8a6f862fe3146937db99d1f365116",
+    "v5_deployment_identity": "c56248c9ff6021fc16cf4792d87afeebf1bb8f6d45859f7c26017830dcf0e0bd",
+    "unlock_identity": "54295df82e953070a0d4f02d7526da645e6c418d638b5a2ab248b11133b19c99",
+    "training_receipt_identity": "d4f569ddd79f72f84c36903abc77b91c1b48a5bafc9dd10b206a830af17b2346"
+  },
+  "artifacts": {
+    "lse_checkpoint": {
+      "path": "artifacts/checkpoints/lse/b2_06d_first_controlled_run/lse_best.pt",
+      "sha256": "e6e5a4dbd7471ef9e52430eab9533f8edda57ca76ead2ffbed034044805b1c98",
+      "tracked": false
+    },
+    "training_receipt": {
+      "path": "artifacts/checkpoints/lse/b2_06d_first_controlled_run/b2_06d_lse_training_receipt.json",
+      "sha256": "07aa2f2ddffc31dab2c242cbba1b233e0acd430f8f0b4cacf81d716ebfbc9634"
+    },
+    "evaluation_report": {
+      "path": "artifacts/phase_b/b2_06e_lse_evaluation_qualification/lse_evaluation_report.json",
+      "sha256": "c68668b04dcbc1e9e525e514ce9331638c2bd178a4fb02edff4913c697adc330"
+    },
+    "qualification_decision_manifest": {
+      "path": "artifacts/phase_b/b2_06e_lse_evaluation_qualification/lse_qualification_decision_manifest.json",
+      "sha256": "2f02219667ecde0595fb1c483c8d7d95b7cfef5a90312ccfc36dbb62d3198184"
+    }
+  },
+  "metrics": {
+    "depth_12": {
+      "n": 8,
+      "nll": 0.7660192847251892,
+      "mae": 0.4048725925385952,
+      "rmse": 0.5041921386533236,
+      "brier": 0.03221412755399544,
+      "ece": 0.17947600036859512
+    },
+    "depth_18": {
+      "n": 8,
+      "nll": 0.18765321373939514,
+      "mae": 0.20543629676103592,
+      "rmse": 0.2283385445394299,
+      "brier": 0.024174126336846347,
+      "ece": 0.15546763315796852
+    }
+  },
+  "boundaries": {
+    "evaluation_started": true,
+    "accepted_lse_artifact_generated": false,
+    "accepted_v5_artifact_changed": false,
+    "final_decision_changed": false,
+    "final_content_accessed": false,
+    "lse_checkpoint_tracked": false,
+    "push": false,
+    "pr": false
+  }
+}

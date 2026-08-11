@@ -1,0 +1,72 @@
+{
+  "schema_version": "b2_06c_lse_prerequisite_materialization_evidence_v1",
+  "status": "b2_06c_lse_prerequisite_materialization_closed",
+  "worktree": "/root/autodl-tmp/AD-phase-b2-06c-lse-prerequisite-materialization",
+  "branch": "phase-b2-06c-lse-prerequisite-materialization",
+  "base_commit": "ead9eae5371b42084a3a2ca4022bd9cdf8f3d1ed",
+  "accepted_gate": {
+    "ready": true,
+    "accepted_gate_passed": true,
+    "training_started": false,
+    "missing_prerequisites": [],
+    "accepted_identity": "0c1a411317f212e5deb29040d184d57aead8a6f862fe3146937db99d1f365116",
+    "v5_deployment_identity": "c56248c9ff6021fc16cf4792d87afeebf1bb8f6d45859f7c26017830dcf0e0bd",
+    "H_decision": "6fb60a82d01f987930070aeee75639524512ad481064369b2f06ac99f96ae0a8",
+    "H_evidence": "bbc3708a8ddcd3b2965ec9e758af1a7bf30a360cdbbc5ff86be911cfbe872e02"
+  },
+  "accepted_v5_reference": {
+    "checkpoint": "/root/autodl-tmp/AD-phase-b2-dlcm-v5-final-execution/artifacts/phase_b/b2_dlcm_v5_final_evaluation/final-evaluation-20260805-155023/accepted_refs/canonical_deployment_candidate_v5.pt",
+    "checkpoint_sha256": "12b9192643d457eb07745391b68cfa5afe48ec6165b28091bdabde29ec3ece4f",
+    "beta_star": 0.54
+  },
+  "materialized_prerequisites": {
+    "source_teacher_cache": {
+      "path": "artifacts/cache/mvtec_teacher_b2_06c_all",
+      "manifest_sha256": "aad4c9a6c1139e10e7dcfebaa65a34a3ecc96449e54374fbfb64044349183ce9",
+      "cache_scientific_sha256": "66d23807e868696a9c4a68ad83399d82df3d33e743a97d97eeb98ac60c0b1b0a",
+      "sample_coverage_sha256": "6e538b902795c377f9992258e307e58b5c0ba0f99cbbe6c3853a81947ca3d76c",
+      "counts": {
+        "training": 16,
+        "calibration": 8,
+        "evaluation": 8
+      }
+    },
+    "lse_cache_conversion": {
+      "receipt": "artifacts/cache/b2_06c_lse_cache_conversion_receipt.json",
+      "receipt_sha256": "31a4001e6d1f7d7b78498fa50537a06722273b6fbb4cec8192f521169bbf980a",
+      "receipt_identity": "9c28d8a2268cf86f329e471f040c6d91804aba646d685b9e64b27adb23d43050",
+      "training_count": 16,
+      "calibration_count": 8,
+      "evaluation_ignored_count": 8,
+      "training_started": false,
+      "lse_checkpoint_generated": false
+    },
+    "descriptor_stats": {
+      "path": "artifacts/stats/mvtec_seed111.json",
+      "sha256": "95c2e062c9bdb6bf37559787724e5d018e05a69164ffd703adcef629e9d16d17"
+    },
+    "gain_targets": {
+      "train": {
+        "path": "artifacts/targets/gain/mvtec_train.pt",
+        "sha256": "69d35e3436fda03098fe5df88d3ea8f948906c8397dc6592b33571cf794d1b0a",
+        "metadata_sha256": "4f80af7f57ad42051968886524de78fb563bef0f81995b65bef47ef44c27e048",
+        "n_records": 16
+      },
+      "calibration": {
+        "path": "artifacts/targets/gain/mvtec_calibration.pt",
+        "sha256": "1fdb3e41227690b27be578c9f94adfddf0e2b41d360da4639354cd2981e8f6b9",
+        "metadata_sha256": "a7457b0ed6e82a3a4d0ff3d9da4379e7bfa8cd1b9d752d2e1e19a28864180a45",
+        "n_records": 8
+      }
+    }
+  },
+  "boundaries": {
+    "lse_training_started": false,
+    "lse_checkpoint_generated": false,
+    "final_decision_unchanged": true,
+    "accepted_v5_artifact_unchanged": true,
+    "tracked_pt_expected": 0,
+    "pushed": false,
+    "pr_opened": false
+  }
+}

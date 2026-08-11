@@ -1,0 +1,32 @@
+{
+  "H_lse_qualification": "0f08407ade40fb8e447649c80606fbf7d7c39f3030b99307a445f3df27688b14",
+  "accepted_dlcm_identity": "0c1a411317f212e5deb29040d184d57aead8a6f862fe3146937db99d1f365116",
+  "accepted_lse_checkpoint_sha256": "e6e5a4dbd7471ef9e52430eab9533f8edda57ca76ead2ffbed034044805b1c98",
+  "accepted_lse_identity": "3dafdde6309599d7e82ca6da07db4efbdb09f16105262351c890c514277f01fa",
+  "accepted_v5_checkpoint_sha256": "12b9192643d457eb07745391b68cfa5afe48ec6165b28091bdabde29ec3ece4f",
+  "calibration_nll": 0.4768362585455179,
+  "evaluated_rows": 16,
+  "evaluation_started_in_b2_07": false,
+  "final_content_accessed_in_b2_07": false,
+  "git_sha": "1658fda1c4f6cbb9c0de3fcbbc8ecebc056d8963",
+  "max_calibration_nll": 0.5,
+  "phase_chain": {
+    "b2_06a": "accepted_gate_wired",
+    "b2_06b": "accepted_v5_refs_packaged",
+    "b2_06c": "lse_prerequisites_materialized",
+    "b2_06d": "lse_training_completed",
+    "b2_06e": "lse_qualified",
+    "b2_06f": "accepted_lse_artifact_frozen"
+  },
+  "phase_final_closure_identity": "2b1e74c13bba260a9f62c4167b322ae067ecce34fc86a92ae66e1a71b0f3073d",
+  "pr_opened": false,
+  "pushed": false,
+  "schema_version": "b2_07_phase_final_closure_manifest_v1",
+  "selector_signal_layout_hash": "4de9843b92f4373448916bdc46e761c9e460dcb919948741d9e8cbb9e82dd0c6",
+  "status": "b2_phase_completed_locally",
+  "tracked_pt_count": 0,
+  "training_receipt_identity": "d4f569ddd79f72f84c36903abc77b91c1b48a5bafc9dd10b206a830af17b2346",
+  "training_started_in_b2_07": false,
+  "unlock_identity": "54295df82e953070a0d4f02d7526da645e6c418d638b5a2ab248b11133b19c99",
+  "v5_deployment_identity": "c56248c9ff6021fc16cf4792d87afeebf1bb8f6d45859f7c26017830dcf0e0bd"
+}

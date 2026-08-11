@@ -1,0 +1,77 @@
+{
+  "accepted_system_behavior": "full_depth_fallback",
+  "boundary": {
+    "evaluation_started_in_b3_06": false,
+    "final_content_accessed_in_b3_06": false,
+    "model_artifact_generated_in_b3_06": false,
+    "pr_opened": false,
+    "pushed": false,
+    "tracked_pt_files": 0,
+    "training_started_in_b3_06": false
+  },
+  "claims": {
+    "dynamic_fusion_abandoned": false,
+    "early_exit_accepted_mechanism": false,
+    "early_exit_checkpoint_generated": false,
+    "early_exit_training_unlocked": false,
+    "full_depth_fallback_retained": true,
+    "lse_abandoned": false
+  },
+  "evidence_documents": [
+    "docs/phase_b/b3_01_early_exit_contract_architecture.md",
+    "docs/phase_b/b3_01_early_exit_preflight_evidence.json",
+    "docs/phase_b/b3_02_exit_prerequisite_materialization_manifest.json",
+    "docs/phase_b/b3_02_exit_prerequisite_materialization_evidence.json",
+    "docs/phase_b/b3_03_exit_policy_training_contract.json",
+    "docs/phase_b/b3_03_exit_policy_training_contract_evidence.json",
+    "docs/phase_b/b3_04_exit_target_positive_signal_contract.json",
+    "docs/phase_b/b3_04_exit_target_positive_signal_contract_evidence.json",
+    "docs/phase_b/b3_05_early_exit_line_closure_manifest.json",
+    "docs/phase_b/b3_05_early_exit_negative_result_evidence.json",
+    "docs/phase_b/b3_06_early_exit_phase_closure_manifest.json",
+    "docs/phase_b/b3_06_early_exit_paper_results_summary.md",
+    "docs/phase_b/b3_06_early_exit_evidence_index.md"
+  ],
+  "negative_result_table": [
+    {
+      "accepted_as_final_mechanism": false,
+      "candidate_depths": [
+        12,
+        18
+      ],
+      "candidate_positive_counts_by_depth": {
+        "12": 0,
+        "18": 0
+      },
+      "component": "early_exit_policy",
+      "fallback_depth": 24,
+      "paper_interpretation": "negative_result_under_conservative_gate",
+      "positive_exit_targets": 0,
+      "positive_signal_count": 0,
+      "records": 16,
+      "target_exits_by_depth": {
+        "12": 0,
+        "18": 0
+      }
+    }
+  ],
+  "paper_position": "negative_result_and_future_work",
+  "phase": "B3-06 Early-Exit Phase Closure / Paper-Ready Negative Result Integration",
+  "phase_closure_identity": "a984814c1821dbc6c0b2ee49fbf018be0c8b4f2fe226855f6b3e015eb89e05be",
+  "phase_identities": {
+    "b3_02_materialization_identity": "d77c2cd604c7d3eca4cc9f0649bc8e6ef1b84985a31ec470dd6dd7ef1f43e5b8",
+    "b3_03_training_contract_identity": "073afd7f5afeddf1f039034b01bd1ddea84deb14b272b7573d603f978fd2f7b9",
+    "b3_04_positive_signal_contract_identity": "ef98d0ba9114fd4deb4bccfd98bfacf45a3caddbe0e193e09a31aa8dffd8ab4b",
+    "b3_05_line_closure_identity": "f281a3bda75d723a45f8942934c7c4d131e3424d63ba65125d7b6d2cb4ad7cb1"
+  },
+  "primary_identities": {
+    "accepted_dlcm_identity": "0c1a411317f212e5deb29040d184d57aead8a6f862fe3146937db99d1f365116",
+    "accepted_lse_checkpoint_sha256": "e6e5a4dbd7471ef9e52430eab9533f8edda57ca76ead2ffbed034044805b1c98",
+    "accepted_lse_identity": "3dafdde6309599d7e82ca6da07db4efbdb09f16105262351c890c514277f01fa",
+    "b2_phase_final_closure_identity": "2b1e74c13bba260a9f62c4167b322ae067ecce34fc86a92ae66e1a71b0f3073d",
+    "v5_deployment_identity": "c56248c9ff6021fc16cf4792d87afeebf1bb8f6d45859f7c26017830dcf0e0bd"
+  },
+  "primary_result": "Early-exit was explored under accepted DLCM and LSE identities, but no legal positive exit signal was found under the conservative contract.",
+  "schema_version": "b3_06_early_exit_phase_closure_manifest_v1",
+  "status": "early_exit_phase_closed_negative_result"
+}

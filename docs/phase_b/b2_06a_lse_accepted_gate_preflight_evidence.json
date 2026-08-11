@@ -1,0 +1,83 @@
+{
+  "schema_version": "b2_06a_lse_accepted_gate_preflight_evidence_v1",
+  "phase": "B2-06A LSE Accepted-Gate Wiring / Preflight Closure",
+  "worktree": "/root/autodl-tmp/AD-phase-b2-06a-lse-accepted-gate-preflight",
+  "branch": "phase-b2-06a-lse-accepted-gate-preflight",
+  "base_commit": "cc516e2e5762f7541aecbaa1e22a8ca3266daa0f",
+  "red_test_commit": "fb30f1de187305a36a259cef826585479c172b30",
+  "implementation_commit": "5878aac599179520e7ce736a2c42c0f4b3e35ea7",
+  "allowed_scope": [
+    "tools/train_lse.py",
+    "configs/rad/lse_b2_accepted_v5.yaml",
+    "rad/phase_b/b2_lse_accepted_gate.py",
+    "tests/rad/test_b2_lse_accepted_gate_preflight.py",
+    "tests/rad/test_lse_train_cli_preflight.py",
+    "docs/phase_b/b2_06a_lse_accepted_gate_preflight_evidence.json",
+    "docs/phase_b/b2_06a_lse_accepted_gate_preflight_evidence.md"
+  ],
+  "frozen_scientific_identities": {
+    "beta_star_decimal": "0.54",
+    "v5_deployment_identity": "c56248c9ff6021fc16cf4792d87afeebf1bb8f6d45859f7c26017830dcf0e0bd",
+    "accepted_v5_identity": "0c1a411317f212e5deb29040d184d57aead8a6f862fe3146937db99d1f365116",
+    "final_decision_identity": "6fb60a82d01f987930070aeee75639524512ad481064369b2f06ac99f96ae0a8",
+    "final_evidence_identity": "bbc3708a8ddcd3b2965ec9e758af1a7bf30a360cdbbc5ff86be911cfbe872e02",
+    "calibration_ab_identity": "cae406c91ec392ffd7cc6d48ec2f0c94ab78d78f905cbfe904287842a7a7278a"
+  },
+  "accepted_gate_contract": {
+    "entrypoint_reads_accepted_manifest": true,
+    "verifies_accepted_identity": true,
+    "verifies_deployment_identity": true,
+    "verifies_final_decision_identity": true,
+    "verifies_final_evidence_identity": true,
+    "manual_c4b_checkpoint_path_fails_closed": true,
+    "legacy_lse_config_requires_b2_accepted_gate": true,
+    "dry_run_and_preflight_only_start_training": false
+  },
+  "preflight_result": {
+    "config": "configs/rad/lse_b2_accepted_v5.yaml",
+    "accepted_gate_passed": true,
+    "ready": false,
+    "training_started": false,
+    "exit_code": 2,
+    "dlcm_checkpoint": "/root/autodl-tmp/AD-phase-b2-dlcm-v5-final-execution/artifacts/phase_b/b2_dlcm_v5_final_evaluation/final-evaluation-20260805-155023/accepted_refs/canonical_deployment_candidate_v5.pt",
+    "missing_prerequisites": [
+      "dlcm_checkpoint",
+      "train_gain_targets",
+      "calibration_gain_targets",
+      "train_cache",
+      "calibration_cache",
+      "descriptor_stats"
+    ]
+  },
+  "fail_closed_evidence": {
+    "missing_accepted_manifest": "covered by tests/rad/test_b2_lse_accepted_gate_preflight.py",
+    "wrong_accepted_identity": "covered by tests/rad/test_b2_lse_accepted_gate_preflight.py",
+    "manual_c4b_checkpoint_without_accepted_binding": "covered by tests/rad/test_b2_lse_accepted_gate_preflight.py",
+    "legacy_lse_yaml_dry_run_exit_code": 2,
+    "legacy_lse_yaml_error_code": "B2_LSE_ACCEPTED_MANIFEST_REQUIRED"
+  },
+  "verification": {
+    "lse_unit_and_focused_tests": {
+      "command": "python -m pytest tests/rad/test_lse.py tests/rad/test_lse_training_step.py tests/rad/test_b2_lse_accepted_gate_preflight.py tests/rad/test_lse_train_cli_preflight.py -q --tb=short",
+      "result": "12 passed"
+    },
+    "ruff": {
+      "command": "python -m ruff check tools/train_lse.py rad/phase_b/b2_lse_accepted_gate.py tests/rad/test_b2_lse_accepted_gate_preflight.py tests/rad/test_lse_train_cli_preflight.py",
+      "result": "All checks passed"
+    },
+    "mypy": {
+      "command": "python -m mypy --follow-imports=silent rad/phase_b/b2_lse_accepted_gate.py tests/rad/test_b2_lse_accepted_gate_preflight.py tests/rad/test_lse_train_cli_preflight.py",
+      "result": "Success: no issues found in 3 source files"
+    },
+    "running_lse_process_count": 0,
+    "tracked_pt_count": 0,
+    "lse_checkpoint_dir_exists": false
+  },
+  "stopped_boundaries": {
+    "lse_training_started": false,
+    "lse_checkpoint_generated": false,
+    "scientific_outputs_changed": false,
+    "push_performed": false,
+    "pull_request_opened": false
+  }
+}

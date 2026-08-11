@@ -25,7 +25,7 @@ from rad.models.descriptors import (  # noqa: E402
     DescriptorNormalizer,
     LayerDescriptorExtractor,
 )
-from rad.models.dlcm import DLCM, sum_preserving_fusion  # noqa: E402
+from rad.models.dlcm import sum_preserving_fusion  # noqa: E402
 from rad.models.lse import LSE  # noqa: E402
 from rad.models.selector_signals import (  # noqa: E402
     SelectorSignalLayout,
@@ -34,10 +34,13 @@ from rad.models.selector_signals import (  # noqa: E402
     parse_enabled_signals,
     selector_signal_provenance,
 )
+from rad.phase_b import b2_lse_accepted_gate as accepted_gate  # noqa: E402
+from rad.phase_b import b2_lse_prerequisites as prereq  # noqa: E402
+from rad.phase_b import b2_lse_training_unlock as training_unlock  # noqa: E402
 from rad.trainers.lse_trainer import LSETrainer  # noqa: E402
 
 
-def parse_args() -> argparse.Namespace:
+def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     p = argparse.ArgumentParser(description="Train LSE on residual-gain targets")
     p.add_argument("--config", type=str, default="configs/rad/lse.yaml")
     p.add_argument("--seed", type=int, default=None)
@@ -47,8 +50,10 @@ def parse_args() -> argparse.Namespace:
     p.add_argument("--limit-train", type=int, default=None)
     p.add_argument("--limit-cal", type=int, default=None)
     p.add_argument("--device", type=str, default=None)
+    p.add_argument("--training-unlock", type=Path, default=None)
     p.add_argument("--dry-run", action="store_true")
-    return p.parse_args()
+    p.add_argument("--preflight-only", action="store_true")
+    return p.parse_args(argv)
 
 
 def sha256_file(path: Path) -> str:
@@ -84,7 +89,7 @@ def load_gain_index(path: Path) -> dict[str, dict[str, Any]]:
 def build_states_for_sample(
     *,
     sample: dict[str, Any],
-    dlcm: DLCM,
+    dlcm: prereq.LSEDLCMAdapter,
     layer_extractor: LayerDescriptorExtractor,
     context_extractor: CheckpointContextExtractor,
     normalizer: DescriptorNormalizer | None,
@@ -118,7 +123,14 @@ def build_states_for_sample(
             layer_ids=layer_ids,
             prev_fused=prev_fused,
         )
-        weights = dlcm(layer_desc, ctx, layer_ids, valid)
+        weights = dlcm.weights(
+            layer_desc,
+            prediction_depth=int(depth),
+            player_layer_ids=tuple(avail),
+            context=ctx,
+            layer_ids=layer_ids,
+            valid_mask=valid,
+        )
         fused = sum_preserving_fusion(maps, weights, valid)
         # Primary scientific ablation: mask during training materialization (A).
         lse_desc = apply_selector_signal_mask(
@@ -157,7 +169,7 @@ def materialize_rows(
     *,
     cache: TeacherCacheDataset,
     gains: dict[str, dict[str, Any]],
-    dlcm: DLCM,
+    dlcm: prereq.LSEDLCMAdapter,
     layer_extractor: LayerDescriptorExtractor,
     context_extractor: CheckpointContextExtractor,
     normalizer: DescriptorNormalizer | None,
@@ -225,12 +237,23 @@ def move_batch(batch: dict[str, Any], device: torch.device) -> dict[str, Any]:
     }
 
 
-def main() -> int:
-    args = parse_args()
+def main(argv: list[str] | None = None) -> int:
+    args = parse_args(argv)
     raw = yaml.safe_load(Path(args.config).read_text())
     cfg = ExperimentConfig.from_yaml(args.config)
     lse_cfg = dict(raw.get("lse", {}))
     fusion_cfg = raw.get("fusion", {})
+
+    try:
+        preflight_cfg = accepted_gate.load_lse_preflight_config(args.config, repo_root=REPO_ROOT)
+        preflight = accepted_gate.run_lse_preflight(preflight_cfg)
+    except accepted_gate.B2LSEAcceptedGateError as exc:
+        print(f"ERROR {exc.code}: {exc}", file=sys.stderr)
+        raise SystemExit(2) from exc
+    print("b2_lse_accepted_gate_preflight:")
+    print(json.dumps(preflight, indent=2, sort_keys=True))
+    if args.preflight_only:
+        return 0 if preflight["ready"] else 2
 
     seed = args.seed if args.seed is not None else cfg.seed
     torch.manual_seed(seed)
@@ -280,7 +303,6 @@ def main() -> int:
 
     config_hash = sha256_file(Path(args.config))
     sha = git_sha()
-    checkpoint_hash = sha256_file(ckpt_path) if ckpt_path.is_file() else "missing"
 
     print(f"config: {args.config}")
     print(f"config_hash: {config_hash}")
@@ -288,7 +310,6 @@ def main() -> int:
     print(f"seed: {seed}")
     print(f"device: {device}")
     print(f"dlcm_checkpoint: {ckpt_path}")
-    print(f"checkpoint_hash: {checkpoint_hash}")
     print(f"train_gains: {train_gains_path}")
     print(f"cal_gains: {cal_gains_path}")
     print(f"output_dir: {output_dir}")
@@ -314,8 +335,35 @@ def main() -> int:
     print(f"selector_signals: {json.dumps(enabled_signals)}")
     print(f"selector_signal_layout_hash: {selector_prov['selector_signal_layout_hash']}")
 
+    unlock_path = args.training_unlock
+    if unlock_path is None and lse_cfg.get("training_unlock_manifest"):
+        unlock_path = Path(str(lse_cfg["training_unlock_manifest"]))
+    if unlock_path is None:
+        print("ERROR B2_LSE_TRAINING_UNLOCK_REQUIRED: training unlock required", file=sys.stderr)
+        raise SystemExit(2)
+    if not unlock_path.is_absolute():
+        unlock_path = REPO_ROOT / unlock_path
+    try:
+        unlock_report = training_unlock.validate_training_unlock(
+            unlock_path,
+            preflight=preflight,
+            config_sha256=config_hash,
+            train_output_dir=output_dir,
+            seed=seed,
+            epochs=epochs,
+            patience=patience,
+        )
+    except training_unlock.B2LSETrainingUnlockError as exc:
+        print(f"ERROR {exc.code}: {exc}", file=sys.stderr)
+        raise SystemExit(2) from exc
+    print("b2_lse_training_unlock_dry_run:")
+    print(json.dumps(unlock_report, indent=2, sort_keys=True))
+
     if args.dry_run:
         return 0
+
+    checkpoint_hash = sha256_file(ckpt_path) if ckpt_path.is_file() else "missing"
+    print(f"checkpoint_hash: {checkpoint_hash}")
 
     if stats_path:
         assert_json_artifact_eligible_for_evaluation(
@@ -341,12 +389,11 @@ def main() -> int:
 
     normalizer = DescriptorNormalizer.load(stats_path) if stats_path.is_file() else None
     dlcm_ckpt = torch.load(ckpt_path, map_location="cpu")
-    dlcm = DLCM(max_layer_id=max(candidate_layers), alpha=0.0)
-    dlcm.load_state_dict(dlcm_ckpt["dlcm"])
-    dlcm.eval()
-    dlcm.to(device)
-    for p in dlcm.parameters():
-        p.requires_grad_(False)
+    dlcm = prereq.load_lse_dlcm_adapter_from_checkpoint(
+        dlcm_ckpt,
+        device=device,
+        candidate_layers=candidate_layers,
+    )
 
     layer_extractor = LayerDescriptorExtractor()
     context_extractor = CheckpointContextExtractor(backbone_depth=cfg.backbone.depth)
@@ -482,6 +529,14 @@ def main() -> int:
         **selector_prov,
     }
     (output_dir / "summary.json").write_text(json.dumps(summary, indent=2) + "\n")
+    receipt = training_unlock.write_training_receipt(
+        output_dir / "b2_06d_lse_training_receipt.json",
+        unlock_report=unlock_report,
+        summary=summary,
+        best_checkpoint_sha256=sha256_file(best_path),
+    )
+    print("b2_06d_lse_training_receipt:")
+    print(json.dumps(receipt, indent=2, sort_keys=True))
     print(json.dumps(summary, indent=2))
     return 0
 

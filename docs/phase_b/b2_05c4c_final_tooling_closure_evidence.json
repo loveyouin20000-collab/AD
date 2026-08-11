@@ -1,0 +1,46 @@
+{
+  "accepted_v5_final_execution_plan_scientific_sha256": "926a202bcb66b28e064c57b1aac6bc9a45443011251ad4bb2c69f383f9edd169",
+  "architecture_commit": "d4cef9c",
+  "base_commit": "8b2dc932727f3d7ee85fe6734c1d030a90191845",
+  "branch": "phase-b2-dlcm-v5-final-tooling-closure",
+  "contract_config": "configs/phase_b/b2_dlcm_v5_final_execution_contract_v1.json",
+  "created_at_utc": "2026-08-05T14:32:36.281713+00:00",
+  "dry_run_status": {
+    "accepted_written": false,
+    "artifact_written": false,
+    "evaluation_started": false,
+    "materialization_started": false,
+    "real_final_content_accessed": false,
+    "run_directory_created": false,
+    "stable_ids_resolved": false
+  },
+  "evidence_commit": null,
+  "final_guards": {
+    "accepted_artifact_generated": false,
+    "lse_started": false,
+    "pushed": false,
+    "real_final_content_remained_untouched": true,
+    "remote_tag_pushed": false
+  },
+  "head_at_evidence_write": "8db5d8518ba8b40cc5fb1376e5fa1aaa428a55ba",
+  "implementation_commit": "8db5d85",
+  "local_annotated_tag_planned": "b2-dlcm-uniform-anchored-final-tooling-v1",
+  "official_config": "configs/phase_b/b2_dlcm_v5_final_execution_official_v1.json",
+  "red_test_commit": "0bf73a8",
+  "schema_version": "b2_05c4c_final_tooling_closure_evidence_v1",
+  "scientific_identities": {
+    "calibration_ab_identity": "cae406c91ec392ffd7cc6d48ec2f0c94ab78d78f905cbfe904287842a7a7278a",
+    "environment_identity": "67677c4e9bb83475f7adc03294437bdd104a693e0465e107d3860096a9f03056",
+    "final_roster_identity": "267b7b527f13f84f76f69576d01b1532005d0bb7eda792d558ce5dcce1278213",
+    "v5_deployment_identity": "c56248c9ff6021fc16cf4792d87afeebf1bb8f6d45859f7c26017830dcf0e0bd"
+  },
+  "verification": {
+    "focused_c4c": "7 passed in 0.07s",
+    "full_tests_rad_cpu": "1547 passed, 18 skipped, 154 warnings in 505.18s",
+    "git_diff_check": "clean",
+    "gpu_qualification": "1 passed in 2.55s",
+    "mypy_scoped": "Success: no issues found in 9 source files",
+    "ruff_scoped": "All checks passed"
+  },
+  "worktree": "/root/autodl-tmp/AD-phase-b2-dlcm-v5-final-tooling-closure"
+}

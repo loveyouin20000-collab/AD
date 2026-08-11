@@ -1,0 +1,31 @@
+{
+  "H_lse_qualification": "0f08407ade40fb8e447649c80606fbf7d7c39f3030b99307a445f3df27688b14",
+  "accepted_artifact_generated": true,
+  "accepted_dlcm_identity": "0c1a411317f212e5deb29040d184d57aead8a6f862fe3146937db99d1f365116",
+  "accepted_lse_checkpoint": "/root/autodl-tmp/AD-phase-b2-06f-accepted-lse-artifact-closure/artifacts/phase_b/b2_06f_accepted_lse_artifact_v2/accepted_refs/lse_best.pt",
+  "accepted_lse_checkpoint_sha256": "e6e5a4dbd7471ef9e52430eab9533f8edda57ca76ead2ffbed034044805b1c98",
+  "accepted_lse_identity": "3dafdde6309599d7e82ca6da07db4efbdb09f16105262351c890c514277f01fa",
+  "calibration_nll": 0.4768362585455179,
+  "closure_git_sha": "cedde452650328c57cf67538c71e1abaf8815798",
+  "config_hash": "81d6ea9887226c06c69539de97c89ea27f93af58d0cd55c655e843b5c6ad03e3",
+  "evaluated_rows": 16,
+  "evaluation_started": false,
+  "lse_checkpoint_sha256": "e6e5a4dbd7471ef9e52430eab9533f8edda57ca76ead2ffbed034044805b1c98",
+  "lse_qualified": true,
+  "max_calibration_nll": 0.5,
+  "schema_version": "b2_06f_lse_accepted_artifact_manifest_v1",
+  "seed": 111,
+  "selector_signal_layout_hash": "4de9843b92f4373448916bdc46e761c9e460dcb919948741d9e8cbb9e82dd0c6",
+  "source_lse_checkpoint": "/root/autodl-tmp/AD-phase-b2-06f-accepted-lse-artifact-closure/artifacts/checkpoints/lse/b2_06d_first_controlled_run/lse_best.pt",
+  "training_git_sha": "df60fd81d33d5186b963e3155d55c9dce3b8fbde",
+  "training_receipt_identity": "d4f569ddd79f72f84c36903abc77b91c1b48a5bafc9dd10b206a830af17b2346",
+  "training_started": false,
+  "unlock_identity": "54295df82e953070a0d4f02d7526da645e6c418d638b5a2ab248b11133b19c99",
+  "upstream": {
+    "H_lse_qualification": "0f08407ade40fb8e447649c80606fbf7d7c39f3030b99307a445f3df27688b14",
+    "accepted_dlcm_identity": "0c1a411317f212e5deb29040d184d57aead8a6f862fe3146937db99d1f365116",
+    "training_receipt_identity": "d4f569ddd79f72f84c36903abc77b91c1b48a5bafc9dd10b206a830af17b2346",
+    "v5_deployment_identity": "c56248c9ff6021fc16cf4792d87afeebf1bb8f6d45859f7c26017830dcf0e0bd"
+  },
+  "v5_deployment_identity": "c56248c9ff6021fc16cf4792d87afeebf1bb8f6d45859f7c26017830dcf0e0bd"
+}

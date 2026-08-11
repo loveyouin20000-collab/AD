@@ -1,0 +1,73 @@
+{
+  "schema_version": "b2_08_paper_results_evidence_index_manifest_v1",
+  "phase": "B2-08 Paper Results / Evidence Index Closure",
+  "status": "paper_results_and_evidence_index_frozen_locally",
+  "source_phase_final_closure_identity": "2b1e74c13bba260a9f62c4167b322ae067ecce34fc86a92ae66e1a71b0f3073d",
+  "primary_identities": {
+    "v5_deployment_identity": "c56248c9ff6021fc16cf4792d87afeebf1bb8f6d45859f7c26017830dcf0e0bd",
+    "accepted_dlcm_identity": "0c1a411317f212e5deb29040d184d57aead8a6f862fe3146937db99d1f365116",
+    "final_decision_identity": "6fb60a82d01f987930070aeee75639524512ad481064369b2f06ac99f96ae0a8",
+    "final_evidence_identity": "bbc3708a8ddcd3b2965ec9e758af1a7bf30a360cdbbc5ff86be911cfbe872e02",
+    "accepted_lse_identity": "3dafdde6309599d7e82ca6da07db4efbdb09f16105262351c890c514277f01fa",
+    "H_lse_qualification": "0f08407ade40fb8e447649c80606fbf7d7c39f3030b99307a445f3df27688b14"
+  },
+  "artifact_hashes": {
+    "accepted_v5_checkpoint_sha256": "12b9192643d457eb07745391b68cfa5afe48ec6165b28091bdabde29ec3ece4f",
+    "accepted_lse_checkpoint_sha256": "e6e5a4dbd7471ef9e52430eab9533f8edda57ca76ead2ffbed034044805b1c98",
+    "selector_signal_layout_hash": "4de9843b92f4373448916bdc46e761c9e460dcb919948741d9e8cbb9e82dd0c6"
+  },
+  "dlcm": {
+    "candidate_layers": [6, 12, 18, 24],
+    "prediction_depths": [12, 18, 24],
+    "accepted_variant": "uniform_anchored_v5",
+    "beta_star_decimal": "0.54"
+  },
+  "lse_qualification": {
+    "verdict": "qualified",
+    "calibration_nll": 0.4768362585455179,
+    "max_calibration_nll": 0.5,
+    "evaluated_rows": 16,
+    "required_depths": [12, 18],
+    "depth_metrics": {
+      "12": {
+        "nll": 0.7660192847251892,
+        "mae": 0.4048725925385952,
+        "rmse": 0.5041921386533236,
+        "brier": 0.03221412755399544,
+        "ece": 0.17947600036859512,
+        "n": 8
+      },
+      "18": {
+        "nll": 0.18765321373939514,
+        "mae": 0.20543629676103592,
+        "rmse": 0.2283385445394299,
+        "brier": 0.024174126336846347,
+        "ece": 0.15546763315796852,
+        "n": 8
+      }
+    }
+  },
+  "evidence_documents": [
+    "docs/phase_b/b2_05a_dlcm_training_architecture.md",
+    "docs/phase_b/b2_05c4_uniform_anchored_dlcm_v5_architecture.md",
+    "docs/phase_b/b2_06a_lse_accepted_gate_preflight_evidence.json",
+    "docs/phase_b/b2_06b_accepted_v5_reference_packaging_evidence.json",
+    "docs/phase_b/b2_06c_lse_prerequisite_materialization_evidence.json",
+    "docs/phase_b/b2_06d_lse_first_controlled_run_evidence.json",
+    "docs/phase_b/b2_06e_lse_qualification_decision_manifest.json",
+    "docs/phase_b/b2_06f_accepted_lse_manifest.json",
+    "docs/phase_b/b2_06f_accepted_lse_closure_evidence.json",
+    "docs/phase_b/b2_07_phase_final_closure_manifest.json",
+    "docs/phase_b/b2_08_paper_results_summary.md",
+    "docs/phase_b/b2_08_evidence_index.md"
+  ],
+  "boundary": {
+    "training_started_in_b2_08": false,
+    "evaluation_started_in_b2_08": false,
+    "final_content_accessed_in_b2_08": false,
+    "model_artifact_generated_in_b2_08": false,
+    "tracked_pt_files": 0,
+    "pushed": false,
+    "pr_opened": false
+  }
+}
