@@ -1,5 +1,10 @@
 from __future__ import annotations
 
+import json
+import subprocess
+import sys
+from pathlib import Path
+
 import pytest
 
 from rad.phase_b import b3_paper_results_update as update
@@ -211,3 +216,65 @@ def test_positive_early_exit_signal_fails_closed() -> None:
         )
 
     assert exc.value.code == "B3_PAPER_RESULTS_UPDATE_EARLY_EXIT_RESULT_INVALID"
+
+
+def test_cli_dry_run_is_read_only_and_prints_update_identity(tmp_path: Path) -> None:
+    repo_root = Path(__file__).resolve().parents[2]
+    completed = subprocess.run(
+        [
+            sys.executable,
+            "tools/close_paper_results_update_b3_07.py",
+            "--dry-run",
+            "--output-dir",
+            str(tmp_path),
+        ],
+        cwd=repo_root,
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+
+    payload = json.loads(completed.stdout)
+    assert payload["update_identity"]
+    assert payload["boundary"]["training_started"] is False
+    assert payload["boundary"]["evaluation_started"] is False
+    assert payload["boundary"]["final_content_accessed"] is False
+    assert list(tmp_path.iterdir()) == []
+
+
+def test_cli_materialization_writes_only_new_evidence_and_hashes(tmp_path: Path) -> None:
+    repo_root = Path(__file__).resolve().parents[2]
+    frozen_paths = [
+        repo_root / "docs/phase_b/b2_08_paper_results_manifest.json",
+        repo_root / "docs/phase_b/b3_06_early_exit_phase_closure_manifest.json",
+        repo_root / "docs/phase_b/b4_01_dlcm_adaptive_weight_evidence_manifest.json",
+        repo_root / "docs/phase_b/b4_02_final_local_paper_release_manifest.json",
+    ]
+    frozen_before = {path: path.read_bytes() for path in frozen_paths}
+    subprocess.run(
+        [
+            sys.executable,
+            "tools/close_paper_results_update_b3_07.py",
+            "--output-dir",
+            str(tmp_path),
+        ],
+        cwd=repo_root,
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+
+    names = [
+        "b3_07_paper_results_update_manifest.json",
+        "b3_07_paper_results_update.md",
+        "b3_07_paper_evidence_index.md",
+    ]
+    for name in names:
+        content = tmp_path / name
+        sidecar = content.with_suffix(content.suffix + ".sha256")
+        assert sidecar.read_text(encoding="utf-8") == update.sha256_file(content) + "  " + name + "\n"
+    assert {path.name for path in tmp_path.iterdir()} == {
+        *names,
+        *(name + ".sha256" for name in names),
+    }
+    assert {path: path.read_bytes() for path in frozen_paths} == frozen_before
