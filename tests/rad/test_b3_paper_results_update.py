@@ -54,11 +54,15 @@ def _b3() -> dict[str, object]:
             "early_exit_accepted_mechanism": False,
             "full_depth_fallback_retained": True,
         },
-        "exit_target_summary": {
-            "candidate_exit_depths": [12, 18],
-            "fallback_depth": 24,
-            "positive_exit_signals": 0,
-        },
+        "negative_result_table": [
+            {
+                "candidate_depths": [12, 18],
+                "fallback_depth": 24,
+                "positive_signal_count": 0,
+                "positive_exit_targets": 0,
+                "accepted_as_final_mechanism": False,
+            }
+        ],
         "evidence_documents": ["docs/phase_b/b3_06_early_exit_paper_results_summary.md"],
         "boundary": {
             "training_started_in_b3_06": False,
@@ -189,3 +193,20 @@ def test_tracked_pt_files_fail_closed() -> None:
         )
 
     assert exc.value.code == "B3_PAPER_RESULTS_UPDATE_TRACKED_PT"
+
+
+def test_positive_early_exit_signal_fails_closed() -> None:
+    b3 = _b3()
+    b3["negative_result_table"] = [dict(b3["negative_result_table"][0])]
+    b3["negative_result_table"][0]["positive_signal_count"] = 1
+
+    with pytest.raises(update.B3PaperResultsUpdateError) as exc:
+        update.build_b3_paper_results_update_manifest(
+            b2_manifest=_b2(),
+            b3_manifest=b3,
+            b4_weight_manifest=_b4_weight(),
+            b4_release_manifest=_b4_release(),
+            tracked_pt_count=0,
+        )
+
+    assert exc.value.code == "B3_PAPER_RESULTS_UPDATE_EARLY_EXIT_RESULT_INVALID"
