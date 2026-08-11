@@ -9,7 +9,6 @@ import pytest
 
 from rad.phase_b import b3_paper_results_update as update
 
-
 ACCEPTED_DLCM = "0c1a411317f212e5deb29040d184d57aead8a6f862fe3146937db99d1f365116"
 V5_DEPLOYMENT = "c56248c9ff6021fc16cf4792d87afeebf1bb8f6d45859f7c26017830dcf0e0bd"
 ACCEPTED_LSE = "3dafdde6309599d7e82ca6da07db4efbdb09f16105262351c890c514277f01fa"
@@ -278,3 +277,27 @@ def test_cli_materialization_writes_only_new_evidence_and_hashes(tmp_path: Path)
         *(name + ".sha256" for name in names),
     }
     assert {path: path.read_bytes() for path in frozen_paths} == frozen_before
+
+
+def _sidecar_matches(path: Path) -> bool:
+    sidecar = path.with_suffix(path.suffix + ".sha256")
+    return sidecar.read_text(encoding="utf-8") == update.sha256_file(path) + "  " + path.name + "\n"
+
+
+def test_repository_b3_07_evidence_is_hash_valid_and_boundary_preserving() -> None:
+    repo_root = Path(__file__).resolve().parents[2]
+    evidence_dir = repo_root / "docs/phase_b"
+    manifest = update.load_json(evidence_dir / "b3_07_paper_results_update_manifest.json")
+
+    assert manifest["status"] == "paper_results_update_frozen_locally"
+    assert manifest["paper_claims"]["dlcm_sample_adaptive_fusion_supported"] is True
+    assert manifest["paper_claims"]["lse_qualified"] is True
+    assert manifest["paper_claims"]["early_exit_accepted_mechanism"] is False
+    assert manifest["boundary"]["final_content_accessed"] is False
+    assert manifest["boundary"]["tracked_pt_files"] == 0
+    for name in (
+        "b3_07_paper_results_update_manifest.json",
+        "b3_07_paper_results_update.md",
+        "b3_07_paper_evidence_index.md",
+    ):
+        assert _sidecar_matches(evidence_dir / name)

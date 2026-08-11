@@ -8,7 +8,6 @@ from collections.abc import Mapping
 from pathlib import Path
 from typing import Any, NoReturn
 
-
 ACCEPTED_DLCM_IDENTITY = "0c1a411317f212e5deb29040d184d57aead8a6f862fe3146937db99d1f365116"
 V5_DEPLOYMENT_IDENTITY = "c56248c9ff6021fc16cf4792d87afeebf1bb8f6d45859f7c26017830dcf0e0bd"
 ACCEPTED_LSE_IDENTITY = "3dafdde6309599d7e82ca6da07db4efbdb09f16105262351c890c514277f01fa"
