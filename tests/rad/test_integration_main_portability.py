@@ -35,8 +35,16 @@ FORBIDDEN_PORTABILITY_FRAGMENTS = (
     "/root/miniconda3/",
     "AD-phase-",
 )
+FROZEN_ARTIFACT_BOUND_RAD_CONFIGS = {
+    REPO_ROOT / "configs" / "rad" / "lse_b2_accepted_v5.yaml",
+    REPO_ROOT / "configs" / "rad" / "early_exit_b3_accepted_lse.yaml",
+}
 ACTIVE_OPERATIONAL_RAD_CONFIGS = tuple(
-    sorted((REPO_ROOT / "configs" / "rad").rglob("*.yaml"))
+    sorted(
+        path
+        for path in (REPO_ROOT / "configs" / "rad").rglob("*.yaml")
+        if path not in FROZEN_ARTIFACT_BOUND_RAD_CONFIGS
+    )
 )
 CLI_DATA_PATH_CONTRACTS = (
     {

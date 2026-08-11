@@ -8,7 +8,7 @@ import tempfile
 from pathlib import Path
 
 REPO = Path(__file__).resolve().parents[2]
-PYTHON = "/root/miniconda3/envs/rad-visualad/bin/python"
+PYTHON = sys.executable
 CLI = REPO / "tools" / "train_b2_dlcm.py"
 VERIFY = REPO / "tools" / "verify_b2_dlcm_artifacts.py"
 CONFIG = REPO / "configs" / "phase_b" / "b2_dlcm_training_contract_v1.json"
@@ -44,8 +44,15 @@ def _run(args: list[str], *, env: dict[str, str] | None = None) -> subprocess.Co
     )
 
 
+def _is_accessible_dir(path: Path) -> bool:
+    try:
+        return path.is_dir()
+    except OSError:
+        return False
+
+
 def test_dry_run_twice_permutation_no_writes(tmp_path: Path) -> None:
-    if not DESC_RUN.is_dir() or not CONTRIB_RUN.is_dir():
+    if not _is_accessible_dir(DESC_RUN) or not _is_accessible_dir(CONTRIB_RUN):
         import pytest
 
         pytest.skip("accepted upstream artifact runs not present")
@@ -103,7 +110,7 @@ def test_dry_run_twice_permutation_no_writes(tmp_path: Path) -> None:
 
 
 def test_non_dry_run_disabled() -> None:
-    if not DESC_RUN.is_dir() or not CONTRIB_RUN.is_dir():
+    if not _is_accessible_dir(DESC_RUN) or not _is_accessible_dir(CONTRIB_RUN):
         import pytest
 
         pytest.skip("accepted upstream artifact runs not present")

@@ -3,10 +3,11 @@
 from __future__ import annotations
 
 import subprocess
+import sys
 from pathlib import Path
 
-REPO = Path("/root/autodl-tmp/AD-phase-b2-dlcm-category-robust-contract-v3")
-PY = "/root/miniconda3/envs/rad-visualad/bin/python"
+REPO = Path(__file__).resolve().parents[2]
+PY = sys.executable
 
 
 def test_cli_dry_run_prints_flags() -> None:

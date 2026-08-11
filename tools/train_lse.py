@@ -303,7 +303,6 @@ def main(argv: list[str] | None = None) -> int:
 
     config_hash = sha256_file(Path(args.config))
     sha = git_sha()
-    checkpoint_hash = sha256_file(ckpt_path) if ckpt_path.is_file() else "missing"
 
     print(f"config: {args.config}")
     print(f"config_hash: {config_hash}")
@@ -311,7 +310,6 @@ def main(argv: list[str] | None = None) -> int:
     print(f"seed: {seed}")
     print(f"device: {device}")
     print(f"dlcm_checkpoint: {ckpt_path}")
-    print(f"checkpoint_hash: {checkpoint_hash}")
     print(f"train_gains: {train_gains_path}")
     print(f"cal_gains: {cal_gains_path}")
     print(f"output_dir: {output_dir}")
@@ -363,6 +361,9 @@ def main(argv: list[str] | None = None) -> int:
 
     if args.dry_run:
         return 0
+
+    checkpoint_hash = sha256_file(ckpt_path) if ckpt_path.is_file() else "missing"
+    print(f"checkpoint_hash: {checkpoint_hash}")
 
     if stats_path:
         assert_json_artifact_eligible_for_evaluation(

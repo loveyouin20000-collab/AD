@@ -7,6 +7,10 @@ import pytest
 
 from rad.phase_b import b2_lse_training_unlock as unlock
 
+REPO = Path(__file__).resolve().parents[2]
+FROZEN_CONFIG = REPO / "configs" / "rad" / "lse_b2_accepted_v5.yaml"
+FROZEN_UNLOCK = REPO / "docs" / "phase_b" / "b2_06d_lse_training_unlock.json"
+
 
 def _base_preflight() -> dict[str, object]:
     return {
@@ -18,6 +22,11 @@ def _base_preflight() -> dict[str, object]:
         "H_decision": "decision-id",
         "H_evidence": "evidence-id",
     }
+
+
+def test_frozen_accepted_lse_config_hash_matches_training_unlock() -> None:
+    payload = json.loads(FROZEN_UNLOCK.read_text(encoding="utf-8"))
+    assert unlock.sha256_file(FROZEN_CONFIG) == payload["config_sha256"]
 
 
 def _write_unlock(path: Path, *, output_dir: Path, accepted_identity: str = "accepted-id") -> None:

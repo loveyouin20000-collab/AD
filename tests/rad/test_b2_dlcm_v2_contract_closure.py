@@ -3,10 +3,11 @@
 from __future__ import annotations
 
 import subprocess
+import sys
 from pathlib import Path
 
 REPO = Path(__file__).resolve().parents[2]
-PYTHON = "/root/miniconda3/envs/rad-visualad/bin/python"
+PYTHON = sys.executable
 CONFIG = REPO / "configs/phase_b/b2_dlcm_decoupled_training_contract_v2.json"
 
 
@@ -21,6 +22,8 @@ def _dry(args: list[str]) -> str:
             "CUDA_VISIBLE_DEVICES": "",
             "OMP_NUM_THREADS": "4",
             "MKL_NUM_THREADS": "4",
+            "CUBLAS_WORKSPACE_CONFIG": ":4096:8",
+            "PYTHONHASHSEED": "0",
             "PYTHONPATH": str(REPO),
         },
     )

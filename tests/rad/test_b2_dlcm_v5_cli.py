@@ -3,10 +3,11 @@
 from __future__ import annotations
 
 import subprocess
+import sys
 from pathlib import Path
 
 REPO = Path(__file__).resolve().parents[2]
-PY = "/root/miniconda3/envs/rad-visualad/bin/python"
+PY = sys.executable
 
 
 def test_cli_dry_run_prints_flags() -> None:
